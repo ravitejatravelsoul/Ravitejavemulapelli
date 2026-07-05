@@ -1,0 +1,86 @@
+---
+title: "MQE Intelligence Platform"
+tagline: "AI-powered enterprise knowledge platform that automatically synchronizes internal documentation, builds searchable knowledge repositories, and enables intelligent retrieval using Retrieval-Augmented Generation (RAG)."
+summary: "MQE Intelligence Platform is an AI-powered enterprise knowledge platform, developed internally at Charter Communications, that automatically synchronizes internal documentation, builds searchable knowledge repositories, and enables intelligent retrieval using Retrieval-Augmented Generation (RAG) — turning quality engineering knowledge that used to live across dashboards, logs, and tribal knowledge into a direct, AI-assisted answer."
+category: ["AI", "Quality Engineering"]
+techStack: ["Python", "LLM APIs", "RAG", "FastAPI", "Vector Search", "PostgreSQL", "React"]
+status: "live"
+year: "2024"
+featured: true
+featuredRibbon: true
+order: 3
+platform: ["Web"]
+role: "AI Engineer"
+badge: "Enterprise AI"
+coverImage: "/projects/mqe-intelligence/cover.png"
+gallery: []
+links:
+  github: ""
+  live: ""
+  caseStudy: ""
+metrics:
+  - label: "Built for"
+    value: "Internal QA productivity"
+  - label: "Architecture"
+    value: "RAG"
+  - label: "Role"
+    value: "AI Engineer"
+---
+
+## The Problem
+
+Having automated test coverage is only half the battle — the other half is knowing what it's telling you. Quality knowledge lived in a lot of places at once: test results, release history, testing evidence, and documentation, scattered across CI logs, dashboards, tickets, and docs that were hard to search and easy to lose track of. Answering a simple question like "are we actually ready to ship this," or "has someone already documented how this workflow is supposed to behave," meant manually piecing together signal from several places. That's slow, and it's exactly the kind of work that's easy to skip under deadline pressure — which is when quality gaps slip through.
+
+## The Solution
+
+MQE Intelligence Platform is an internally developed AI-powered knowledge platform at Charter Communications, built as an AI layer on top of the team's quality engineering knowledge — test results from the API Automation Platform, release history, testing evidence, and supporting documentation — that lets engineers and QA query it directly through natural language instead of manually searching and correlating sources by hand. Built for internal QA productivity, it turns "what's our quality signal on this release" or "where is this documented" from a multi-tool investigation into a direct, AI-assisted answer.
+
+## Key Highlights
+
+- Automatic documentation sync, so the knowledge base doesn't drift from the source of truth
+- Retrieval-Augmented Generation (RAG) architecture, keeping answers grounded in real documentation and test evidence
+- A central Knowledge Center for browsing synchronized documentation
+- AI Search across test results, release history, and documentation
+- Vector indexing for semantic, natural-language search
+- Enterprise authentication
+- Document synchronization from internal sources on an ongoing basis
+- Smart updates that keep the index current as source documentation changes
+- Admin dashboard for managing sync sources and reviewing usage
+
+## Key Features
+
+- Natural-language queries over test results, release history, documentation, and quality evidence
+- AI-assisted retrieval that surfaces the right source instead of requiring someone to already know where to look
+- AI-generated summaries that surface risk and evidence gaps instead of raw logs
+- Direct integration with the API Automation Platform's test result data
+- Designed to plug into existing release workflows rather than requiring a new one
+
+## Technical Approach
+
+MQE Intelligence Platform is built around a Python/FastAPI backend that ingests structured test data, release history, and documentation, indexes it for retrieval, and uses an LLM layer to turn natural-language questions into grounded answers pulled from that indexed knowledge — a retrieval-augmented approach rather than an unconstrained chatbot, so answers stay tied to real evidence and documentation instead of the model's own assumptions. Indexed data is stored in PostgreSQL alongside a vector index for semantic search, with a lightweight React interface on top for querying and reviewing results. As with the rest of my platform work, the specific internal systems and data sources MQE Intelligence Platform connects to at Charter Communications aren't part of this write-up — the architecture described here is the general shape of the system, not its internal configuration.
+
+## Engineering Decisions
+
+Choosing retrieval-augmented generation over a general-purpose chatbot was the central decision behind MQE Intelligence Platform, and it came with a real trade-off: RAG is more work upfront — it means building and maintaining an indexing and retrieval pipeline instead of just calling a model — but it's what keeps answers grounded in actual test and release data instead of the model improvising something plausible-sounding. For a tool whose entire job is being trusted with quality decisions, that trade-off wasn't close.
+
+The same reasoning shaped how the tool handles uncertainty. It would have been easy to make MQE Intelligence Platform feel more capable by having it always produce a confident answer. Instead, it was built to say when it doesn't have enough evidence — a deliberately less impressive tool that engineers can actually rely on.
+
+## Challenges
+
+The hardest problem wasn't the AI layer — it was knowledge quality. An AI system answering questions about quality evidence and documentation is only as trustworthy as what it's reading, so a meaningful part of the build was normalizing inconsistent test result formats, release metadata, and documentation sources before any retrieval or generation happened. I also had to be deliberate about grounding: the tool needed to say "I don't have enough evidence to answer that" instead of guessing, which meant designing prompts and retrieval logic around honesty over completeness.
+
+## Impact
+
+MQE Intelligence Platform is built for internal QA productivity and designed to turn scattered quality knowledge into a direct, searchable answer. It's in active use alongside the API Automation Platform as part of the team's quality engineering toolset.
+
+## Lessons Learned
+
+Applying AI to engineering workflows is less about the model and more about the data pipeline feeding it — retrieval quality and data normalization mattered more to the final output than prompt tuning ever did. I also learned to design AI tools around trust: an occasionally-wrong answer is more damaging in a quality-evidence and documentation tool than a slower, more conservative one that's honest about its limits.
+
+## Future Roadmap
+
+- Tighter, real-time integration with the API Automation Platform's test result stream
+- Proactive risk flagging instead of purely query-driven answers
+- Expanding knowledge discovery beyond API test data into broader release, incident, and documentation history
+
+None of these exist yet — they're the direction I'd take the platform next.

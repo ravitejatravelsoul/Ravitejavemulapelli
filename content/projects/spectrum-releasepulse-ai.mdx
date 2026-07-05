@@ -1,0 +1,67 @@
+---
+title: "Spectrum ReleasePulse AI"
+tagline: "An internal AI hackathon project developed at Charter Communications to explore AI-assisted release intelligence."
+summary: "Spectrum ReleasePulse AI is an internal AI hackathon project developed at Charter Communications to explore AI-assisted release intelligence — a prototype for turning scattered release signal into a plain-language pulse on release health, presented to engineering leadership as a workflow improvement idea worth pursuing further."
+category: ["AI", "Developer Tools"]
+techStack: ["Python", "LLM APIs", "FastAPI", "React", "Slack API"]
+status: "concept"
+year: "2024"
+featured: true
+order: 6
+platform: ["Web"]
+role: "AI Engineer"
+coverImage: ""
+gallery: []
+links:
+  github: ""
+  live: ""
+  caseStudy: ""
+metrics:
+  - label: "Format"
+    value: "Hackathon build"
+  - label: "Outcome"
+    value: "Presented to leadership"
+---
+
+## The Problem
+
+Release health — is this release on track, what's blocking it, what changed since the last one — is usually reconstructed manually by asking around or piecing together CI runs, tickets, and Slack threads. That works, but it's slow, and it means release status lives in people's heads instead of somewhere anyone can check. It was a problem I'd felt directly through my automation work — every platform I'd built made testing faster, but the "is this release healthy" question was still a manual roll-up.
+
+At a hackathon, the constraint is time: you get a couple of days to prove an idea is worth real investment. Release visibility felt like the right size for that constraint — narrow enough to prototype fast, real enough to matter if it worked.
+
+## The Solution
+
+Spectrum ReleasePulse AI is a prototype that pulls together release signals — test results, build status, and change activity — and uses an AI layer to generate a plain-language "pulse" on release health, instead of requiring someone to manually check five different tools. Built to explore AI-assisted release intelligence, the goal was to make release status something you could glance at, not something you had to investigate.
+
+## Key Features
+
+- AI-generated plain-language release health summaries pulled from test and build signal
+- A single view replacing the manual round-up of CI, tickets, and chat threads
+- Slack-native delivery so release pulse shows up where engineers already work
+- Built to plug into existing automation tooling (including the API Automation Platform) rather than replace it
+
+## Technical Approach
+
+The prototype used a Python/FastAPI backend to aggregate release signal from CI and test results, an LLM layer to synthesize that signal into a readable summary, a lightweight React view for browsing release history, and a Slack integration to push pulse updates directly into team channels. Given the hackathon timeline, the architecture prioritized a working end-to-end demo over production hardening.
+
+## Engineering Decisions
+
+Every choice in the build came down to the same hackathon math: what needed to be real to prove the idea, and what could wait. AI summarization and Slack delivery were the two things that had to actually work — they were the core of the pitch — so they got the real engineering time. Broader data source integrations and production-grade error handling were deliberately left out, not because they don't matter, but because a prototype that proves the concept convincingly is more valuable at the hackathon stage than a partially-built version of the full system.
+
+## Challenges
+
+Building something demo-ready in a hackathon timeframe meant making fast, defensible scope cuts — deciding what needed to be real versus what could be simulated for the demo. Getting the AI summary to feel trustworthy rather than generic in a short build window was the hardest technical problem in the time available.
+
+## Impact
+
+Spectrum ReleasePulse AI was built and presented/demoed to engineering leadership as a hackathon project, framed as an idea worth exploring further rather than a finished product. It's an example of the same instinct behind my other work — turning scattered signal into a direct answer — applied under hackathon constraints, and it reflects the kind of innovation work I look for outside of day-to-day platform maintenance.
+
+## Lessons Learned
+
+Hackathons are a good forcing function for finding the smallest version of an idea that still proves the point. I also learned how much a good demo narrative matters — the technical build and the story of why it matters have to land together, especially when presenting to leadership who are evaluating whether an idea deserves real engineering time.
+
+## Future Roadmap
+
+- Harden the data integrations beyond the hackathon demo scope
+- Expand release signal sources beyond CI/test results to include incident and deployment data
+- Evaluate whether this becomes a formal extension of the API Automation Platform / MQE Intelligence Platform toolset

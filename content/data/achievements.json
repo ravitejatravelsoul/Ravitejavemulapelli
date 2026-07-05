@@ -1,0 +1,62 @@
+[
+  {
+    "id": "spectrum-releasepulse-hackathon",
+    "title": "Built and presented Spectrum ReleasePulse AI",
+    "date": "2024-06-01",
+    "description": "Built Spectrum ReleasePulse AI, an AI-powered release workflow prototype, and presented/demoed it to engineering leadership at an internal hackathon.",
+    "category": "Hackathon",
+    "tags": ["Spectrum ReleasePulse AI", "AI", "Hackathon"],
+    "milestone": false,
+    "media": []
+  },
+  {
+    "id": "launched-mqe-intelligence",
+    "title": "Launched MQE Intelligence Platform",
+    "date": "2024-04-01",
+    "description": "Built and shipped MQE Intelligence Platform, an internally developed AI-powered knowledge platform designed for internal QA productivity and reducing manual testing evidence gaps.",
+    "category": "AI Platform",
+    "tags": ["MQE Intelligence Platform", "AI", "Quality Engineering"],
+    "milestone": true,
+    "media": []
+  },
+  {
+    "id": "started-solotravelsoul",
+    "title": "Started building SoloTravelSoul",
+    "date": "2024-03-01",
+    "description": "Began designing and building SoloTravelSoul, an AI-powered social travel platform for solo travelers, on my own time — currently in active development ahead of an iOS and Android release.",
+    "category": "Product Development",
+    "tags": ["SoloTravelSoul", "Mobile", "Travel"],
+    "milestone": false,
+    "media": []
+  },
+  {
+    "id": "shipped-confessreels",
+    "title": "Shipped ConfessReels",
+    "date": "2024-02-01",
+    "description": "Designed, built, and released ConfessReels, an anonymous social platform built around vertical reels, from concept through production release across Web, Android, and iOS.",
+    "category": "Product Launch",
+    "tags": ["ConfessReels", "Mobile", "Social"],
+    "milestone": false,
+    "media": []
+  },
+  {
+    "id": "shipped-snaptura",
+    "title": "Shipped Snaptura",
+    "date": "2024-01-01",
+    "description": "Designed, built, and released Snaptura, an enterprise Windows desktop application that automates screenshot evidence collection for manual testers — built independently outside of my day-to-day automation work.",
+    "category": "Product Launch",
+    "tags": ["Snaptura", "Desktop", "Quality Engineering"],
+    "milestone": true,
+    "media": []
+  },
+  {
+    "id": "built-api-automation-platform",
+    "title": "Built the API Automation Platform",
+    "date": "2023-06-01",
+    "description": "Designed and led development of the team's API Automation Platform, now used as the standard tool for automated API testing across engineering and QA.",
+    "category": "Platform",
+    "tags": ["Automation", "API Automation Platform", "Leadership"],
+    "milestone": true,
+    "media": []
+  }
+]

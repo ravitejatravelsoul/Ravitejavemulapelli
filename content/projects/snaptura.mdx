@@ -1,0 +1,91 @@
+---
+title: "Snaptura"
+tagline: "Enterprise desktop application that automates screenshot evidence collection for manual testers."
+summary: "Snaptura is an enterprise Windows desktop application that automates screenshot evidence collection for manual testers — capturing, organizing, and exporting evidence during manual testing so the repetitive, error-prone parts of the job disappear without changing how testers already work."
+category: ["Quality Engineering", "Product"]
+techStack: ["Python", "Windows Desktop Application", "Image Processing", "PDF Generation", "Local File Storage"]
+status: "live"
+year: "2024"
+featured: true
+featuredRibbon: true
+order: 2
+platform: ["Windows Desktop"]
+role: "Product Designer, Developer"
+badge: "Enterprise Tool"
+coverImage: "/projects/snaptura/cover.png"
+gallery: []
+links:
+  github: ""
+  live: ""
+  caseStudy: ""
+metrics:
+  - label: "Platform"
+    value: "Windows Desktop"
+  - label: "Stage"
+    value: "Enterprise Tool"
+  - label: "Role"
+    value: "Product Designer, Developer"
+---
+
+## The Problem
+
+Manual testing produces a lot of evidence, and most of it is screenshots — sometimes dozens per test case, each one meant to prove a step happened the way it should have. Capturing that evidence is repetitive, and repetitive manual work is exactly where small mistakes creep in.
+
+The failure modes were familiar to anyone who's done manual QA: a screenshot missed mid-flow, evidence saved out of order, files named inconsistently from one tester to the next, screenshots scattered across folders instead of organized by test case, and testers switching out of their testing tool just to manage files instead of testing. None of that shows up as one dramatic problem — it shows up as a stack of small friction points that add extra effort *after* the actual testing is already done. That accumulated friction was the thing worth fixing.
+
+## The Solution
+
+Snaptura is a workflow-focused desktop application, not a replacement for how testers already work. The goal was never to change the testing process — it was to remove the parts of evidence capture that got in the way of it.
+
+Instead of asking a tester to stop, switch tools, and manually manage screenshots, Snaptura stays out of the way: it runs alongside whatever the tester is already doing and organizes evidence automatically as it's captured, so the extra work after testing — renaming files, sorting them into folders, assembling them into a report — mostly disappears. The design bar for every feature was the same: does this reduce interruption, or does it just add another thing to configure?
+
+## Key Features
+
+- **Windows desktop application** — a native tool that runs alongside whatever the tester is already doing
+- **Session management** — evidence is grouped by testing session automatically, instead of ending up as one flat pile of screenshots, and sessions can be resumed later without losing structure
+- **Automatic organization** — captured evidence is sorted and structured without manual file management
+- **Intelligent screenshot compression** — evidence stays reasonably sized without a manual export step
+- **Comments** — annotate a screenshot at the point of capture, while the context is still fresh
+- **Automatic PDF generation** — organized captures generate directly into a PDF report, ready to attach to a test record instead of assembled by hand
+- **Enterprise workflow** — built around how QA teams actually organize and hand off testing evidence, not a generic screenshot tool retrofitted for testers
+- **Privacy protection** — everything is captured and processed locally with zero cloud dependency, so evidence never leaves the tester's machine
+- **Installer** — packaged for straightforward install on a tester's machine
+- **Software Center deployment ready** — packaged to roll out through enterprise software distribution rather than a manual install per machine
+
+## Technical Approach
+
+Snaptura is a native Windows desktop application built in Python. Capture, image processing, and organization all run locally on the tester's machine — there's no server, no account, and no cloud upload in the capture path, which is what makes the "zero cloud dependency" design constraint real rather than aspirational.
+
+Screenshots are processed and compressed locally, structured into sessions on the local file system, and assembled into a PDF report through a local document-generation step rather than a hosted export service. The application ships with a standard installer and is packaged to support enterprise Software Center-style deployment rather than a manual install per machine. Keeping the entire pipeline local also simplified the reliability story: there's no network call in the middle of a capture flow that can fail, time out, or add latency a tester would notice.
+
+## Engineering Decisions
+
+Every decision in Snaptura was weighed against a simple test: does this keep the tool simple, or does it start turning into a feature someone has to learn? A tool built to remove friction that itself requires a manual to use has failed at its own job.
+
+That meant favoring a simple UI over a configurable one, prioritizing a fast startup and a small footprint so the tool feels like a utility instead of another application competing for system resources, and building workflow-first rather than feature-first — every feature had to justify itself against the actual testing workflow, not against a list of things a screenshot tool could theoretically do. Reliability mattered more than flexibility: a capture tool that testers can't fully trust to work every time is worse than no tool at all, because the trust it breaks doesn't come back easily.
+
+## Challenges
+
+Keeping the tool lightweight was harder than it sounds — every feature request pulled in the direction of more configuration, and each one had to be weighed against the tool's whole reason for existing: staying out of the way. Handling different capture scenarios was its own problem, since manual testing doesn't happen in one predictable window or application; the tool had to work reliably across whatever the tester happened to be testing, not just a single controlled case.
+
+The hardest ongoing balance was flexibility versus simplicity. Testers wanted control over naming, organization, and export — but every option added is one more decision the tool asks a tester to make instead of just handling for them. And because the whole premise was reducing disruption to an existing workflow, I had to keep resisting the urge to add "useful" features that would have made Snaptura one more tool testers had to think about instead of one they could ignore.
+
+## Impact
+
+Snaptura didn't change what testers test — it changed how much manual effort evidence collection took afterward. Documentation became more consistent because naming and organization stopped depending on individual habits, and testers spent less time on file management and report assembly after a session, since most of that work was already done by the time testing ended. The overall effect was a smoother testing workflow, not a new one — the tool succeeded by staying quiet.
+
+## Lessons Learned
+
+Small workflow improvements compound in a way that's easy to underestimate. No single feature in Snaptura solves a big problem on its own — the value is in removing several small points of friction at once, and watching what that adds up to over a full testing cycle.
+
+The clearest lesson was that a good tool eventually becomes invisible. When a tester stops thinking about the capture tool and just focuses on testing, that's the tool working correctly, not a lack of features. It also reinforced something I'd already started to believe from platform work: designing for real users, with a real workflow they're not going to change for you, is a fundamentally different discipline than designing around a feature list. The feature list is easy. Understanding what actually gets in someone's way is not.
+
+## Future Roadmap
+
+- OCR-assisted evidence — reading text directly out of captured screenshots to make evidence searchable
+- AI-assisted naming — generating meaningful file names from what's actually in the capture, not just sequence numbers
+- Automatic test-step linking — connecting captured evidence back to the specific test step it came from
+- Cloud synchronization — optional sync for teams that want evidence available beyond a single machine
+- Smart duplicate detection — flagging near-identical captures so evidence stays clean without manual review
+
+None of these exist yet — they're the direction I'd take Snaptura next.

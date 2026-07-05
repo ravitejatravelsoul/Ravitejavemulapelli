@@ -1,0 +1,114 @@
+[
+  {
+    "id": "current-role",
+    "company": "Charter Communications",
+    "companyUrl": "https://www.charter.com",
+    "role": "Senior AI Engineer / Lead Automation Engineer",
+    "location": "United States / Remote",
+    "startDate": "2020-02-01",
+    "endDate": null,
+    "employmentType": "Full-time",
+    "summary": "Started this role by building the API Automation Platform from the ground up — now the team's standard for automated API testing — and grew into owning the broader automation strategy for engineering and QA. That platform work became the foundation for AI product work: designing and deploying agentic AI and multi-agent systems using LangChain, LangGraph, and AWS Bedrock, including MQE Intelligence Platform, an internally developed AI-powered knowledge platform that turns the platform's data into direct answers instead of raw logs.",
+    "responsibilities": [
+      "Set automation strategy, tooling standards, and best practices for the broader QA and engineering organization",
+      "Design and maintain scalable Tosca automation frameworks with 1,200+ automated test cases across mobile, web, backend, and API platforms",
+      "Lead onsite and offshore QA resources and mentor automation engineers",
+      "Design and develop agentic AI and multi-agent systems using Python, LangChain, and AWS Bedrock for autonomous test intelligence and workflow automation",
+      "Build and deploy RAG pipelines with vector databases and embeddings for intelligent knowledge retrieval across enterprise testing documentation",
+      "Architect multi-agent orchestration frameworks using LangGraph for coordinated autonomous task execution across testing pipelines",
+      "Operationalize AI agents and LLM pipelines with CI/CD, monitoring, evaluation, and guardrails for reliability at scale"
+    ],
+    "achievements": [
+      "Built and lead the API Automation Platform, now used as the standard automated testing tool across teams",
+      "Automated 1,200+ test cases in Tosca across enterprise mobile and web platforms",
+      "Designed and built MQE Intelligence Platform, an internally developed AI-powered knowledge platform at Charter Communications for internal QA productivity and reducing manual testing evidence gaps",
+      "Built and presented Spectrum ReleasePulse AI, an AI-powered release workflow tool, to engineering leadership"
+    ],
+    "technologies": [
+      "Python",
+      "Playwright",
+      "Tosca",
+      "REST APIs",
+      "CI/CD (GitHub Actions/Jenkins)",
+      "SQL",
+      "LangChain",
+      "LangGraph",
+      "AWS Bedrock",
+      "LLM APIs"
+    ],
+    "relatedProjectSlugs": ["api-automation-platform", "mqe-intelligence", "spectrum-releasepulse-ai"]
+  },
+  {
+    "id": "tcs-thomson-reuters",
+    "company": "Tata Consultancy Services (Thomson Reuters)",
+    "companyUrl": "",
+    "role": "Senior AEM Developer",
+    "location": "United States",
+    "startDate": "2019-07-01",
+    "endDate": "2020-01-31",
+    "employmentType": "Full-time",
+    "summary": "Developed Adobe Experience Manager solutions for Thomson Reuters' enterprise publishing platforms through Tata Consultancy Services, building reusable components and content workflows used across the publishing organization.",
+    "responsibilities": [
+      "Developed Adobe Experience Manager solutions for enterprise publishing platforms",
+      "Designed reusable AEM components, templates, dialogs, workflows, and services",
+      "Built OSGi bundles, Sling Models, Sling Servlets, and REST integrations",
+      "Collaborated with business stakeholders to gather requirements and implement solutions",
+      "Developed and maintained content management workflows and publishing processes",
+      "Provided production support and resolved performance bottlenecks"
+    ],
+    "achievements": [
+      "Delivered reusable AEM components and content workflows adopted across Thomson Reuters' publishing platform"
+    ],
+    "technologies": ["Java", "Adobe Experience Manager", "OSGi", "Sling Models", "Sling Servlets", "REST APIs"],
+    "relatedProjectSlugs": []
+  },
+  {
+    "id": "state-street-global-advisors",
+    "company": "State Street Global Advisors",
+    "companyUrl": "",
+    "role": "Senior AEM Developer",
+    "location": "United States",
+    "startDate": "2019-02-01",
+    "endDate": "2019-06-30",
+    "employmentType": "Full-time",
+    "summary": "Built custom AEM 6.4 components and integrations for State Street Global Advisors' enterprise financial web platforms, with a focus on regulated content publishing and third-party data integration.",
+    "responsibilities": [
+      "Developed custom AEM 6.4 components, templates, dialogs, and page structures for enterprise financial web platforms",
+      "Built OSGi services, Sling Servlets, and Sling Models for dynamic content rendering and API integrations",
+      "Created and maintained client libraries (CSS/JS) using HTL/Sightly templating for responsive front-end delivery",
+      "Developed content workflows and approval processes for regulated financial content publishing",
+      "Integrated AEM with third-party financial data services using RESTful APIs and custom connectors",
+      "Performed production deployments using Maven, Adobe Cloud Manager, and CRX Package Manager"
+    ],
+    "achievements": [
+      "Delivered regulated financial content publishing workflows for State Street Global Advisors' enterprise web platform"
+    ],
+    "technologies": ["Java", "AEM 6.4", "OSGi", "HTL/Sightly", "Maven", "Adobe Cloud Manager"],
+    "relatedProjectSlugs": []
+  },
+  {
+    "id": "plcb",
+    "company": "PLCB",
+    "companyUrl": "",
+    "role": "AEM Developer",
+    "location": "United States",
+    "startDate": "2018-02-01",
+    "endDate": "2019-01-31",
+    "employmentType": "Full-time",
+    "summary": "Developed reusable AEM 6.3 components and public-facing web solutions for a state government platform, including DAM asset workflows, AEM Dispatcher configuration, and legacy content migration.",
+    "responsibilities": [
+      "Developed reusable AEM 6.3 templates, components, and content fragments for a public-facing government web platform",
+      "Built Sling Models, OSGi services, and custom workflows for content authoring and approval processes",
+      "Implemented responsive web solutions using HTL, CSS3, JavaScript, and Bootstrap",
+      "Created DAM asset management workflows and metadata schemas for digital media content",
+      "Configured AEM Dispatcher for caching optimization, URL mapping, and load balancing",
+      "Automated deployment pipelines using Maven, Jenkins, and AEM package management tools",
+      "Performed content migration from a legacy CMS to AEM using custom migration scripts"
+    ],
+    "achievements": [
+      "Migrated legacy CMS content to AEM using custom migration tooling built for a public-facing government platform"
+    ],
+    "technologies": ["Java", "AEM 6.3", "HTL", "JavaScript", "Bootstrap", "Maven", "Jenkins"],
+    "relatedProjectSlugs": []
+  }
+]

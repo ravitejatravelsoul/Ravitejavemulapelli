@@ -1,0 +1,136 @@
+[
+  {
+    "id": "languages",
+    "category": "Languages",
+    "description": "Core languages used daily across automation tooling, backend services, and product code.",
+    "skills": [
+      { "name": "TypeScript", "level": 5, "yearsExperience": 4 },
+      { "name": "JavaScript", "level": 5, "yearsExperience": 6 },
+      { "name": "Python", "level": 4, "yearsExperience": 5 },
+      { "name": "Java", "level": 3, "yearsExperience": 3 },
+      { "name": "SQL", "level": 4, "yearsExperience": 5 }
+    ]
+  },
+  {
+    "id": "frontend",
+    "category": "Frontend",
+    "description": "Building fast, polished interfaces for both internal tools and production consumer apps.",
+    "skills": [
+      { "name": "React", "level": 5, "yearsExperience": 5 },
+      { "name": "React Native", "level": 4, "yearsExperience": 3 },
+      { "name": "Next.js", "level": 5, "yearsExperience": 3 },
+      { "name": "Tailwind CSS", "level": 5, "yearsExperience": 3 },
+      { "name": "Framer Motion", "level": 4, "yearsExperience": 2 }
+    ]
+  },
+  {
+    "id": "backend",
+    "category": "Backend",
+    "description": "APIs and data layers behind both automation platforms and shipped mobile products.",
+    "skills": [
+      { "name": "Node.js", "level": 5, "yearsExperience": 5 },
+      { "name": "REST & GraphQL APIs", "level": 4, "yearsExperience": 4 },
+      { "name": "Firebase / Firestore", "level": 4, "yearsExperience": 3 },
+      { "name": "PostgreSQL", "level": 4, "yearsExperience": 4 }
+    ]
+  },
+  {
+    "id": "cloud",
+    "category": "Cloud",
+    "description": "Deploying and running both internal automation tooling and production apps.",
+    "skills": [
+      { "name": "AWS", "level": 3, "yearsExperience": 3 },
+      { "name": "AWS Bedrock", "level": 3, "yearsExperience": 1 },
+      { "name": "Google Cloud Platform", "level": 3, "yearsExperience": 3 },
+      { "name": "Vercel", "level": 4, "yearsExperience": 3 },
+      { "name": "Docker", "level": 3, "yearsExperience": 3 }
+    ]
+  },
+  {
+    "id": "automation",
+    "category": "Automation",
+    "description": "The core of my day-to-day work — designing automation platforms teams actually adopt.",
+    "skills": [
+      { "name": "Test Automation Frameworks", "level": 5, "yearsExperience": 5 },
+      { "name": "CI/CD Pipelines", "level": 4, "yearsExperience": 4 },
+      { "name": "Workflow Orchestration", "level": 4, "yearsExperience": 3 },
+      { "name": "API Automation", "level": 5, "yearsExperience": 5 }
+    ]
+  },
+  {
+    "id": "ai",
+    "category": "AI",
+    "description": "Applying LLMs to quality engineering and release workflows — not chatbots, decision support.",
+    "skills": [
+      { "name": "LLM Application Development", "level": 3, "yearsExperience": 2 },
+      { "name": "Agentic AI", "level": 3, "yearsExperience": 2 },
+      { "name": "Multi-Agent Systems", "level": 3, "yearsExperience": 2 },
+      { "name": "LangChain", "level": 3, "yearsExperience": 2 },
+      { "name": "LangGraph", "level": 2, "yearsExperience": 1 },
+      { "name": "AWS SageMaker", "level": 2, "yearsExperience": 1 },
+      { "name": "Prompt Engineering", "level": 3, "yearsExperience": 2 },
+      { "name": "RAG Architectures", "level": 3, "yearsExperience": 2 },
+      { "name": "Vector Databases", "level": 2, "yearsExperience": 1 },
+      { "name": "Embeddings", "level": 2, "yearsExperience": 1 },
+      { "name": "MLOps / LLMOps", "level": 2, "yearsExperience": 1 }
+    ]
+  },
+  {
+    "id": "testing",
+    "category": "Testing",
+    "description": "Quality engineering strategy and hands-on automated testing across the stack.",
+    "skills": [
+      { "name": "Playwright / Cypress", "level": 5, "yearsExperience": 4 },
+      { "name": "Selenium", "level": 4, "yearsExperience": 4 },
+      { "name": "Tosca", "level": 5, "yearsExperience": 3 },
+      { "name": "Postman", "level": 5, "yearsExperience": 5 },
+      { "name": "SoapUI", "level": 4, "yearsExperience": 3 },
+      { "name": "API Testing", "level": 5, "yearsExperience": 5 },
+      { "name": "Jest / Vitest", "level": 4, "yearsExperience": 4 },
+      { "name": "Quality Engineering Strategy", "level": 5, "yearsExperience": 5 }
+    ]
+  },
+  {
+    "id": "devops",
+    "category": "DevOps",
+    "description": "Keeping automation platforms and shipped apps reliable in production.",
+    "skills": [
+      { "name": "GitHub Actions", "level": 4, "yearsExperience": 4 },
+      { "name": "Infrastructure as Code", "level": 3, "yearsExperience": 2 },
+      { "name": "Monitoring & Observability", "level": 3, "yearsExperience": 3 }
+    ]
+  },
+  {
+    "id": "architecture",
+    "category": "Architecture",
+    "description": "Designing systems that scale past the first use case — platforms, not one-off scripts.",
+    "skills": [
+      { "name": "System Design", "level": 4, "yearsExperience": 5 },
+      { "name": "API Design", "level": 4, "yearsExperience": 5 },
+      { "name": "Microservices", "level": 4, "yearsExperience": 4 },
+      { "name": "Data Modeling", "level": 4, "yearsExperience": 4 }
+    ]
+  },
+  {
+    "id": "enterprise-cms",
+    "category": "Enterprise CMS",
+    "description": "Adobe Experience Manager work from earlier in my career — content platforms for financial, publishing, and government clients.",
+    "skills": [
+      { "name": "Adobe Experience Manager", "level": 4, "yearsExperience": 2 },
+      { "name": "OSGi", "level": 4, "yearsExperience": 2 },
+      { "name": "Sling Models / Servlets", "level": 4, "yearsExperience": 2 },
+      { "name": "HTL / Sightly", "level": 3, "yearsExperience": 2 },
+      { "name": "AEM Dispatcher", "level": 3, "yearsExperience": 2 }
+    ]
+  },
+  {
+    "id": "leadership",
+    "category": "Leadership",
+    "description": "Setting automation strategy and bringing engineering, QA, and product teams along with it.",
+    "skills": [
+      { "name": "Technical Mentorship", "level": 4, "yearsExperience": 3 },
+      { "name": "Cross-functional Collaboration", "level": 4, "yearsExperience": 5 },
+      { "name": "Engineering Strategy", "level": 3, "yearsExperience": 2 }
+    ]
+  }
+]

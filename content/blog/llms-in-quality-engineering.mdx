@@ -1,0 +1,30 @@
+---
+title: "What I Learned Applying LLMs to Quality Engineering (and Where They Still Fall Short)"
+excerpt: "Building MQE Intelligence Platform taught me that the model is the easy part — the data pipeline and the honesty of the answer are what make an AI quality tool trustworthy."
+publishedDate: "2026-06-02"
+category: "AI"
+tags: ["AI", "Quality Engineering", "LLMs"]
+coverImage: ""
+featured: true
+author: "Raviteja Vemulapelli"
+---
+
+When I started building MQE Intelligence Platform, I assumed the hard part would be the AI layer — prompt design, model selection, getting useful natural-language answers out of test and release data. I was wrong. The hard part was everything upstream of the model, and the most important design decision wasn't about AI at all: deciding what the tool should do when it doesn't know the answer.
+
+## Retrieval beats a bigger prompt
+
+The first version of anything AI-assisted is tempting to build as "dump the data in the context window and ask a question." That falls apart fast with real quality engineering data — test results, release history, and evidence spread across formats that were never designed to be read together. What actually worked was a retrieval-augmented approach: index the data properly, retrieve the relevant slice for a given question, and ground the model's answer in that retrieved evidence instead of letting it reason freely over everything at once.
+
+This sounds like an implementation detail. It isn't — it's the difference between a tool that occasionally hallucinates plausible-sounding quality signal and one that only says things it can point back to real data for.
+
+## Data quality is the actual project
+
+A meaningful part of building MQE Intelligence Platform was, unglamorously, normalizing inconsistent test result formats and release metadata before any AI touched it. Test data that's inconsistent, incomplete, or inconsistently labeled will produce an AI tool that's confidently wrong in ways that are much harder to catch than a human being wrong — because the output *looks* authoritative. If I were scoping a similar project again, I'd budget more time for data normalization up front and less time tuning prompts, because that's where the real leverage was.
+
+## Design for "I don't know"
+
+The single most important behavior I built into MQE Intelligence Platform wasn't a feature — it was a constraint: the tool needs to say it doesn't have enough evidence to answer, rather than guess. In a quality engineering context, a wrong answer is worse than no answer, because it can lead someone to ship with false confidence. That meant being deliberate about grounding responses in retrieved evidence and building in an explicit "insufficient evidence" path, rather than optimizing purely for the tool always having something to say.
+
+## Where LLMs genuinely help — and where they don't (yet)
+
+LLMs are genuinely good at the part of this problem that used to require a human synthesizing multiple sources into a summary — that's real, useful leverage. They're not yet a substitute for good data infrastructure, and they don't make bad or missing test data usable. If your quality data isn't trustworthy, an AI layer on top of it just makes the untrustworthy data sound more confident. Fix the data pipeline first. The model is genuinely the easy 20% of the project.

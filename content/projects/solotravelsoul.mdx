@@ -1,0 +1,88 @@
+---
+title: "SoloTravelSoul"
+tagline: "AI-powered social travel platform helping solo travelers discover destinations, create itineraries, share travel experiences, and connect with fellow travelers."
+summary: "SoloTravelSoul is an AI-powered social travel platform helping solo travelers discover destinations, create itineraries, share travel experiences, and connect with fellow travelers — currently in active development, cross-platform on iOS and Android."
+category: ["Product", "Travel", "Social", "Mobile"]
+techStack: ["React Native", "Firebase", "OpenAI", "Mapbox", "Node.js"]
+status: "in-progress"
+year: "2024"
+featured: true
+featuredRibbon: true
+order: 4
+platform: ["iOS", "Android"]
+role: "Full Stack Engineer"
+coverImage: "/projects/solotravelsoul/cover.png"
+gallery: []
+links:
+  github: ""
+  live: ""
+  caseStudy: ""
+metrics:
+  - label: "Stage"
+    value: "In active development"
+  - label: "Platform"
+    value: "iOS & Android"
+  - label: "Focus"
+    value: "Solo travelers"
+---
+
+## The Problem
+
+Most travel apps treat trip planning as a solved, generic problem — bookings, itineraries, maps — and treat the social side of travel as an afterthought, either missing entirely or bolted onto a booking tool as a general-audience feed. Solo travelers plan differently, journal differently, and want a different kind of connection than someone traveling with company: not a tour group, just other people who understand what traveling alone is actually like. Most existing tools don't reflect either half of that.
+
+## Why I Built It
+
+This came from a problem I felt directly. Planning a trip alone is straightforward, but the parts around it — knowing where to go, journaling it in a way that's actually enjoyable, and connecting with people who get why you're traveling alone in the first place — were consistently underserved by generic travel apps. I wanted to build something that treated solo travel as the primary use case, not a smaller version of group travel, and that gave solo travelers a way to share the experience without needing to travel with someone else to do it.
+
+## The Solution
+
+SoloTravelSoul is an AI-powered, cross-platform travel planning and social networking app built around solo travel specifically: AI-assisted destination discovery and itinerary planning that doesn't assume you're coordinating with anyone else, journaling to capture the trip as it happens, and a social feed where travelers can share experiences, follow other travelers, and comment on trips. The "social" part of the app is deliberately narrow — it's other solo travelers, not a general audience — which shaped how the feed, follows, and notifications were designed from the start. The platform is currently in active development, not yet released.
+
+## Key Highlights
+
+- **React Native** — cross-platform mobile delivery from a single codebase
+- **Firebase** — authentication, data storage, and real-time sync
+- **AI Planning** — AI-assisted destination discovery and itinerary creation
+- **Maps** — map-based trip visualization for planning and reference
+- **Journals** — built-in journaling to capture moments and reflections during a trip
+- **Social Feed** — sharing trip updates and experiences with other travelers
+- **Follow System** — keep up with people whose trips you want to follow
+- **Notifications** — surfaces activity relevant to a traveler's own trips and follows, not engagement for its own sake
+- **Cross Platform** — targeting iOS and Android from one codebase
+
+## Key Features
+
+- Solo-first trip planning, not a repurposed group-trip itinerary tool
+- AI-assisted itinerary and destination suggestions
+- Built-in journaling to capture moments and reflections during a trip
+- A social feed for sharing trip updates and experiences with other travelers
+- Followers, so travelers can keep up with people whose trips they want to follow
+- Comments, for the kind of lightweight interaction that makes the feed feel like a community rather than a broadcast
+- Push notifications that surface activity relevant to a traveler's own trips and follows, not engagement for its own sake
+- Map-based trip visualization for planning and reference
+- Cross-platform build targeting iOS and Android from a single codebase
+
+## Technical Architecture
+
+Built with React Native for cross-platform mobile delivery from a single codebase, Firebase for authentication, data storage, and real-time sync across trip planning, journaling, and social activity (feed, followers, comments), an AI layer for destination and itinerary suggestions, Mapbox for trip mapping and location features, and a Node.js service layer for logic that didn't fit cleanly into client-side Firebase rules. Trip data and social data share the same Firebase-backed layer but are modeled independently, so a private trip stays private while a shared one feeds the social layer without needing a separate system to keep the two in sync.
+
+## Engineering Decisions
+
+The architecture favored proven, well-supported tooling — React Native and Firebase — to maximize solo-development velocity from idea to app store release, rather than building custom infrastructure for problems those tools already solve well. Layering social features (feed, followers, comments, notifications) onto what started as a personal planning tool meant being deliberate about data modeling early: trip data and social data needed to be related but independently useful, so adding the social layer didn't require restructuring how trips and journals already worked.
+
+## Challenges
+
+Location and mapping features are deceptively complex on mobile — battery usage, permission flows across iOS and Android, and offline reliability while traveling all needed real attention, since a travel app that fails without signal defeats its own purpose. Adding social features introduced a different kind of challenge: keeping the feed, followers, and notifications feeling relevant rather than noisy, especially for a user base that's traveling solo and doesn't want the app to feel like another algorithm-driven feed competing for their attention on a trip.
+
+## Lessons Learned
+
+Designing for a specific, well-understood use case — solo travel, not travel in general — made product decisions easier, not harder. A sharp focus gave me a clear filter for what to build and what to leave out, even after adding social features on top of the original planning tool. It also reinforced how much offline reliability and permission handling matter for any mobile app that depends on location, and how differently a social feature has to be designed when the audience is "people traveling alone who want light connection" rather than "everyone."
+
+## Future Roadmap
+
+- Public launch on the App Store and Google Play
+- Deeper offline support for planning and journaling without connectivity
+- Trip-based group chat for travelers who cross paths on the same route
+- Smarter trip and destination suggestions based on journaling history and social activity
+
+None of these exist yet — they're the direction I'd take SoloTravelSoul next.

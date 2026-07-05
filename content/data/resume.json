@@ -1,0 +1,16 @@
+{
+  "summary": "Senior Software Engineer with 8+ years building enterprise systems — from content platforms and quality engineering early in my career, to designing and leading the automation platform now used as the standard for API testing across my organization, to more recently building agentic AI and LLM-powered systems on top of that same foundation. Led the design and adoption of a company-wide API Automation Platform, scaled a Tosca automation suite to 1,200+ test cases across mobile, web, and API platforms, and built MQE Intelligence Platform, an internal knowledge system that turns test and release data into direct answers instead of raw logs. Ship independent products end to end outside of core work — mobile apps, desktop tools — to stay hands-on with the full lifecycle from idea to production. Open to Staff Automation Engineering, Platform Engineering, AI Product Engineering, or Full Stack Engineering roles where I can own both the platform and what's built on top of it.",
+  "downloadUrl": "/resume/raviteja-vemulapelli-resume.pdf",
+  "updatedAt": "2026-07-04",
+  "highlights": [
+    "Designed and led the API Automation Platform, now the standard tool for automated API testing across engineering and QA teams",
+    "Scaled Tosca test automation to 1,200+ automated test cases across enterprise mobile, web, and API platforms",
+    "Design and deploy agentic AI and multi-agent systems using Python, LangChain, LangGraph, and AWS Bedrock for autonomous test intelligence and workflow automation",
+    "Built MQE Intelligence Platform, an internally developed AI-powered knowledge platform for internal QA productivity",
+    "Built and presented Spectrum ReleasePulse AI, an AI-powered release workflow prototype, to engineering leadership",
+    "Shipping independent products end to end on my own time — Snaptura (Windows desktop) and ConfessReels (Web, Android, iOS) are live; SoloTravelSoul is in active development"
+  ],
+  "education": [
+    { "degree": "Master of Science, Computer Technology" }
+  ]
+}

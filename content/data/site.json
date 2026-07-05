@@ -1,0 +1,56 @@
+{
+  "name": "Raviteja Vemulapelli",
+  "preferredName": "Raviteja",
+  "role": "Senior Automation Engineer & AI Builder",
+  "tagline": "I build automation platforms, agentic AI systems, and production mobile apps that ship.",
+  "thesis": "The pattern across everything I build: find the workflow that's still done by hand, and make the system trustworthy enough that people actually rely on it instead of double-checking it themselves. 8+ years doing that across enterprise platforms, automation, and now agentic AI.",
+  "location": "Saint Louis, Missouri",
+  "yearsExperience": 8,
+  "currentFocus": "Agentic AI and multi-agent systems, LLM/RAG solutions on AWS Bedrock, API automation platforms, and production-ready web & mobile products.",
+  "email": "ravitejavemulapelli@gmail.com",
+  "availability": "Open to Staff Automation Engineering, AI Product Engineering, Platform Engineering, and Full Stack Engineering opportunities",
+  "social": [
+    { "label": "GitHub", "url": "https://github.com/ravitejatravelsoul", "icon": "github" },
+    { "label": "LinkedIn", "url": "https://www.linkedin.com/in/ravitejavemulapelli", "icon": "linkedin" },
+    { "label": "Email", "url": "mailto:ravitejavemulapelli@gmail.com", "icon": "email" }
+  ],
+  "storyHook": "I like building tools that remove friction. I got into automation because I hated watching good engineers burn hours on work a script could do better — so I started with the scripts, then the platforms, then the products.",
+  "story": [
+    "I started my career building enterprise content platforms — Java and Adobe Experience Manager work for a state government agency, a financial services firm, and a global publishing company, each with its own compliance, approval, and content-workflow requirements. That work taught me how much of enterprise software is actually about the process around the code: getting content published correctly, safely, and on schedule matters as much as the components themselves. When I moved into automation and quality engineering, that same instinct carried over — the code is rarely the hard part, the system and trust around it is.",
+    "Since joining Charter Communications in 2020, I've grown from building automation frameworks into designing agentic AI systems — architecting multi-agent workflows with LangChain and LangGraph, deploying RAG pipelines on AWS Bedrock, and scaling the team's Tosca automation to 1,200+ automated test cases across mobile, web, and API platforms. MQE Intelligence Platform, an AI-powered knowledge platform I built internally, and Spectrum ReleasePulse AI, an internal hackathon project, both exist because dashboards and logs weren't answering the question people actually had. My work now sits at the intersection of agentic AI, automation, and product engineering, and that's exactly where I want to keep building.",
+    "Outside of platform and QA work, I build independent products on my own time. Snaptura started as a fix for a friction point I kept seeing in manual testing — testers losing time to screenshot cleanup instead of testing — and became a Windows desktop tool built to remove that friction. SoloTravelSoul and ConfessReels each started as \"I wish this app existed.\" ConfessReels is live across Web, Android, and iOS; SoloTravelSoul is still in active development toward the same release. Building for myself keeps me honest about what \"done\" actually means — there's no team to hand it off to, so it has to actually work. I care about teams and roles where I can do both: build the infrastructure that makes engineering faster, and ship the product on top of it."
+  ],
+  "values": [
+    {
+      "title": "Automate the painful part first",
+      "description": "If a team is doing something manually and hating it, that's the highest-leverage place to build. Automation should remove drudgery, not just add tooling."
+    },
+    {
+      "title": "Ship the whole thing",
+      "description": "A platform without adoption or a prototype without a production path isn't done. I care about the full path from idea to something people actually use."
+    },
+    {
+      "title": "AI should answer a question, not add a dashboard",
+      "description": "The bar for AI tooling isn't \"it's AI\" — it's whether it gets someone to a decision faster than digging through logs and reports themselves."
+    }
+  ],
+  "seo": {
+    "defaultTitle": "Raviteja Vemulapelli — Senior Automation Engineer | AI Product Builder | Full Stack Engineer",
+    "titleTemplate": "%s — Raviteja Vemulapelli",
+    "description": "Raviteja Vemulapelli is a Senior Automation Engineer and AI Product Builder with 8+ years of experience building enterprise automation platforms, agentic AI systems, and full-stack products that solve real workflow problems.",
+    "keywords": [
+      "Raviteja Vemulapelli",
+      "Senior Automation Engineer",
+      "Lead Automation Engineer",
+      "Automation Architect",
+      "AI Product Builder",
+      "Agentic AI",
+      "Multi-Agent Systems",
+      "Full Stack Engineer",
+      "QA Automation Platform",
+      "Test Automation",
+      "Mobile App Developer"
+    ],
+    "url": "https://ravitejavemulapelli.dev"
+  }
+}

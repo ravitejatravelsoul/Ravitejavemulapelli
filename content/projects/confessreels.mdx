@@ -1,0 +1,86 @@
+---
+title: "ConfessReels"
+tagline: "Anonymous social platform built around vertical reels where people can safely share thoughts without revealing their identity."
+summary: "ConfessReels is an anonymous social platform built around vertical reels where people can safely share thoughts without revealing their identity — live in production across Web, Android, and iOS."
+category: ["Product", "Social", "Mobile"]
+techStack: ["React Native", "Next.js", "Firebase", "Node.js", "Cloud Video Pipeline"]
+status: "live"
+year: "2024"
+featured: true
+order: 5
+platform: ["Web", "Android", "iOS"]
+role: "Full Stack Engineer"
+coverImage: "/projects/confessreels/cover.png"
+gallery: []
+links:
+  github: ""
+  live: ""
+  playStore: ""
+  appStore: ""
+  caseStudy: ""
+metrics:
+  - label: "Platform"
+    value: "Web + Android + iOS"
+  - label: "Stage"
+    value: "Production"
+  - label: "Role"
+    value: "Full Stack Engineer"
+---
+
+## The Problem
+
+Short-form video made sharing easier, but it also made it more identity-bound — every post is tied to a profile, a following, a persona to maintain. That works for a lot of content, but it's the wrong format for the things people want to say honestly and don't feel safe saying under their own name: confessions, unpopular opinions, things that are easier to voice anonymously. Most anonymous platforms are text-based, and most video platforms are identity-first — the gap between the two felt worth building into rather than working around.
+
+## The Solution
+
+ConfessReels applies the short-form video format people already understand to anonymous sharing: record and post without a persistent public identity attached, message and connect with others without revealing who you are, and browse a community built around honesty rather than personal branding. The product bet was that removing identity from the format would change what people were willing to share, not just how they shared it.
+
+## Key Highlights
+
+- Cross-platform mobile application (iOS and Android)
+- Progressive Web App for browsing and viewing content
+- Firebase Authentication, including Apple Sign In and Google Sign In
+- Firestore backend for accounts, posts, and messaging data
+- Real-time comments
+- Private messaging
+- Content moderation tooling
+- Reporting system built directly into the content experience
+- Admin dashboard for reviewing reported content
+- Android Play Store deployment
+- Apple App Store deployment
+
+## Moderation Approach
+
+Anonymity and moderation have to be designed together, not layered on afterward — a platform where nobody's name is attached to what they post needs moderation that doesn't depend on identity or reputation to work. Reporting is built directly into the content experience, so flagging something inappropriate takes the same low friction as posting does, and moderation tooling reviews reported content without needing to unmask who posted it. The goal was meaningful moderation that respects the same anonymity the platform is built on, not moderation that quietly undermines it.
+
+## Anonymous Identity
+
+Every account exists without a persistent public profile — no name, follower count, or history tied to a real identity attached to what someone posts. Authentication still confirms a real account behind the scenes, so the platform isn't wide open to abuse, but that identity is never exposed publicly. That distinction — authenticated, but not identified — shaped nearly every other decision in the product, from how content is displayed to how messaging works.
+
+## Messaging
+
+Direct messaging carries the same anonymity constraint as everything else on the platform: people can connect and talk without exchanging or exposing real identities. That made messaging a harder design problem than a typical chat feature — the usual patterns a chat UI leans on, profile photos, names, shared contacts, aren't available, so conversations needed a different way to feel personal without relying on identity to do it.
+
+## Reporting
+
+Reporting had to be simple enough that people would actually use it, since a moderation system nobody uses isn't a moderation system. Reports feed into a review process built for anonymous content specifically — evaluating what was posted, not who posted it, since there's no user history or reputation signal to lean on the way a named platform might have.
+
+## Community Features
+
+Beyond individual posts, the app supports lightweight ways to browse and engage with content as a community, without any of that engagement being tied back to a public identity. The design goal throughout was the same one that shaped moderation and messaging: real connection, without the pressure of a persona to maintain.
+
+## Architecture
+
+Built with React Native for cross-platform delivery across iOS and Android, with a companion web experience for browsing and viewing content, Firebase for authentication and a realtime database structured to support anonymity (accounts are authenticated but never publicly identified), a Node.js service layer for backend logic including moderation and reporting workflows, and a cloud-based video pipeline for upload, transcoding, and serving short-form video efficiently on mobile networks. Anonymity was a design constraint from day one, not a feature bolted on afterward — it shaped how accounts, posting, messaging, and moderation data were all modeled from the start.
+
+## Lessons Learned
+
+Building a platform for anonymous content taught me to treat trust and safety as a core design constraint, not a compliance checkbox added later — moderation, reporting, and messaging all had to be designed around the absence of identity from the beginning, not retrofitted onto patterns built for named platforms. It also reinforced how much infrastructure, video pipelines especially, can dominate solo-project scope if not planned for deliberately early.
+
+## Future Improvements
+
+- Stronger, more scalable moderation tooling as usage grows
+- Improved video compression and delivery for lower-bandwidth users
+- Richer community features that preserve anonymity as a core constraint, not a limitation to design around
+
+None of these exist yet — they're the direction I'd take ConfessReels next.

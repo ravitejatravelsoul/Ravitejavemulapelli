@@ -12,30 +12,75 @@
 
 # testing
 /coverage
+playwright-report/
+test-results/
+artifacts/
+screenshots/
+videos/
+downloads/
 
 # next.js
 /.next/
 /out/
+/dist/
 
 # production
 /build
 
 # misc
 .DS_Store
+Thumbs.db
 *.pem
+*.key
+*.crt
+*.p12
+*.sqlite
+*.db
 
-# debug
+# debug / logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+*.log
+*.tmp
+*.cache
 
-# env files (can opt-in for committing if needed)
+# env files
 .env*
+!.env.example
 
 # vercel
-.vercel
+.vercel/
+
+# editor / IDE
+.vscode/settings.json
+.idea/
+
+# claude code local settings
+.claude/
 
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# raw/original asset staging — pre-production working files, not shipped;
+# processed, optimized versions of everything here already live in public/
+/portfolio-assets/
+
+# private planning/ops notes — for the site owner, not public consumption
+# (LAUNCH.md says so explicitly; the others are unbuilt future-feature specs)
+/ADMIN_SPEC.md
+/CMS_ARCHITECTURE.md
+/FIREBASE_MIGRATION.md
+/LAUNCH.md
+/MEDIA_GUIDE.md
+
+# authoring/wiring notes inside public/ — instructions for the site owner on
+# adding media later; not meant to be deployed as publicly servable files
+public/**/README.txt
+public/**/MEDIA_SPEC.md
+
+# unprocessed source logos — superseded by the generated cover/logo/thumbnail
+# assets actually referenced in content; never linked to from the site
+public/**/*-original.*

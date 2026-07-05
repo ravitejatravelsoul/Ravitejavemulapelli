@@ -1,0 +1,30 @@
+---
+title: "Shipping a Mobile App Solo: What Actually Takes the Time"
+excerpt: "Building two independent mobile apps taught me that the feature you're excited about is rarely what eats your weekends. App store review, platform quirks, and infrastructure are."
+publishedDate: "2026-06-16"
+category: "Mobile"
+tags: ["Mobile", "React Native", "Product"]
+coverImage: ""
+featured: false
+author: "Raviteja Vemulapelli"
+---
+
+Between SoloTravelSoul and ConfessReels, I've spent the last couple of years building independent mobile products entirely on my own time, outside of my day job leading automation engineering — ConfessReels shipped to a live release across Web, Android, and iOS, and SoloTravelSoul is in active development toward the same milestone. (A third independent project, Snaptura, took a different path — a Windows desktop tool rather than a mobile app — but the same scope-discipline lessons applied there too.) Each build has taught me the same lesson from a different angle: the feature you're excited to build is almost never what actually consumes your time.
+
+## The core feature is a fraction of the work
+
+Whatever the "point" of the app is — solo trip journaling in SoloTravelSoul, anonymous posting in ConfessReels — that feature is usually buildable in days. What isn't fast: authentication edge cases, offline behavior, push notification permissions across two platforms with different rules, App Store and Play Store review requirements, and the dozens of small platform inconsistencies that only show up once you're testing on real devices instead of a simulator.
+
+If you're estimating a solo mobile project based on how long the core feature will take, double it, and then add time for everything around it that isn't optional.
+
+## Cross-platform tooling is a trade, not a shortcut
+
+React Native (via Expo, for both apps) let me build for iOS and Android from one codebase, which is close to non-negotiable for a solo builder — maintaining two native codebases alone isn't realistic alongside a full-time role. But "cross-platform" doesn't mean "write once, ignore platform differences." Permission flows, background behavior, and app store requirements still diverge meaningfully between iOS and Android, and pretending otherwise is how you end up with an app that works in testing and breaks in review.
+
+## Infrastructure choices should optimize for your constraint, not for scale you don't have yet
+
+For both apps, Firebase was the right call — not because it's the most sophisticated backend option, but because it minimized the infrastructure I had to personally operate while building a product alone in my spare time. ConfessReels, with its video pipeline, was the one place infrastructure genuinely became a hard engineering problem regardless of that choice — upload reliability and transcoding cost at solo-project scale are real constraints, not just scaling problems you'll deal with later.
+
+## What actually moved the needle each time
+
+Across both, the thing that mattered most wasn't a clever technical decision — it was scope discipline. Each of these apps could have grown a longer feature list before the first release. Shipping something narrow and polished, then learning from real usage, beat shipping something broader and rougher every time. That's an easy thing to say and a genuinely hard thing to do when you're excited about the product, which is exactly why it's worth writing down.

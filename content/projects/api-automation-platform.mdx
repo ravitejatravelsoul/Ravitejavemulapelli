@@ -1,0 +1,102 @@
+---
+title: "API Automation Platform"
+tagline: "AI-assisted API automation platform capable of recording API traffic, chaining requests, generating reusable collections, validating responses, and reducing manual automation effort."
+summary: "The API Automation Platform is an AI-assisted platform capable of recording API traffic, chaining requests, generating reusable collections, validating responses, and reducing manual automation effort — built and led end to end as the team's Lead Automation Engineer, replacing manual, per-team scripting with a configuration-driven system that stays maintainable as workflows grow. It's still an active, evolving project: I'm extending the core platform into an autonomous, AI-powered system with dependency detection and self-healing execution — an approach I haven't seen matched in existing API testing tools."
+category: ["Automation", "Developer Tools"]
+techStack: ["Python", "Playwright", "Pytest", "REST APIs", "GitHub Actions", "Docker", "PostgreSQL", "LangChain", "LLM APIs"]
+status: "in-progress"
+year: "2023"
+featured: true
+featuredRibbon: true
+order: 1
+platform: ["Web"]
+role: "Lead Automation Engineer"
+badge: "Enterprise Platform"
+coverImage: "/projects/api-automation-platform/cover.png"
+gallery: []
+links:
+  github: ""
+  live: ""
+  caseStudy: ""
+metrics:
+  - label: "Adoption"
+    value: "Cross-team standard"
+  - label: "Stage"
+    value: "Enterprise Platform"
+  - label: "Role"
+    value: "Lead Automation Engineer"
+---
+
+## The Problem
+
+Existing API automation solutions often require extensive manual setup, ongoing maintenance, and a fair amount of specialized expertise just to keep them running. Tools like Postman are genuinely good at what they're built for — testing a single request, or a small, hand-assembled collection — but they weren't designed for enterprise workflows where dozens of APIs depend on each other, authentication has to be refreshed mid-chain, and a value returned by one call has to be threaded correctly into three more before the workflow means anything.
+
+As those workflows grow, that gap becomes the real cost. Every dependent call, every dynamic token, every validation rule is one more thing a person has to remember to update by hand — and in a large enterprise environment, that maintenance burden compounds faster than any one team can absorb manually. The goal of this platform was to reduce that manual effort while making complex, multi-step API workflows easier to build, execute, and maintain, without requiring every engineer touching it to become an API automation expert first.
+
+## The Solution
+
+The API Automation Platform gives teams a single, unified workflow for the full lifecycle of an API-driven process: recording real API interactions, chaining requests together in the order they actually depend on each other, managing the dynamic variables that pass between them, validating the results, executing the whole chain on demand or in CI, and organizing all of it into reusable collections instead of one-off scripts.
+
+Rather than treating each API call as an isolated test, the platform treats the *workflow* — the full sequence of dependent calls a real process requires — as the unit of automation. That's the core difference from point-and-click API tools: a workflow built once can be reused, versioned, and maintained like any other piece of engineering, instead of being rebuilt by hand every time something upstream changes.
+
+This is still an active, evolving project. Beyond the configuration-driven core described below, I'm actively building toward an autonomous, AI-powered layer on top of it using Python, LangChain, and LLM APIs — automatic dependency detection, variable discovery, and self-healing execution that adapts to non-breaking API changes instead of just failing, with human-in-the-loop governance over anything the system changes on its own (see Future Roadmap). I haven't seen this specific combination of autonomous, self-healing API testing matched in existing tools, which is exactly why it's worth finishing.
+
+## Key Highlights
+
+- **API Recorder** — capture real API traffic as the starting point for a workflow
+- **Variable extraction** — pull values out of a response and reuse them anywhere downstream in a workflow
+- **Chaining Engine** — sequence dependent API calls in the order a real workflow requires
+- **Validation Engine** — check responses against expected rules as part of execution
+- **Export to Postman** — hand a recorded or built workflow to teams already standardized on Postman
+- **AI-assisted workflow generation** — build a workflow from a description of the process instead of assembling it request by request
+- **Enterprise authentication** — supports the auth patterns real enterprise APIs require, including tokens that refresh or rotate mid-chain
+
+## Key Capabilities
+
+- **API recording** — capture real API interactions as the starting point for a workflow, instead of hand-writing every request from scratch
+- **Request sequencing** — chain dependent API calls together in the order a real workflow actually requires
+- **Response-to-request variable propagation** — pass values returned by one call directly into the calls that depend on them, so chains stay correct as data changes
+- **Reusable variables** — define a value once and reference it across a workflow instead of duplicating it per request
+- **A validation engine** — check responses against expected rules as part of execution, not as a separate manual step
+- **Collection execution** — run a full workflow, or a reusable collection of workflows, as a single unit
+- **Execution reporting** — turn a run into a clear, readable result instead of a wall of raw logs
+- **Configuration-driven workflows** — define a workflow through configuration rather than custom scripting per use case, so it stays maintainable as it grows
+- **Scalable architecture** — built to support many teams and workflows without becoming harder to maintain as usage grows
+
+## Technical Approach
+
+The platform is built around a modular architecture that keeps recording, chaining, variable management, validation, and execution as distinct, independently maintainable pieces rather than one monolithic script. That separation of concerns is what keeps the system extensible — new validation rules, new variable sources, or new execution targets can be added without touching the rest of the pipeline.
+
+Workflows themselves are configuration-driven rather than hard-coded, which is the difference between a tool that works for one use case and a platform that works for hundreds of them. Execution runs through a Python core using Playwright and Pytest for request orchestration and assertions, triggered through CI via GitHub Actions, containerized with Docker for consistent execution environments, with results persisted to PostgreSQL so trends are queryable over time instead of living only in a CI log.
+
+## Engineering Decisions
+
+Every design decision — the modularity, the configuration-driven workflows, the clean separation between the shared framework and team-specific content — was made with the same question in mind: will this still be maintainable when ten more teams are using it?
+
+That question shaped real trade-offs. Configuration-driven workflows are slower to build for a single, one-off use case than a quick hard-coded script would be — but a hard-coded script doesn't scale past the person who wrote it. Keeping validation, execution, and reporting as separate concerns instead of one integrated pipeline added coordination overhead early, but meant any one piece could be improved without risking the others. Reusability was prioritized over raw speed of authoring a single workflow, because the platform's value was never one workflow — it was every workflow after the first one being easier to build than the one before it.
+
+## Challenges
+
+The technical mechanics of firing a request and checking a response were never the hard part. The real engineering challenges showed up at the edges of that: keeping long chains of dependent APIs correct as any single link in the chain changed, handling authentication that expires or rotates mid-workflow, and making sure a workflow that passes today doesn't silently start failing because a variable it depended on changed shape upstream.
+
+Reusable variables solved part of that, but introduced their own problem — a variable used across five workflows means a change in one place can quietly affect four others, so the system had to make that dependency visible rather than hidden. And because the whole point of the platform was reducing manual maintenance, every new feature had to be weighed against a simple test: does this make workflows easier to understand six months from now, or does it just make them easier to build today? Those aren't always the same answer.
+
+## Impact
+
+The platform is now the standard way teams build and run automated API workflows, replacing the patchwork of manually maintained scripts and one-off collections that came before it. Recording and chaining reduced how much of a new workflow had to be written by hand, and configuration-driven execution meant a workflow could keep working as the APIs behind it evolved, instead of needing to be rebuilt from scratch every time something changed upstream.
+
+## Lessons Learned
+
+Building a platform that outlives individual test cases requires a different kind of thinking than writing a good test. Every decision had to account for a workflow I hadn't seen yet — the whole point of "configuration-driven" is that someone else can build something I didn't anticipate, and the architecture has to hold up when they do.
+
+The hardest balance was flexibility versus simplicity. A fully generic system can do anything and explain nothing; a fully rigid one is easy to reason about and useless outside its original use case. Reusable variables, validation rules, and collections all had to be flexible enough to cover real workflows without becoming so configurable that nobody could predict what a workflow would actually do at runtime.
+
+## Future Roadmap
+
+- AI-assisted workflow generation — building a workflow from a description of the process instead of assembling it request by request
+- Autonomous dependency detection and variable discovery — an AI layer that surfaces API dependencies and threads variables automatically instead of requiring them to be configured by hand
+- Self-healing execution — workflows that adapt to small, non-breaking API changes instead of failing on cosmetic drift, with human-in-the-loop governance over anything the system changes on its own
+- Improved execution reporting — deeper visibility into why a workflow failed, not just that it did
+- Workflow templates — starting points for common enterprise patterns so new workflows don't start from a blank page
+
+None of these exist yet — they're the direction I'd take the platform next.

@@ -1,0 +1,36 @@
+---
+title: "Your Internal Automation Platform Needs a Product Owner, Not Just a Maintainer"
+excerpt: "The technical framework was never the hard part of building an API Automation Platform. Getting teams to actually adopt it was."
+publishedDate: "2026-05-18"
+category: "Automation"
+tags: ["Automation", "Platform Engineering", "Leadership"]
+coverImage: ""
+featured: true
+author: "Raviteja Vemulapelli"
+---
+
+Every engineering org I've worked around eventually ends up with the same problem: five teams, five ways of testing APIs, and no shared answer to "is this endpoint actually healthy." The instinct is to fix this with a framework. Write some shared test utilities, document them, announce them in a team channel, and expect people to switch over. That almost never works, and it took me building the API Automation Platform to understand why.
+
+## The framework is the easy 20%
+
+Writing a solid test automation core — request orchestration, assertions, fixtures, CI integration — is genuinely the easy part if you've done it before. Playwright, Pytest, and a sane CI pipeline will get you a working framework in weeks, not months. What's hard is everything after that: getting a team that already has a working (if messy) way of testing APIs to trust something new enough to migrate off their own tooling.
+
+That's a product problem, not a technical one. And most internal platforms fail because they're treated purely as engineering deliverables instead of products with users who have to *choose* to adopt them.
+
+## Treat internal teams like users
+
+The shift that made the platform actually stick was treating other engineering teams like users I had to earn trust from, not teams that would obviously see the value and switch. That meant:
+
+- Documentation that answered "how do I migrate my existing tests" before it answered "here's our architecture"
+- Backward-compatible migration paths instead of forcing a rewrite
+- Being genuinely responsive when a team hit friction, the same way you'd want a vendor to respond to a support ticket
+
+None of that shows up in a system design doc, but it's the difference between a platform that gets adopted and one that gets tolerated by the team that was mandated to use it.
+
+## Adoption is a leading indicator, not a vanity metric
+
+It's tempting to measure an internal platform by lines of code or test coverage percentage. The metric that actually mattered was adoption — how many teams chose to build on the shared platform instead of maintaining their own parallel tooling. That number is a much more honest signal of whether the platform is actually solving the problem, because unlike test coverage, it can't be gamed by writing more tests. It can only go up if the thing is genuinely easier to use than the alternative.
+
+## What I'd tell someone starting this today
+
+If you're building a shared automation platform inside an engineering org, spend real time up front talking to the teams you want to adopt it before you write the framework. Find out what they actually hate about their current process — that's your roadmap. The technical decisions (which test runner, which CI provider) matter far less than most engineers assume. The adoption strategy is the project.
