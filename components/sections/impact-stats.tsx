@@ -11,12 +11,15 @@ export async function ImpactStats() {
   ]);
 
   const skillCount = skillGroups.reduce((total, group) => total + group.skills.length, 0);
+  // Only live/production projects count as "shipped" — must stay consistent
+  // with the hero stat and the per-project status badges.
+  const shippedCount = projects.filter((project) => project.status === "live").length;
 
   const stats: { label: string; value: number; suffix?: string }[] = [
     ...(site.yearsExperience > 0
       ? [{ label: "Years building software", value: site.yearsExperience, suffix: "+" }]
       : []),
-    { label: "Products shipped end to end", value: projects.length },
+    { label: "Products shipped end to end", value: shippedCount },
     { label: "Skill areas across the stack", value: skillCount, suffix: "+" },
     { label: "Domains covered", value: skillGroups.length },
   ];

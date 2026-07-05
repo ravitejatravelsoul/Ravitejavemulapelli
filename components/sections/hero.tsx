@@ -33,6 +33,10 @@ export async function Hero() {
   const photoUrl = findFirstAvailablePublicAsset(HEADSHOT_CANDIDATES);
   const thesisIsDraft = isPlaceholder(site.thesis);
   const displayName = site.preferredName ?? site.name;
+  // "Shipped" means shipped: only live/production projects count toward the
+  // stat, not in-progress or concept work — the hero number has to survive a
+  // skeptic cross-checking it against the project statuses two scrolls down.
+  const productsShipped = projects.filter((project) => project.status === "live").length;
 
   return (
     <HeroExperience
@@ -45,7 +49,7 @@ export async function Hero() {
       thesis={site.thesis}
       thesisIsDraft={thesisIsDraft}
       photoUrl={photoUrl}
-      productsShipped={projects.length}
+      productsShipped={productsShipped}
       resumeButton={
         <ResumeDownloadButton label="Download Resume" variant="outline" className="h-12 rounded-xl px-7 text-base" />
       }
