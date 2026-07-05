@@ -22,6 +22,8 @@ outlive any single redesign.
   JSON-LD structured data, sitemap, and robots.txt
 - **Accessibility-first**: skip-to-content link, keyboard navigation, WCAG
   AA contrast, `prefers-reduced-motion` support throughout
+- **Light/dark theme toggle** — respects system preference on first visit,
+  persists the choice, defaults to dark, no flash of the wrong theme
 - **PWA-ready manifest** with a full icon set (192/512/Apple touch/maskable)
 - Dark, restrained visual design with purposeful motion (Framer Motion),
   built to feel like a product landing page rather than a template
@@ -34,6 +36,7 @@ outlive any single redesign.
 | UI | [React 19](https://react.dev), TypeScript (strict) |
 | Styling | [Tailwind CSS v4](https://tailwindcss.com), [shadcn/ui](https://ui.shadcn.com) |
 | Animation | [Motion](https://motion.dev) (Framer Motion) |
+| Theming | [next-themes](https://github.com/pacocoursey/next-themes) (light/dark, class-based) |
 | Content | Local JSON + MDX (`gray-matter`, `next-mdx-remote`) |
 | Forms | `react-hook-form` + `zod` |
 | Maps | `react-simple-maps` |
@@ -148,6 +151,8 @@ deployment.
 - Full keyboard navigation and visible focus states
 - `aria-label`/`aria-describedby` on interactive elements and form errors
 - Respects `prefers-reduced-motion` throughout
+- Theme toggle is keyboard-operable with accurate, state-reflective
+  `aria-label`s ("Switch to light mode" / "Switch to dark mode")
 
 ## SEO
 

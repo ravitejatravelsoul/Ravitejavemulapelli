@@ -227,8 +227,13 @@
   pure black — reads as more considered / less "default dark mode" (Linear,
   Vercel dark UI use the same trick). One restrained accent (indigo-violet)
   carries all interactive/emphasis color; everything else is neutral.
+
+  Declared bare on `:root` (in addition to the explicit `.dark` block below)
+  so dark is what renders before the theme-detection script runs and for
+  any no-JS fallback — matching the site's dark-first identity.
 */
-:root {
+:root,
+.dark {
   --background: oklch(0.13 0.012 264);
   --foreground: oklch(0.97 0.004 264);
   --card: oklch(0.17 0.014 264);
@@ -262,6 +267,55 @@
   --sidebar-accent-foreground: oklch(0.97 0.004 264);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.64 0.19 280 / 60%);
+  --shadow-elevated: 0 20px 60px -20px rgb(0 0 0 / 0.5);
+  color-scheme: dark;
+}
+
+/*
+  Light theme — designed to match, not invert. Same cool hue (264) carried
+  through background/foreground so it reads as the same brand at a different
+  time of day rather than a generic "light mode" swap. Card/popover sit
+  brighter than the page background (not equal to it) so elevation is still
+  visible without a dark-mode-style glow doing the work. Accent-2 and
+  destructive are deepened from their dark-mode lightness values — the
+  dark-mode versions are tuned to pop off a near-black background and don't
+  carry enough contrast against a light one at the same lightness.
+*/
+.light {
+  --background: oklch(0.985 0.004 264);
+  --foreground: oklch(0.2 0.016 264);
+  --card: oklch(0.995 0.002 264);
+  --card-foreground: oklch(0.2 0.016 264);
+  --popover: oklch(0.995 0.002 264);
+  --popover-foreground: oklch(0.2 0.016 264);
+  --primary: oklch(0.5 0.19 280);
+  --primary-foreground: oklch(0.99 0.003 264);
+  --secondary: oklch(0.95 0.007 264);
+  --secondary-foreground: oklch(0.2 0.016 264);
+  --muted: oklch(0.96 0.006 264);
+  --muted-foreground: oklch(0.42 0.02 264);
+  --accent: oklch(0.5 0.19 280);
+  --accent-foreground: oklch(0.99 0.003 264);
+  --accent-2: oklch(0.5 0.12 205);
+  --destructive: oklch(0.5 0.21 25);
+  --border: oklch(0 0 0 / 9%);
+  --input: oklch(0 0 0 / 12%);
+  --ring: oklch(0.5 0.19 280 / 45%);
+  --chart-1: oklch(0.5 0.19 280);
+  --chart-2: oklch(0.5 0.12 205);
+  --chart-3: oklch(0.55 0.16 340);
+  --chart-4: oklch(0.6 0.16 90);
+  --chart-5: oklch(0.5 0.02 264);
+  --sidebar: oklch(0.97 0.005 264);
+  --sidebar-foreground: oklch(0.2 0.016 264);
+  --sidebar-primary: oklch(0.5 0.19 280);
+  --sidebar-primary-foreground: oklch(0.99 0.003 264);
+  --sidebar-accent: oklch(0.95 0.007 264);
+  --sidebar-accent-foreground: oklch(0.2 0.016 264);
+  --sidebar-border: oklch(0 0 0 / 9%);
+  --sidebar-ring: oklch(0.5 0.19 280 / 45%);
+  --shadow-elevated: 0 20px 60px -20px rgb(0 0 0 / 0.12);
+  color-scheme: light;
 }
 
 @layer base {
@@ -270,10 +324,12 @@
   }
   html {
     @apply font-sans scroll-smooth;
-    color-scheme: dark;
   }
   body {
     @apply bg-background text-foreground;
+    transition:
+      background-color 0.3s ease,
+      color 0.3s ease;
   }
   ::selection {
     @apply bg-primary/30 text-foreground;
@@ -475,7 +531,7 @@
     @apply backdrop-blur-xl;
     background: color-mix(in oklch, var(--card) 85%, transparent);
     border: 1px solid color-mix(in oklch, var(--border) 100%, var(--foreground) 4%);
-    box-shadow: 0 20px 60px -20px rgb(0 0 0 / 0.5);
+    box-shadow: var(--shadow-elevated);
   }
 
   /*
@@ -516,6 +572,26 @@
   header,
   footer {
     display: none !important;
+  }
+  /*
+    Force the actual CSS variables, not just `body`'s own color/background —
+    anything using `text-foreground`/`bg-card`/etc. reads the custom
+    property directly, so overriding only `body` left those elements
+    rendering in whatever the active screen theme's (often near-white, for
+    dark mode) values, near-invisible on a forced-white printed page.
+  */
+  :root {
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.15 0 0);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.15 0 0);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.15 0 0);
+    --muted: oklch(0.96 0 0);
+    --muted-foreground: oklch(0.35 0 0);
+    --secondary: oklch(0.96 0 0);
+    --secondary-foreground: oklch(0.15 0 0);
+    --border: oklch(0 0 0 / 15%);
   }
   html,
   body {

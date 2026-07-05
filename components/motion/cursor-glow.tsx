@@ -1,22 +1,26 @@
 "use client";
 
 import { useEffect } from "react";
+import { useTheme } from "next-themes";
 import { motion, useMotionValue, useReducedMotion, useSpring } from "motion/react";
 
 /**
  * A soft glow that trails the cursor — desktop pointer devices only, never
- * under reduced-motion. Deliberately does NOT hide or replace the native
- * cursor (that's a usability regression, especially for anyone relying on
- * OS cursor size/contrast settings) and is `pointer-events-none` so it can
- * never block a click.
+ * under reduced-motion, dark mode only (`mix-blend-screen` paints ~nothing
+ * against a light background, so in light mode it would just be a wasted
+ * mousemove listener and spring animation). Deliberately does NOT hide or
+ * replace the native cursor (that's a usability regression, especially for
+ * anyone relying on OS cursor size/contrast settings) and is
+ * `pointer-events-none` so it can never block a click.
  *
  * Always renders (no client-only conditional state, to avoid a
- * setState-in-effect / hydration footgun) — on touch devices or under
- * reduced-motion the listener is simply never attached, so it stays parked
- * off-screen at its initial position and is effectively inert.
+ * setState-in-effect / hydration footgun) — on touch devices, under
+ * reduced-motion, or in light mode the listener is simply never attached
+ * (and `dark:block hidden` skips the paint), so it's effectively inert.
  */
 export function CursorGlow() {
   const shouldReduceMotion = useReducedMotion();
+  const { resolvedTheme } = useTheme();
   const x = useMotionValue(-400);
   const y = useMotionValue(-400);
   const springX = useSpring(x, { stiffness: 120, damping: 20, mass: 0.6 });
@@ -24,6 +28,7 @@ export function CursorGlow() {
 
   useEffect(() => {
     if (shouldReduceMotion) return;
+    if (resolvedTheme !== "dark") return;
     const isFinePointer = window.matchMedia("(pointer: fine)").matches;
     if (!isFinePointer) return;
 
@@ -33,12 +38,12 @@ export function CursorGlow() {
     }
     window.addEventListener("mousemove", handleMove);
     return () => window.removeEventListener("mousemove", handleMove);
-  }, [shouldReduceMotion, x, y]);
+  }, [shouldReduceMotion, resolvedTheme, x, y]);
 
   return (
     <motion.div
       aria-hidden
-      className="pointer-events-none fixed top-0 left-0 z-30 size-[420px] rounded-full mix-blend-screen"
+      className="pointer-events-none fixed top-0 left-0 z-30 hidden size-[420px] rounded-full mix-blend-screen dark:block"
       style={{
         x: springX,
         y: springY,

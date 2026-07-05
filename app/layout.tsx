@@ -9,6 +9,8 @@ import { PageTransition } from "@/components/motion/page-transition";
 import { CursorGlow } from "@/components/motion/cursor-glow";
 import { RouteProgressBar } from "@/components/motion/route-progress-bar";
 import { Stars } from "@/components/motion/stars";
+import { ThemeProvider } from "@/components/theme/theme-provider";
+import { ThemeColorSync } from "@/components/theme/theme-color-sync";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -59,7 +61,10 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export function generateViewport() {
   return {
-    themeColor: "#0d0e12",
+    themeColor: [
+      { media: "(prefers-color-scheme: light)", color: "#fbfbfc" },
+      { media: "(prefers-color-scheme: dark)", color: "#0d0e12" },
+    ],
   };
 }
 
@@ -71,27 +76,31 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`dark ${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      suppressHydrationWarning
+      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="flex min-h-full flex-col">
-        <a
-          href="#main-content"
-          className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-[100] focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-sm focus:text-primary-foreground"
-        >
-          Skip to content
-        </a>
-        <div aria-hidden className="noise-texture pointer-events-none fixed inset-0 z-[1]" />
-        <Stars className="pointer-events-none fixed inset-0 z-[1] opacity-60" />
-        <CursorGlow />
-        <RouteProgressBar />
-        <TooltipProvider delayDuration={150}>
-          <Navbar />
-          <main id="main-content" tabIndex={-1} className="flex-1 focus:outline-none">
-            <PageTransition>{children}</PageTransition>
-          </main>
-          <Footer />
-          <Toaster />
-        </TooltipProvider>
+        <ThemeProvider>
+          <ThemeColorSync />
+          <a
+            href="#main-content"
+            className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-[100] focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-sm focus:text-primary-foreground"
+          >
+            Skip to content
+          </a>
+          <div aria-hidden className="noise-texture pointer-events-none fixed inset-0 z-[1]" />
+          <Stars className="pointer-events-none fixed inset-0 z-[1] opacity-60 dark:block hidden" />
+          <CursorGlow />
+          <RouteProgressBar />
+          <TooltipProvider delayDuration={150}>
+            <Navbar />
+            <main id="main-content" tabIndex={-1} className="flex-1 focus:outline-none">
+              <PageTransition>{children}</PageTransition>
+            </main>
+            <Footer />
+            <Toaster />
+          </TooltipProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

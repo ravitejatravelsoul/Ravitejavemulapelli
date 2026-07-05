@@ -134,7 +134,7 @@ export default async function TravelPage() {
                       <p className="font-mono text-xs text-primary">{story.countryName}</p>
                       <h3 className="mt-2 font-medium">{story.title}</h3>
                       <p className="mt-2 text-sm text-muted-foreground">{story.excerpt}</p>
-                      <p className="mt-3 text-xs text-muted-foreground/85">
+                      <p className="mt-3 text-xs text-muted-foreground/90">
                         {formatMonthYear(story.date)}
                       </p>
                     </GlassCard>

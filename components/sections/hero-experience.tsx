@@ -183,7 +183,7 @@ function HeroText({
         <p className={cn("mt-5 text-lg text-muted-foreground", centered && "text-center")}>Hi, I&apos;m {displayName}.</p>
         <p
           className={cn(
-            "mt-1 flex items-center gap-1 text-sm text-muted-foreground/85",
+            "mt-1 flex items-center gap-1 text-sm text-muted-foreground/90",
             centered && "justify-center",
           )}
         >

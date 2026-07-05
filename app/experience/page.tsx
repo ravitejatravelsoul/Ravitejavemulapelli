@@ -92,7 +92,7 @@ export default async function ExperiencePage() {
                           {formatDateRange(entry.startDate, entry.endDate)}
                         </p>
                         {formatDuration(entry.startDate, entry.endDate) ? (
-                          <p className="mt-1 text-xs text-muted-foreground/85">
+                          <p className="mt-1 text-xs text-muted-foreground/90">
                             {formatDuration(entry.startDate, entry.endDate)}
                           </p>
                         ) : null}
