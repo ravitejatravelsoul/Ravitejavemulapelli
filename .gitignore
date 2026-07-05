@@ -76,6 +76,11 @@ next-env.d.ts
 /LAUNCH.md
 /MEDIA_GUIDE.md
 
+# AI coding agent instructions — local tooling config, not project
+# documentation; provides no value to a recruiter/contributor reading the repo
+/AGENTS.md
+/CLAUDE.md
+
 # authoring/wiring notes inside public/ — instructions for the site owner on
 # adding media later; not meant to be deployed as publicly servable files
 public/**/README.txt
