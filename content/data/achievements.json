@@ -43,7 +43,7 @@
     "id": "shipped-snaptura",
     "title": "Shipped Snaptura",
     "date": "2024-01-01",
-    "description": "Designed, built, and released Snaptura, an enterprise Windows desktop application that automates screenshot evidence collection for manual testers — built independently outside of my day-to-day automation work.",
+    "description": "Designed, built, and released Snaptura, a professional Windows desktop application designed for enterprise QA workflows that automates screenshot evidence collection for manual testers — built independently outside of my day-to-day automation work.",
     "category": "Product Launch",
     "tags": ["Snaptura", "Desktop", "Quality Engineering"],
     "milestone": true,

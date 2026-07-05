@@ -1,7 +1,7 @@
 ---
 title: "Snaptura"
-tagline: "Enterprise desktop application that automates screenshot evidence collection for manual testers."
-summary: "Snaptura is an enterprise Windows desktop application that automates screenshot evidence collection for manual testers — capturing, organizing, and exporting evidence during manual testing so the repetitive, error-prone parts of the job disappear without changing how testers already work."
+tagline: "Professional Windows desktop application designed for enterprise QA workflows, automating screenshot evidence collection for manual testers."
+summary: "Snaptura is a professional Windows desktop application designed for enterprise QA workflows, automating screenshot evidence collection for manual testers — capturing, organizing, and exporting evidence during manual testing so the repetitive, error-prone parts of the job disappear without changing how testers already work."
 category: ["Quality Engineering", "Product"]
 techStack: ["Python", "Windows Desktop Application", "Image Processing", "PDF Generation", "Local File Storage"]
 status: "live"
@@ -11,7 +11,7 @@ featuredRibbon: true
 order: 2
 platform: ["Windows Desktop"]
 role: "Product Designer, Developer"
-badge: "Enterprise Tool"
+badge: "QA Productivity Tool"
 coverImage: "/projects/snaptura/cover.png"
 gallery: []
 links:
@@ -22,7 +22,7 @@ metrics:
   - label: "Platform"
     value: "Windows Desktop"
   - label: "Stage"
-    value: "Enterprise Tool"
+    value: "QA Productivity Tool"
   - label: "Role"
     value: "Product Designer, Developer"
 ---
@@ -47,16 +47,16 @@ Instead of asking a tester to stop, switch tools, and manually manage screenshot
 - **Intelligent screenshot compression** — evidence stays reasonably sized without a manual export step
 - **Comments** — annotate a screenshot at the point of capture, while the context is still fresh
 - **Automatic PDF generation** — organized captures generate directly into a PDF report, ready to attach to a test record instead of assembled by hand
-- **Enterprise workflow** — built around how QA teams actually organize and hand off testing evidence, not a generic screenshot tool retrofitted for testers
+- **Built for QA workflows** — built around how QA teams actually organize and hand off testing evidence, not a generic screenshot tool retrofitted for testers
 - **Privacy protection** — everything is captured and processed locally with zero cloud dependency, so evidence never leaves the tester's machine
 - **Installer** — packaged for straightforward install on a tester's machine
-- **Software Center deployment ready** — packaged to roll out through enterprise software distribution rather than a manual install per machine
+- **Managed-environment compatible** — installer designed with enterprise deployment scenarios in mind, rather than requiring a manual install per machine
 
 ## Technical Approach
 
 Snaptura is a native Windows desktop application built in Python. Capture, image processing, and organization all run locally on the tester's machine — there's no server, no account, and no cloud upload in the capture path, which is what makes the "zero cloud dependency" design constraint real rather than aspirational.
 
-Screenshots are processed and compressed locally, structured into sessions on the local file system, and assembled into a PDF report through a local document-generation step rather than a hosted export service. The application ships with a standard installer and is packaged to support enterprise Software Center-style deployment rather than a manual install per machine. Keeping the entire pipeline local also simplified the reliability story: there's no network call in the middle of a capture flow that can fail, time out, or add latency a tester would notice.
+Screenshots are processed and compressed locally, structured into sessions on the local file system, and assembled into a PDF report through a local document-generation step rather than a hosted export service. The application ships with a standard installer, designed with enterprise deployment scenarios in mind rather than requiring a manual install per machine. Keeping the entire pipeline local also simplified the reliability story: there's no network call in the middle of a capture flow that can fail, time out, or add latency a tester would notice.
 
 ## Engineering Decisions
 

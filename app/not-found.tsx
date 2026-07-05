@@ -1,8 +1,15 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
 import { Section } from "@/components/common/section";
 import { Button } from "@/components/ui/button";
 import { GradientText } from "@/components/common/gradient-text";
+
+export const metadata: Metadata = {
+  title: "404 | Page Not Found",
+  description: "The page you are looking for could not be found.",
+  robots: { index: false, follow: false },
+};
 
 export default function NotFound() {
   return (
