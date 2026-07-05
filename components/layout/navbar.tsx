@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Menu, ArrowUpRight } from "lucide-react";
+import { Menu, ArrowUpRight, ChevronDown } from "lucide-react";
 import { motion } from "motion/react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -16,12 +16,29 @@ import {
   SheetTrigger,
   SheetClose,
 } from "@/components/ui/sheet";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { ThemeToggle } from "@/components/theme/theme-toggle";
 
 const primaryLinks = [
   { label: "About", href: "/about" },
   { label: "Experience", href: "/experience" },
   { label: "Projects", href: "/projects" },
   { label: "Writing", href: "/blog" },
+];
+
+// Reachable on desktop via the "More" dropdown rather than a full top-level
+// slot each — kept out of `primaryLinks` so the main nav row stays compact.
+const moreLinks = [
+  { label: "Skills", href: "/skills" },
+  { label: "Achievements", href: "/achievements" },
+  { label: "Certifications", href: "/certifications" },
+  { label: "Resume", href: "/resume" },
+  { label: "Travel", href: "/travel" },
 ];
 
 const menuGroups = [
@@ -55,7 +72,9 @@ const menuGroups = [
 export function Navbar() {
   const [scrolled, setScrolled] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
   const pathname = usePathname();
+  const isMoreActive = moreLinks.some((link) => link.href === pathname);
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 8);
@@ -107,9 +126,42 @@ export function Navbar() {
               </Link>
             );
           })}
+
+          <DropdownMenu open={moreOpen} onOpenChange={setMoreOpen}>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className={cn(
+                  "relative flex items-center gap-1 rounded-sm py-1 text-sm transition-colors outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring",
+                  isMoreActive ? "text-foreground" : "text-muted-foreground",
+                )}
+              >
+                More
+                <ChevronDown className={cn("size-3.5 transition-transform", moreOpen && "rotate-180")} />
+                {isMoreActive ? (
+                  <motion.span
+                    layoutId="nav-underline"
+                    className="absolute inset-x-0 -bottom-1 h-px bg-primary"
+                    transition={{ type: "spring", stiffness: 380, damping: 32 }}
+                  />
+                ) : null}
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" sideOffset={12} className="min-w-40">
+              {moreLinks.map((link) => (
+                <DropdownMenuItem key={link.href} asChild>
+                  <Link href={link.href} className={cn(pathname === link.href && "text-foreground")}>
+                    {link.label}
+                  </Link>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
 
         <div className="flex items-center gap-2">
+          <ThemeToggle />
+
           <Button asChild size="sm" className="hidden transition-transform hover:scale-[1.03] active:scale-[0.97] sm:inline-flex">
             <Link href="/contact">
               Contact <ArrowUpRight className="size-3.5" />
@@ -118,7 +170,7 @@ export function Navbar() {
 
           <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
             <SheetTrigger asChild>
-              <Button variant="ghost" size="icon" aria-label="Open site menu">
+              <Button variant="ghost" size="icon" aria-label="Open site menu" className="lg:hidden">
                 <Menu className="size-5" />
               </Button>
             </SheetTrigger>
