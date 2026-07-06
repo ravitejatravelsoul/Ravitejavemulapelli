@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Menu, ArrowUpRight, ChevronDown } from "lucide-react";
@@ -98,9 +99,17 @@ export function Navbar() {
       >
         <Link
           href="/"
-          className="font-mono text-sm font-medium tracking-tight rounded-sm transition-colors hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
+          className="flex items-center gap-2 rounded-sm transition-colors hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
         >
-          Raviteja Vemulapelli
+          <Image
+            src="/rv-monogram-transparent-1024.png"
+            alt=""
+            width={32}
+            height={32}
+            className="size-7 shrink-0 sm:size-8"
+            priority
+          />
+          <span className="font-mono text-sm font-medium tracking-tight">Raviteja Vemulapelli</span>
         </Link>
 
         <div className="hidden items-center gap-8 lg:flex">
