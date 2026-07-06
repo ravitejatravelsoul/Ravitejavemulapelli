@@ -89,3 +89,11 @@ public/**/MEDIA_SPEC.md
 # unprocessed source logos — superseded by the generated cover/logo/thumbnail
 # assets actually referenced in content; never linked to from the site
 public/**/*-original.*
+public/projects/chillpay/ChillPay Icon.jpg
+
+# one-time source images used to generate the actual served icons
+# (favicon.ico, icon-192/512.png, apple-touch-icon.png, icon-maskable-512.png)
+# — the generated outputs are what's committed and served; these inputs
+# aren't referenced by the app at runtime
+public/rv-favicon-source-512.png
+public/rv-monogram-square.png
