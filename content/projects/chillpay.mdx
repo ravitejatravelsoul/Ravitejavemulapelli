@@ -1,0 +1,92 @@
+---
+title: "ChillPay"
+tagline: "Modern FinTech web application for secure, intuitive digital payment workflows, account dashboards, and transaction management."
+summary: "ChillPay is a modern FinTech web application focused on secure, intuitive digital payment workflows, account dashboards, and transaction management — a personal product built to explore what a genuinely calm payment experience looks like, from authentication through dashboard to transaction history. It's actively under development and does not process real payments yet."
+category: ["Product", "FinTech", "Web"]
+techStack: ["Next.js", "React", "TypeScript", "Firebase Auth", "Firestore", "Tailwind CSS"]
+status: "in-progress"
+year: "2026"
+featured: false
+order: 10
+platform: ["Web", "iOS planned"]
+role: "Full Stack Engineer"
+coverImage: "/projects/chillpay/cover.png"
+gallery: []
+links:
+  github: ""
+  live: ""
+  caseStudy: ""
+metrics:
+  - label: "Stage"
+    value: "In active development"
+  - label: "Platform"
+    value: "Web + iOS planned"
+  - label: "Focus"
+    value: "Payment experience"
+---
+
+## Overview
+
+ChillPay is a modern FinTech product under active development, focused on clean payment workflows, secure authentication, account dashboards, and transaction visibility. It covers the core surface area of a payments product — authentication, a payment workflow, an account dashboard, and transaction history — built web-first with a mobile-first responsive layout. The project is real and actively worked on; it is a product-in-progress, not a released service, and no real payments are processed yet.
+
+## The Problem
+
+Payment experiences often feel complex or fragmented — dense screens, unclear states, and flows that make a user double-check whether something actually happened. The interesting product problem isn't moving a number from one account to another; it's making every step of that flow legible enough that the user never feels uncertain. ChillPay explores how to make financial workflows feel simple, transparent, and trustworthy, starting with the interface and letting the engineering serve it.
+
+## The Solution
+
+A responsive web application built with Next.js and Firebase that organizes authentication, dashboard views, transaction history, and payment-flow screens into one clean, coherent experience:
+
+- **Modern FinTech UI** — a clean, restrained interface where every state (pending, complete, failed) is visually unambiguous
+- **Secure authentication** — Firebase Authentication handles identity, so session management and credential security sit on a proven platform rather than custom code
+- **Payment workflow design** — the send/request flow is built as a clear, step-by-step progression with explicit confirmation states, designed so a user always knows exactly where they are in a transaction
+- **Account dashboard** — a single at-a-glance view of balance and recent activity, prioritizing the two questions users actually have: "what do I have" and "what just happened"
+- **Transaction history** — a searchable, scannable record where each entry is readable at a glance instead of a bank-statement wall of text
+- **Responsive, mobile-first design** — the layout is designed for a phone first, since that's where payment products actually get used, and scales up to desktop
+- **Scalable architecture** — data modeled in Firestore so accounts, transactions, and activity can grow without restructuring
+- **Future-ready design** — the payment execution layer is deliberately isolated behind its own boundary, so a real payment gateway can be integrated later without touching the UI or data model
+
+## Technical Approach
+
+ChillPay is built with Next.js, React, and TypeScript for the frontend, Tailwind CSS for design-system consistency, Firebase Authentication for user identity, and Cloud Firestore for structured application data. The frontend leans on modern Next.js patterns — server components for data-backed views like the dashboard and transaction history, client components only where interactivity demands it (the payment flow's step transitions, form state).
+
+## Architecture
+
+The architecture is intentionally simple and honest about what it is today, not a claim of banking-level infrastructure:
+
+- A Next.js application handling routing, rendering, and the UI layer
+- Firebase Authentication for identity and session management
+- Firestore collections modeling accounts, transactions, and activity
+- Reusable UI components shared across the dashboard, transaction history, and payment-flow screens
+- Protected routes and authenticated views gating anything account-specific
+- Client-side state where interactivity requires it, with server components for everything else
+
+The payment workflow itself is modeled as its own state machine independent of any specific payment rail — the workflow, validation, and record-keeping are real, while actual payment execution is intentionally stubbed until a real gateway integration is warranted. That means a real payment provider can plug into an existing, tested workflow later instead of forcing a redesign.
+
+## Challenges
+
+- Designing a trust-focused financial UI that feels calm rather than clinical
+- Keeping payment-related UX simple without hiding the state a user actually needs to see
+- Modeling transaction-like data clearly in Firestore, where a transaction touches two sides of a record without a traditional relational database enforcing consistency
+- Planning around App Store distribution requirements ahead of time rather than as an afterthought
+- Keeping the system's boundaries clean so it's ready for a future payment gateway integration without a rebuild
+
+## Launch Constraint
+
+ChillPay is not yet available on the App Store. Publishing a financial/payment-related app on iOS generally requires an organization-level Apple Developer account rather than an individual one, and that organization-level account isn't in place yet. App Store distribution is pending organization-level developer account readiness — this is an account and distribution-readiness constraint, not a product or technical issue. The web application is fully functional and under active development in the meantime; the App Store submission is simply on hold until that account requirement is met.
+
+## Lessons Learned
+
+Building a payments product, even pre-launch, forces a level of discipline about states and edge cases that most side projects never demand — "it mostly works" isn't a meaningful state for a transaction. It's also been a useful exercise in restraint: the calm, minimal interface is only possible because of decisions about what *not* to show, and those subtractive decisions have been harder than the additive ones. Planning for App Store distribution requirements early — rather than discovering them at submission time — was its own lesson in treating platform/account readiness as part of the roadmap, not an afterthought.
+
+## Future Roadmap
+
+- Organization-level Apple Developer account readiness, to unblock App Store distribution
+- Payment gateway integration, if and when appropriate
+- Wallet and payment workflow expansion beyond the current send/request flow
+- Transaction analytics for spending insight once real transaction volume exists to summarize
+- A notification system for transaction state changes
+- Security hardening (rules audit, rate limiting) ahead of any public availability
+- Production deployment
+
+None of these exist yet — they're the direction ChillPay is headed as development continues.

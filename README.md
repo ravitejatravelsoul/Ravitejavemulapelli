@@ -1,7 +1,7 @@
 # Raviteja Vemulapelli — Portfolio
 
 A production personal portfolio and career site built with Next.js 16 (App
-Router) and React 19 — case studies for nine shipped products, an
+Router) and React 19 — ten product case studies, an
 interactive resume, a technical blog, and a content layer designed to
 outlive any single redesign.
 

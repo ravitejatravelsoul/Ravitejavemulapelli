@@ -41,7 +41,7 @@ export default async function ProjectsPage() {
         eager
         eyebrow="Work"
         title="Every product tells a different story"
-        description="Platform and AI work built at Charter Communications, alongside products I shipped on my own time — nine case studies covering the problem, the architecture, the trade-offs, and what shipped, not just a screenshot and a tech list."
+        description="Platform and AI work built at Charter Communications, alongside products I shipped on my own time — ten case studies covering the problem, the architecture, the trade-offs, and what shipped, not just a screenshot and a tech list."
       />
 
       <div className="mt-14">
