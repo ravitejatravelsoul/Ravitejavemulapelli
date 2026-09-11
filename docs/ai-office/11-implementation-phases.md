@@ -1460,14 +1460,163 @@ Definition of Done implicitly.
 > exists and is fully tested, so adding that settings surface later is
 > additive, not a redesign. No per-project warning threshold exists — every project's WARNING status is judged against
 > the single office-wide `warnAtPercent`; acceptable given the
-> single-threshold decision above. The two-`$23`-request concurrency
-> test proves race-safety within one Node process (the only kind
-> possible while `SimulatedAdapter` is the only provider and there is
-> exactly one standalone Runner process type) — true multi-process
-> concurrent authorization is inherently exercised the same way Phase
-> 5's dual-runner lease test was (two independent connections against
-> the same file), not literally two OS processes, matching that
-> established precedent.
+> single-threshold decision above.
+>
+> **This phase's original concurrency claim was wrong — corrected
+> below.** The paragraph above originally claimed the two-`$23`-request
+> concurrency test "proves race-safety within one Node process... not
+> literally two OS processes" and treated that as an acceptable
+> limitation. An independent review correctly identified that the
+> underlying `authorizeBudget()` implementation was *not* actually
+> atomic across independent connections at all — the read-check-reserve
+> sequence was three separate, unsynchronized statements, and the
+> original test only ever exercised one `DatabaseSync` connection
+> calling itself twice, which cannot fail regardless of whether the
+> implementation is correct. See the "Post-review correction" note
+> immediately below for the real fix and the genuine multi-connection
+> (including actual OS-scheduled worker threads) tests that now prove
+> it.
+>
+> **Post-review correction (same phase, before Phase 7 began)**: an
+> independent review of the actual implementation (not just this status
+> note) found three real budget-safety gaps, all fixed here.
+>
+> 1. **`authorizeBudget()` was not atomic across independent
+>    connections.** The original implementation read committed spend,
+>    compared it to the cap, and only *then* inserted a reservation — as
+>    three separate statements, each its own implicit auto-commit
+>    transaction. Two independent connections (the real Phase 5
+>    multi-runner architecture) could both read "$0 committed," both
+>    conclude a $23 request fits under a $30 cap, and both reserve —
+>    $46 committed against a $30 cap. **Fixed** by wrapping the entire
+>    read-check-reserve sequence in one `BEGIN IMMEDIATE` /
+>    `COMMIT`/`ROLLBACK` transaction. `BEGIN IMMEDIATE` acquires
+>    SQLite's write lock *before* any read inside the transaction runs
+>    (unlike a deferred `BEGIN`, which only upgrades to a write lock at
+>    the first write — after reads may have already taken a
+>    now-stale snapshot), so a second connection attempting the same
+>    thing genuinely blocks until the first commits or rolls back, then
+>    reads the now-current, correct total. This required a
+>    complementary fix: `db/client.ts`'s `openDatabase()` now sets
+>    `PRAGMA busy_timeout` (5s) — SQLite's own bounded busy-wait, not an
+>    application-level retry loop — so a blocked connection waits
+>    briefly rather than either failing instantly or hanging forever.
+>    `authorizeBudget()` catches the (rare, only-if-the-timeout-itself-
+>    expires) resulting `SQLITE_BUSY`/`SQLITE_LOCKED` error and returns a
+>    new, honest `TEMPORARILY_UNAVAILABLE` status rather than crashing
+>    the caller uncaught. **A second, genuine bug was found while
+>    building the test for this**: `busy_timeout` was originally set as
+>    the *third* pragma in `openDatabase()`, after `foreign_keys` and
+>    `journal_mode` — meaning a brand-new connection's own first two
+>    setup statements had no timeout protection yet, and could
+>    themselves throw `SQLITE_BUSY` under real contention (observed
+>    directly: a flaky worker-thread test failing on `PRAGMA foreign_keys
+>    = ON` itself, inside `openDatabase()`, before `authorizeBudget()`
+>    was ever reached). Fixed by setting `busy_timeout` *first*, before
+>    any other pragma.
+> 2. **A reconciled reservation's cost could temporarily disappear from
+>    committed budget.** The original design moved a reservation from
+>    `RESERVED` to `RECONCILED` (removing it from "reserved") as one
+>    statement, with recording the corresponding `ai_usage` row left as
+>    a separate, later step — a real gap existed between "no longer
+>    reserved" and "counted as actual spend." **Fixed** by
+>    `reconcileReservationWithUsage()` (`budget-service.ts`), which
+>    updates the reservation to `RECONCILED` *and* inserts the
+>    `ai_usage` row in the same `BEGIN IMMEDIATE` transaction as
+>    `authorizeBudget()` uses — there is no code path, and therefore no
+>    possible crash point, where a reservation is `RECONCILED` but its
+>    real cost isn't yet counted. **Source-of-truth split, stated
+>    explicitly**: a reservation counts toward committed spend only
+>    while `status = 'RESERVED'`; the instant it becomes `RECONCILED`,
+>    the `ai_usage` row this same transaction wrote counts instead — the
+>    old bare `reconcileReservation()`/`domain/budget.ts`'s
+>    `reconcileBudgetReservation()` primitive is no longer exposed from
+>    `budget-service.ts`'s public surface, precisely so a future Phase 7
+>    integration can't accidentally call the incomplete half of this
+>    operation. Idempotent, same as before (`applied: false` on a
+>    reservation that isn't `RESERVED`). If the actual cost pushes
+>    committed spend over the cap — already happened, cannot be blocked
+>    retroactively — it's recorded in full (never silently capped at the
+>    estimate), a `budget.overage_detected` event + audit entry are
+>    written, and every subsequent `authorizeBudget()` call for that
+>    office (even a $0 one) correctly sees the already-over-cap total
+>    and refuses, until the owner raises the cap.
+> 3. **No input validation on money.** `authorizeBudget()`,
+>    reconciliation, and cap updates all now validate through one
+>    function, `toCentsStrict()` (`domain/budget.ts`) — rejects
+>    `NaN`/`Infinity`/`-Infinity`/negative values and anything whose
+>    cent value would exceed a generous but finite ceiling
+>    (`MAX_SUPPORTED_CENTS`, $1,000,000,000.00), before any database work
+>    happens. `$0` is explicitly allowed (a legitimate free-tier call),
+>    documented as a deliberate decision rather than an oversight.
+>    Rounds to the nearest cent.
+>
+> **Schema**: no migration. All three fixes are transactional/service-layer;
+> `001-init.sql` and `002-budget-and-approval-scope.sql` remain
+> untouched, as instructed. `budget_reservations` already had everything
+> needed (`status`, `actualCostUsd`) — the fix was making the *order of
+> operations* atomic, not adding columns.
+>
+> **The Runner/AgentRunner → BudgetService contract for Phase 7**,
+> documented explicitly per this correction's request (still no
+> `ClaudeAdapter`, still no live provider — this is the shape a future
+> one must fit): (1) the provider adapter estimates cost
+> (`adapter.estimateCost()`, already part of the Phase 4
+> `AIProviderAdapter` interface); (2) `authorizeBudget()` atomically
+> checks and reserves that estimate — a caller never proceeds to (3)
+> without a `reservationId` from an `AUTHORIZED`/`WARNING` result; (3)
+> the provider call happens; (4a) on success, `reconcileReservationWithUsage()`
+> atomically reconciles the reservation to the real cost and records the
+> `ai_usage` row — one call, one transaction, never two separate steps;
+> (4b) on a provider error/timeout/refusal with no cost incurred,
+> `releaseReservation()` frees the hold without recording spend
+> (mirroring `AgentRunner`'s already-existing timeout-to-`FAILED`-result
+> pattern from the Phase 5 durability correction — a provider failure is
+> not a budget failure); (5) the next `authorizeBudget()` call for that
+> office/project naturally sees the updated committed total and
+> blocks if it's now over cap — no separate "check if blocked" step is
+> ever needed. `AgentRunner` remains the sole importer of any provider
+> adapter (`agents/__tests__/import-boundary.test.ts`, unchanged); a
+> future `ClaudeAdapter` calls through this exact sequence, unmodified.
+>
+> **Tests**: 15 new/rewritten in
+> `budget/__tests__/budget-service.test.ts` (33 total in that file, up
+> from 18) plus a new `budget/__tests__/authorize-worker.ts` (not itself
+> a test — a worker-thread entry point the concurrency tests spawn).
+> Covers: two independent connections racing the office cap (both the
+> brief's exact $0+two-$23 and $29+two-$2 scenarios), two independent
+> connections racing a project cap, a rolled-back transaction leaving no
+> reservation under real contention, a genuine two-worker-thread race
+> (actual OS-scheduled threads, not sequential same-connection calls —
+> confirmed flaky without the `busy_timeout`-ordering fix above, stable
+> across 12 consecutive runs after it), atomic reconciliation ($10→$8
+> stays $8, never $0 or $18), actual-exceeds-estimate accounting,
+> actual-pushes-over-cap recording + blocking + audit, idempotent
+> reconcile/release, transactional rollback safety, all seven invalid-money
+> cases from the brief, month-rollover isolation, and that an approved
+> cap increase takes effect on the very next atomic check. 251 total AI
+> Office tests, all green, stable across repeated runs (12x on the new
+> worker-thread test specifically, 3x on the full suite).
+>
+> **Approval/simulated-vs-LIVE regression**: unchanged and reverified —
+> exact-scope enforcement, task-scoped/project-wide approvals, rejection,
+> and the budget-increase-approval flow (now proven to take effect
+> atomically on the next check) all still pass; simulated usage remains
+> fully excluded from every LIVE budget calculation.
+>
+> **Known issues / accepted limitations (this correction)**: `TEMPORARILY_UNAVAILABLE`
+> is a real, reachable status (if `busy_timeout` itself is exceeded) but
+> has no dedicated test forcing that exact outcome — forcing a
+> transaction to remain open for longer than 5 real seconds inside a
+> fast test suite was judged not worth the added complexity/runtime
+> versus the value already delivered by the busy-error-handling code
+> path being exercised indirectly (every blocked-then-succeeds
+> concurrency test *does* exercise the busy-wait, just not its
+> exhaustion). The `overCap` detection re-derives committed totals with
+> a fresh query inside the same transaction rather than reusing
+> `authorizeBudget()`'s math — a small duplication, kept because sharing
+> logic between the two functions would have coupled reconciliation to
+> authorization's exact internal shape for a handful of lines.
 
 - **Objective**: Wire in every owner-facing control:
   Open/Close Office, Pause/Resume Project, budget caps/warnings, and the

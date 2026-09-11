@@ -25,12 +25,36 @@ import { seedAll } from "./seed.ts";
  * needing to be async.
  */
 
+/**
+ * How long a connection waits for a write lock held by another
+ * connection (a different process, worker thread, or Server Action
+ * call) before giving up — SQLite's own bounded busy-wait, not an
+ * application-level retry loop. 5s comfortably outlasts any real
+ * transaction this codebase runs (every one is a handful of
+ * synchronous statements, sub-millisecond in practice) while still
+ * failing loudly, not hanging indefinitely, if a connection is ever
+ * genuinely stuck. See `lib/ai-office/budget/budget-service.ts`'s
+ * `authorizeBudget()` for the primary reason this matters — an atomic
+ * `BEGIN IMMEDIATE` transaction only provides real cross-connection
+ * safety if a losing connection waits for the winner instead of either
+ * failing immediately or (worse) proceeding with a stale read.
+ */
+const BUSY_TIMEOUT_MS = 5000;
+
 /** Opens a connection and applies pragmas — no migrations, no seeding. Tests use this directly against an isolated temp path; see lib/ai-office/db/test-helpers.ts. */
 export function openDatabase(path: string): DatabaseSync {
   if (path !== ":memory:") {
     mkdirSync(dirname(path), { recursive: true });
   }
   const db = new DatabaseSync(path);
+  // busy_timeout is set *first*, deliberately — a brand-new connection
+  // has no timeout configured yet, so if even this connection's own
+  // setup pragmas race another connection's transaction (observed in
+  // practice: `PRAGMA foreign_keys = ON` hitting SQLITE_BUSY under
+  // genuine multi-connection contention in
+  // `budget/__tests__/budget-service.test.ts`'s worker-thread test),
+  // they need the same protection every later statement gets.
+  db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("PRAGMA journal_mode = WAL");
   return db;

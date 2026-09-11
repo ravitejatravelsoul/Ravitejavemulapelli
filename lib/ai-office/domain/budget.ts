@@ -10,6 +10,54 @@ import { randomUUID } from "node:crypto";
  * is for reading it back and for future per-project budget rows.
  */
 
+// ---- money handling ----------------------------------------------------
+
+/**
+ * A generous but finite ceiling on any single monetary amount this
+ * system will accept — $1,000,000,000.00. Nothing this system does
+ * (a simulated run, a future LIVE provider call, an owner-approved cap)
+ * is remotely close to this; it exists purely to catch a malformed
+ * input (a units bug — cents passed where dollars were expected, a
+ * corrupted/absurd value) rather than silently accepting it.
+ */
+export const MAX_SUPPORTED_CENTS = 100_000_000_000;
+
+export class InvalidMoneyError extends Error {}
+
+/**
+ * Converts a USD amount to integer cents, rejecting anything that isn't
+ * a small, sane, non-negative, finite number — the one place every
+ * money-accepting entry point (`authorizeBudget()`, reservation
+ * reconciliation, budget cap updates) validates its input, so there is
+ * exactly one rule to get right, not several ad-hoc checks.
+ *
+ * Rejects: `NaN`, `Infinity`/`-Infinity`, negative values, and anything
+ * whose cent value would exceed `MAX_SUPPORTED_CENTS` or fall outside
+ * `Number.isSafeInteger` once converted. **`0` is explicitly allowed**
+ * — a $0 estimate/actual cost is a legitimate value (e.g. a free-tier
+ * call), not an error. Rounds to the nearest cent
+ * (`Math.round(usd * 100)`, e.g. `$0.005` rounds to `$0.01`) —
+ * documented here since it's the one rounding rule the whole budget
+ * system relies on.
+ */
+export function toCentsStrict(usd: number, fieldName = "amount"): number {
+  if (typeof usd !== "number" || Number.isNaN(usd) || !Number.isFinite(usd)) {
+    throw new InvalidMoneyError(`${fieldName} must be a finite number, got ${usd}.`);
+  }
+  if (usd < 0) {
+    throw new InvalidMoneyError(`${fieldName} must not be negative, got ${usd}.`);
+  }
+  const cents = Math.round(usd * 100);
+  if (!Number.isSafeInteger(cents) || cents > MAX_SUPPORTED_CENTS) {
+    throw new InvalidMoneyError(`${fieldName} is outside the supported range, got ${usd}.`);
+  }
+  return cents;
+}
+
+export function centsToUsd(cents: number): number {
+  return cents / 100;
+}
+
 export type BudgetScope = "office" | "project";
 
 export interface BudgetRecordRow {
@@ -198,6 +246,16 @@ export function getOrCreateOfficeBudgetRecord(db: DatabaseSync, periodStart: num
  * `getOrCreateOfficeBudgetRecord` call will pick up automatically.
  */
 export function updateOfficeBudgetCap(db: DatabaseSync, periodStart: number, input: { capUsd?: number; warnAtPercent?: number }): BudgetRecordRow {
+  // Validated the same way any other money value is — a cap is exactly
+  // as capable of being NaN/negative/absurd as an estimate is if it
+  // ever comes from unchecked input.
+  if (input.capUsd !== undefined) toCentsStrict(input.capUsd, "capUsd");
+  if (input.warnAtPercent !== undefined) {
+    if (!Number.isInteger(input.warnAtPercent) || input.warnAtPercent < 0 || input.warnAtPercent > 100) {
+      throw new InvalidMoneyError(`warnAtPercent must be an integer between 0 and 100, got ${input.warnAtPercent}.`);
+    }
+  }
+
   const record = getOrCreateOfficeBudgetRecord(db, periodStart);
   db.prepare("UPDATE budget_records SET capUsd = ?, warnAtPercent = ?, updatedAt = ? WHERE id = ?").run(
     input.capUsd ?? record.capUsd,
