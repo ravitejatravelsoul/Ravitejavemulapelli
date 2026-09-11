@@ -271,6 +271,73 @@ describe("budget gate (SIMULATED always authorized, LIVE refused — no adapter 
   });
 });
 
+describe("execution timeout — a hung provider call cannot stall the office forever", () => {
+  /** Never resolves — the standard shape of a hung/misbehaving provider call. */
+  const hangingAdapter = {
+    name: "simulated",
+    runAgentTask(): Promise<import("../../providers/types.ts").AgentTaskResult> {
+      return new Promise(() => {});
+    },
+    estimateCost() {
+      return { estimatedInputTokens: 0, estimatedOutputTokens: 0, estimatedCostUsd: 0 };
+    },
+  };
+
+  test("a hanging adapter call is abandoned at the configured timeout and treated as a retryable failure", async () => {
+    const t = createTestDb();
+    const { project } = setupProject(t);
+    const task = createTask(t.db, { projectId: project.id, roleId: "solution-architect", title: "x" });
+
+    const result = await executeTask(t.db, task.id, { provider: hangingAdapter, timeoutMs: 20 });
+
+    assert.equal(result.outcome, "retried");
+    assert.equal(result.task.status, "PENDING");
+    assert.match(result.reason ?? "", /timed out/i);
+
+    // No dangling RUNNING agent run — the timeout is treated as a
+    // normal terminal failure, going through the exact same
+    // transaction as any other failed attempt.
+    const attempts = listTaskAttempts(t.db, task.id);
+    assert.equal(attempts.length, 1);
+    assert.equal(attempts[0].status, "FAILED");
+    const agentRun = getAgentRun(t.db, attempts[0].agentRunId!);
+    assert.equal(agentRun?.status, "FAILED");
+
+    t.close();
+  });
+
+  test("repeated timeouts exhaust the retry ceiling and escalate, exactly like any other repeated failure", async () => {
+    const t = createTestDb();
+    const { project } = setupProject(t);
+    lowerMaxRetries(t, "solution-architect", 1);
+    const task = createTask(t.db, { projectId: project.id, roleId: "solution-architect", title: "x" });
+
+    const first = await executeTask(t.db, task.id, { provider: hangingAdapter, timeoutMs: 20 });
+    assert.equal(first.outcome, "retried");
+
+    const second = await executeTask(t.db, task.id, { provider: hangingAdapter, timeoutMs: 20 });
+    assert.equal(second.outcome, "escalated");
+    assert.equal(second.task.status, "BLOCKED");
+    assert.equal(getProject(t.db, project.id)?.status, "BLOCKED");
+
+    t.close();
+  });
+
+  test("$0 usage is still recorded for a timed-out attempt — no cost for work that never returned", async () => {
+    const t = createTestDb();
+    const { project } = setupProject(t);
+    const task = createTask(t.db, { projectId: project.id, roleId: "solution-architect", title: "x" });
+
+    await executeTask(t.db, task.id, { provider: hangingAdapter, timeoutMs: 20 });
+
+    const usage = listAiUsageForProject(t.db, project.id);
+    assert.equal(usage.length, 1);
+    assert.equal(usage[0].costUsd, 0);
+
+    t.close();
+  });
+});
+
 describe("context scoping", () => {
   test("QA's context includes requirements + code artifacts but not architecture (not in qa-agent's allowedInputs)", async () => {
     const t = createTestDb();

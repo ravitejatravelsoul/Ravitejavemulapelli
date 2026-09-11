@@ -100,6 +100,35 @@ export function createTaskWithDependencies(
   return { task: getTask(db, taskId) as unknown as TaskRow, dependencies: listTaskDependencies(db, taskId) };
 }
 
+/**
+ * Low-level, non-transactional primitives — no BEGIN/COMMIT of their
+ * own, unlike every other write function in this file. SQLite doesn't
+ * support nested transactions, so a caller that needs to insert many
+ * tasks/edges as *one* atomic plan (the Orchestrator's `planProject()`,
+ * see lib/ai-office/orchestrator/orchestrator.ts) wraps its own
+ * `BEGIN`/`COMMIT` around calls to these instead of the transactional
+ * `createTask`/`createTaskWithDependencies` above. Both take a
+ * caller-supplied `id` so a whole plan's task IDs can be computed and
+ * validated (see lib/ai-office/orchestrator/graph.ts) before any row is
+ * written.
+ */
+export function insertTaskRow(db: DatabaseSync, input: { id: string; projectId: string; roleId: string; title: string }): void {
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO tasks (id, projectId, roleId, title, status, attemptCount, leaseOwnerId, leaseExpiresAt, createdAt, updatedAt)
+     VALUES (?, ?, ?, ?, 'PENDING', 0, NULL, NULL, ?, ?)`,
+  ).run(input.id, input.projectId, input.roleId, input.title, now, now);
+}
+
+export function insertTaskDependencyRow(db: DatabaseSync, input: { id: string; taskId: string; dependsOnTaskId: string }): void {
+  db.prepare("INSERT INTO task_dependencies (id, taskId, dependsOnTaskId, createdAt) VALUES (?, ?, ?, ?)").run(
+    input.id,
+    input.taskId,
+    input.dependsOnTaskId,
+    Date.now(),
+  );
+}
+
 export function getTask(db: DatabaseSync, id: string): TaskRow | undefined {
   return db.prepare("SELECT * FROM tasks WHERE id = ?").get(id) as unknown as TaskRow | undefined;
 }

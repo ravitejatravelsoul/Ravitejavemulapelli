@@ -59,17 +59,29 @@ considered, dependency impact, Windows compatibility, cost — in
 status note. See [06-data-model.md](./06-data-model.md) §1 for the
 original two-option framing this resolves.
 
-## 3. Durable Runner implementation shape: in-process singleton vs. standalone companion process
+## 3. Durable Runner implementation shape: in-process singleton vs. standalone companion process — **RESOLVED (Phase 5): standalone companion script**
 
-[03-system-architecture.md](./03-system-architecture.md) §9.7 lays out
-both options (Option A: `instrumentation.ts`-based in-process singleton;
-Option B: a standalone `npm run office:runner` script) with a lean
-toward Option A for single-command developer experience, but leaves the
-final call to whoever implements Phase 5 — largely because Option A's
-viability depends on verifying `instrumentation.ts`'s exact current
-behavior against the installed Next.js version's own docs (per
-`AGENTS.md`) at implementation time, not on anything decidable from this
-package alone.
+Implemented as `lib/ai-office/runner/start.ts`, run via `npm run
+ai-office:runner` (Option B from
+[03-system-architecture.md](./03-system-architecture.md) §9.7) — a
+single, plain `node` process, not an `instrumentation.ts` singleton.
+Decided against Option A specifically because of `next dev`'s
+hot-reload behavior: it restarts the Next.js server module graph on
+every server-file save, which would either kill and silently respawn an
+in-process singleton mid-cycle or, worse, risk two concurrent poll
+loops existing briefly across a reload — directly conflicting with this
+phase's "no two runners execute the same task simultaneously"
+requirement. A separate process has no such lifecycle coupling: it
+starts once, keeps running independent of `next dev`/`next build`/`next
+start` restarts, and shares the same `.data/office.db` file (via the
+identical `getAppDatabase()` the Next.js app itself already uses) as
+however many times the dev server reloads alongside it. This also
+directly satisfies "closing `/office` must not stop the workflow" by
+construction — the browser and the runner process are unrelated
+processes, not merely decoupled by convention. Full writeup — exact
+per-cycle behavior, lease/crash-recovery semantics, shutdown policy —
+in [11-implementation-phases.md](./11-implementation-phases.md)'s Phase
+5 status note.
 
 ## 4. Test runner choice — **RESOLVED (Phase 3): stayed with `node:test`, did not add Vitest**
 

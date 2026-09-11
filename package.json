@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test:ai-office": "node --conditions=react-server --test \"lib/ai-office/**/*.test.ts\""
+    "test:ai-office": "node --conditions=react-server --test \"lib/ai-office/**/*.test.ts\"",
+    "ai-office:runner": "node --conditions=react-server lib/ai-office/runner/start.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.4.0",

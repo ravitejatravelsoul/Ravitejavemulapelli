@@ -631,6 +631,332 @@ Definition of Done implicitly.
 
 ## Phase 5 — Orchestrator and Durable Local Execution Runner
 
+> **Implemented** on `feature/teja-ai-office`. Idea submission now
+> produces a full, validated task plan automatically
+> (`lib/ai-office/orchestrator/**`), and a durable, browser-independent
+> local process (`lib/ai-office/runner/**`) advances that plan to
+> completion — including the full QA-failure/remediation path from
+> Phase 4 — without any test or human code ever naming which task runs
+> next. Still $0, still `SimulatedAdapter`-only, still no deployment.
+>
+> **Scope deviation from the original planning bullets below, made
+> explicitly per this phase's actual authorization, not silently**: the
+> "Start New Project" dashboard flow and the `app/office/projects/**`
+> list/new/detail pages listed under "Expected files affected" below
+> were **not** built this phase. The authorization that actually scoped
+> this phase's work explicitly excluded dashboard/UI polishing ("do not
+> build a full operational dashboard... do not spend the phase
+> polishing UI"), narrowing Phase 5 to the Orchestrator + Runner engine
+> only. The existing Phase 2 authenticated placeholder is unchanged.
+> Wiring a real "submit an idea" UI onto `planProject()` remains
+> straightforward future work — the function itself is already a plain,
+> synchronous, fully-tested entry point a Server Action can call
+> directly.
+>
+> **Orchestrator (planning)** (`lib/ai-office/orchestrator/`):
+> `planProject(db, projectId)` is the single planning entry point —
+> requires the project be `DRAFT` with an idea attached, and is fully
+> transactional (one `BEGIN`/`COMMIT` around every task/dependency
+> insert, the planning decision, and either the `IN_PROGRESS` transition
+> or the approval-required `BLOCKED` transition), so a planning failure
+> midway — an exception from `validateTaskGraph`, or any DB error —
+> leaves the project exactly as it was, never a half-written task set.
+> Three collaborating pieces:
+> - `role-selection.ts` — a deterministic, keyword-based classifier
+>   (`selectRoles()`), explicitly **not** AI: the same idea text always
+>   selects the same roles. Always includes `product-owner`,
+>   `solution-architect`, `backend-developer`, `qa-agent`,
+>   `code-reviewer`, `release-agent`; conditionally adds
+>   `ui-ux-agent`+`frontend-developer` on a UI/screen signal,
+>   `security-reviewer` on an auth/payment/PII/network signal, and
+>   `research-agent` on an explicit research signal *or* when the idea
+>   text is under 8 words (too little to plan confidently without a
+>   feasibility pass). A small, unambiguous backend-only idea correctly
+>   skips `ui-ux-agent`/`frontend-developer` — proving roles aren't woken
+>   for every idea, per this phase's explicit requirement.
+> - `graph.ts` — pure, DB-free `validateTaskGraph()`: rejects duplicate
+>   task ids, self-dependencies, dependencies on ids absent from the
+>   plan, and any cycle (Kahn's algorithm — a node set that can't be
+>   fully topologically ordered contains a cycle). Called *before*
+>   `planProject()` opens its transaction — an invalid plan is refused
+>   before a single row is written, not rolled back after.
+> - `orchestrator.ts` — `buildTaskPlan()` turns a selected role set into
+>   dependency edges following
+>   [04-agent-architecture.md](./04-agent-architecture.md) §1's input
+>   columns (Product → [Research] → Architecture → [UI/UX] →
+>   [Frontend]/Backend → QA → [Security]/Code Review → Release), with
+>   every role's dependencies recomputed against whichever *other* roles
+>   are actually present in that specific plan — omitting an optional
+>   role never leaves a dangling reference. `requiresOwnerApproval()` is
+>   a synthetic, test-only signal (idea text matching "paid service" /
+>   "subscription" / etc.) that creates a `PENDING` `approvals` row and
+>   `BLOCKED`s the project instead of starting execution — proving the
+>   approval-gate mechanics without any real destructive/paid action.
+>
+> **Two low-level primitives were added to `lib/ai-office/domain/tasks.ts`**
+> (`insertTaskRow`, `insertTaskDependencyRow`) purely because SQLite has
+> no nested transactions — the Phase 3 `createTask`/
+> `createTaskWithDependencies` each open their own `BEGIN`/`COMMIT`, so
+> they can't be called from inside the Orchestrator's own transaction.
+> These two are intentionally non-transactional, single-INSERT
+> primitives that only the Orchestrator's own transaction wraps.
+>
+> **Eligibility — the one place task-execution readiness is decided**
+> (`lib/ai-office/runner/eligibility.ts`, `findEligibleTasks()`): a
+> `PENDING` task is eligible when its project is `IN_PROGRESS`, has no
+> `PENDING` approval blocking it, the task holds no unexpired lease, and
+> every dependency is `DONE` (checked in JS against a small per-project
+> graph, not a correlated SQL subquery — kept as readable code, per the
+> "implement this in one clear location" requirement). Two deliberate
+> non-checks, each documented in the file itself: retry ceilings aren't
+> re-checked here because `AgentRunner` already moves a
+> ceiling-exceeded task to `BLOCKED` (not `PENDING`) at failure time, so
+> it's naturally excluded; a `LIVE`-mode project's task is **not**
+> filtered out here — it's left structurally eligible so the Runner
+> claims it and lets `AgentRunner`'s existing budget gate refuse it with
+> a proper event, rather than this function silently hiding LIVE work
+> (the brief's explicit "do not silently fall back to SIMULATED").
+>
+> **Durable Local Runner** (`lib/ai-office/runner/runner.ts`):
+> `runOneCycle(db, runnerId, options?)` is the entire mechanism — one
+> bounded claim/execution unit, genuinely `async` (it `await`s
+> `AgentRunner.executeTask()` directly rather than assuming anything
+> about how a provider adapter settles internally, which would be a
+> fragile assumption to bake in just because `SimulatedAdapter` happens
+> not to use a real timer today). Per cycle, in order: (1) refuse if the
+> Office isn't `OPEN`; (2) sweep for crash-interrupted work
+> (`findStaleLeasedTasks` — any `IN_PROGRESS` task holding an expired
+> lease is restored to `PENDING`, `attemptCount` left untouched since it
+> was already incremented when that interrupted attempt began, and a
+> `task.recovered_after_crash` event is recorded; a stale lease on an
+> already-terminal task is cleared silently, not reported as a
+> recovery) — if anything was recovered, that recovery *is* this cycle's
+> unit of work, new execution waits for the next cycle; (3) find
+> eligible tasks and atomically claim the oldest one via the Phase 3
+> `claimTask()` CAS (`UPDATE ... WHERE status='PENDING' AND (lease NULL
+> OR expired)`) — losing the race to another runner connection is not an
+> error, just nothing to do this cycle; (4) refuse outright (never
+> silently downgrade) a claimed `LIVE`-mode task, releasing its lease and
+> `BLOCK`ing the project with a `project.live_mode_refused` event; (5)
+> otherwise execute through `AgentRunner.executeTask()` and unconditionally
+> release the lease afterward in a `finally`, regardless of outcome — a
+> retried task must be immediately eligible again next cycle, not stuck
+> waiting for its lease to expire naturally. Returns a structured
+> `{ kind, detail? }` outcome — `executed | idle | office-closed |
+> no-eligible-work | live-mode-refused | recovered | error` — deterministic
+> and side-effect-free to interpret. `startRunLoop(db, options)` is a
+> thin `setTimeout`-based wrapper repeatedly calling `runOneCycle()` at a
+> configurable interval (default 5s; tests inject a short one) with a
+> synchronous `stop()` handle; all real logic stays in `runOneCycle()`,
+> the loop has none of its own.
+>
+> **Startup strategy — standalone companion script, not an
+> `instrumentation.ts` singleton** (`lib/ai-office/runner/start.ts`, run
+> via `npm run ai-office:runner`): decided in the user's favor of the
+> stated concern going in. `next dev`'s hot-reload restarts the Next.js
+> server module graph on every server-file save; an in-process singleton
+> guarded only by a module-level variable would either be killed and
+> silently respawned mid-cycle on every save, or — worse, since Next's
+> hot-reload doesn't always tear down old module instances cleanly —
+> risk two concurrent poll loops existing briefly across a reload,
+> which is exactly the failure mode the "no two runners execute the same
+> task simultaneously" requirement rules out. A separate `node` process
+> has no such lifecycle coupling: it starts once, runs until explicitly
+> stopped, and talks to the same `.data/office.db` file via the
+> identical `getAppDatabase()` the Next.js app itself lazily opens (same
+> migrate-then-seed-on-first-access path, so there's no separate manual
+> init step). This also directly satisfies "closing `/office` must not
+> stop the workflow" — the browser and the runner process have no
+> relationship to each other at all, by construction, not by convention.
+> `start.ts` generates a per-process `runnerId` (`runner-<pid>-<random>`),
+> reads `AI_OFFICE_RUNNER_POLL_INTERVAL_MS` for interval override, logs
+> every non-idle/non-no-eligible-work outcome (idle polling stays quiet —
+> no spam), and on `SIGINT`/`SIGTERM` calls `stop()` and lets any
+> in-flight cycle finish naturally rather than force-exiting mid-transaction
+> — safe either way, since every terminal DB transition
+> `AgentRunner` makes is already wrapped in its own SQL transaction and
+> the crash-recovery sweep exists precisely to reclaim an even harder
+> kill (`SIGKILL`, power loss) on the next startup. This resolves the
+> corresponding open question in
+> [14-open-questions.md](./14-open-questions.md).
+>
+> **A genuine atomicity gap, found and fixed while reviewing
+> `AgentRunner` for this phase** (not a regression introduced here —
+> latent since Phase 4, made newly dangerous once execution runs
+> unattended in the background): `finishSuccess()` and `finishFailure()`
+> each issued several separate, non-transactional SQL statements for
+> what is logically one terminal transition. A crash between two of
+> those statements could leave a torn state — e.g. an artifact already
+> written but the task still `IN_PROGRESS` — which the new
+> crash-recovery sweep would then re-execute, producing a *duplicate*
+> artifact for the same attempt. Fixed by wrapping each function's
+> entire body in `BEGIN`/`COMMIT`/`ROLLBACK`; verified by the crash-recovery
+> test that recovers an interrupted attempt and confirms the
+> eventual successful re-execution produces exactly one artifact, not
+> two.
+>
+> **Execution timeout** (`lib/ai-office/agents/agent-runner.ts`):
+> `callAdapterWithTimeout()` races the adapter call against a `setTimeout`
+> (`Promise.race`'s standard shape — a Promise cannot be forcibly
+> cancelled, only stopped-waiting-for, which is safe here since neither
+> `SimulatedAdapter` nor any code in this repo has a side effect tied to
+> the loser of that race actually completing). Default 5 minutes
+> (`DEFAULT_TASK_TIMEOUT_MS`, generous for a future live provider,
+> irrelevant to the always-instant `SimulatedAdapter`); a timeout
+> synthesizes a `FAILED` `AgentTaskResult` so it flows through the exact
+> same retry/escalation path as any other failure, with no separate
+> "timeout" code path to keep in sync. Proven at both the `AgentRunner`
+> layer directly and through the Runner (`RunOneCycleOptions.execution`
+> accepts a short `timeoutMs` and a test-only hanging adapter) with a
+> repeated-timeout escalation test, confirming a hung provider call
+> cannot stall the office forever and eventually escalates like any
+> other repeated failure.
+>
+> **Office Close/Open, Project Pause/Resume**: a `CLOSED` office refuses
+> every cycle immediately (`office-closed`), touching no task state at
+> all; reopening resumes eligible work on the very next cycle, with
+> nothing to explicitly "restart." A `PAUSED` project's tasks are simply
+> excluded from `findEligibleTasks()`'s `p.status = 'IN_PROGRESS'`
+> filter — no task is deleted, recreated, or otherwise touched; other
+> active projects are entirely unaffected; resuming (`IN_PROGRESS` again)
+> makes its tasks eligible again from exactly the state they were left
+> in.
+>
+> **Multiple projects**: `findEligibleTasks()` has no per-project
+> fairness logic — it orders candidates by `createdAt` across every
+> `IN_PROGRESS` project and the Runner claims the oldest eligible one,
+> per cycle, globally. This is deliberately simple, per the brief's "no
+> sophisticated fairness needed" — but it does mean an older project
+> that keeps failing and retrying (each retry returns it to `PENDING`
+> immediately, same `createdAt`) sorts ahead of a newer, healthy
+> project's tasks every single cycle until it exhausts its retry
+> ceiling. Verified this starvation is *bounded*, not indefinite: once
+> the failing project's task escalates (4 attempts, the seeded
+> `maxRetries: 3` default) its project moves to `BLOCKED`, which removes
+> it from `findEligibleTasks()`'s `IN_PROGRESS` filter entirely, and the
+> healthy project's tasks then proceed to completion — proven directly
+> by a test where a permanently-failing project's task is created first
+> (the worst ordering case) and a second, healthy project still reaches
+> `READY_FOR_REVIEW`.
+>
+> **Approval-required tasks**: an idea matching the synthetic
+> approval-required signal never has any of its tasks executed, no
+> matter how many cycles run — its project is `BLOCKED` at planning
+> time (before any task exists in `IN_PROGRESS` territory), which keeps
+> every one of its tasks out of `findEligibleTasks()` permanently until
+> the approval is explicitly decided (a future phase's job; this phase
+> only proves the block holds).
+>
+> **Readiness-gate strengthening**: `advanceProjectStatus()`'s
+> latest-test-result query was changed from a plain `SELECT ... FROM
+> test_results ORDER BY createdAt DESC LIMIT 1` to one `JOIN`ed against
+> `tasks` and scoped to `t.status = 'DONE'`. This is defense-in-depth,
+> not a bug fix — the existing `allDone` check (every task in the plan
+> must already be `DONE`) already made the old query safe in practice,
+> since a reopened review task's status reverts to non-`DONE` the moment
+> Phase 4's remediation fix invalidates it, which already blocked
+> `allDone` from passing on stale evidence. The join means this specific
+> query is now correct even read in isolation, without relying on the
+> `allDone` check upstream of it. Verified under full autonomous
+> execution (not just direct `AgentRunner` calls): an idea that makes QA
+> fail once reaches `READY_FOR_REVIEW` only after the developer fix
+> lands and QA reruns and passes — driven entirely by repeated
+> `runOneCycle()` calls, no manual task selection.
+>
+> **Remediation fix, proven again under the Runner**: the Phase 4
+> QA/Security/Code-Review remediation-routing fix (walking dependency
+> ancestry to the actual development task, invalidating stale downstream
+> reviews) is exercised end-to-end through `runOneCycle()` in the
+> autonomous acceptance tests, not only via direct `AgentRunner` calls —
+> confirming the fix holds when task selection is the Runner's decision,
+> not the test's.
+>
+> **A real bug found and fixed while writing tests for this phase**:
+> `role-selection.ts`'s keyword matching originally used plain
+> `text.includes(signal)`, which false-positives badly on short signals
+> — `"ui"` is a substring of `"build"`, and since nearly every idea in
+> this system's own test fixtures (and realistically, in real usage)
+> literally starts with "Build a...", a plain substring check would have
+> tagged almost every idea as UI/UX-relevant, defeating the explicit
+> "a small backend utility skips UI/UX and Frontend" requirement this
+> phase exists to satisfy. Caught by writing the "backend-only idea"
+> test before assuming it would pass, not by inspection. Fixed with
+> word-boundary regex matching (`\bsignal\b`, case-insensitive) instead
+> of substring `includes`.
+>
+> **Schema migration**: none required. Every table Phase 5 reads or
+> writes (`tasks`, `task_dependencies`, `projects`, `approvals`,
+> `project_decisions`, `messages_events`) already exists in the
+> immutable `001-init.sql`; no new columns or tables were needed.
+>
+> **Tests**: 61 new automated tests across 5 new files —
+> `orchestrator/__tests__/{graph,role-selection,orchestrator}.test.ts`
+> (26), `runner/__tests__/{eligibility,runner}.test.ts` (32), plus 3 new
+> execution-timeout tests added to the existing
+> `agents/__tests__/agent-runner.test.ts`. All 108 Phase 1–4 tests remain
+> green, unmodified except the deliberate `agent-runner.ts` atomicity/
+> timeout/readiness changes above — 169 total, `npm run test:ai-office`.
+> Covers (non-exhaustively): deterministic role selection including the
+> small-idea-skips-UI case; DAG cycle/missing-dependency/self-dependency
+> rejection; planning transactionality and idempotent-refusal on a
+> non-`DRAFT` project; every eligibility rule in isolation; Office
+> Close/Open; Project Pause/Resume including "paused doesn't block
+> another project"; a dual-connection claim race (exactly one execution,
+> the loser correctly reports no remaining work); crash recovery with
+> `attemptCount` preserved and no duplicate artifacts on re-execution; a
+> stale lease on an already-terminal task recovering silently;
+> timeout + repeated-timeout escalation, at both the `AgentRunner` and
+> Runner layers; `LIVE`-mode refusal with the project `BLOCKED` and the
+> task itself left untouched; graceful `stop()` halting polling
+> immediately; a full idea-only autonomous run reaching
+> `READY_FOR_REVIEW` via `runOneCycle()` alone; the QA-failure/
+> remediation path under autonomous execution; the approval-required
+> path never executing any task; the same autonomous idea run 3 times on
+> fresh databases producing an identical final shape; two-project
+> isolation with no cross-project artifact leakage; the bounded-starvation
+> behavior above; and a runner-restart-continuity test proving a second,
+> unrelated `runnerId` against the same DB picks up exactly where the
+> first left off with no in-memory state required (the same property a
+> real process restart relies on).
+>
+> **Browser independence**: every Runner/Orchestrator test in this phase
+> runs under plain `node --test` — no Next.js dev/prod server, no route
+> handler, no React import anywhere in `lib/ai-office/orchestrator/**` or
+> `lib/ai-office/runner/**`. `runOneCycle()`/`startRunLoop()` take a
+> `DatabaseSync` handle and nothing else; the standalone
+> `lib/ai-office/runner/start.ts` script (smoke-tested directly against
+> the real `.data/office.db`, output restored afterward) demonstrates the
+> same thing as an actual separate OS process, not just a test-harness
+> abstraction.
+>
+> **Deviations from the planning docs, recorded rather than silently
+> made**: the dashboard/UI scope narrowing (above, first paragraph); the
+> standalone-script startup strategy (above, resolves the corresponding
+> open question rather than leaving both options theoretically live);
+> `runOneCycle()`/`startRunLoop()` are genuinely `async` rather than a
+> synchronous-looking wrapper — an earlier draft of this file briefly
+> used a `Promise`-draining trick to keep the whole call chain
+> "synchronous," which was correctly flagged during review as a fragile
+> assumption about `SimulatedAdapter`'s internals rather than a real
+> guarantee, and was replaced with a plain `await` before any test was
+> written against it; the `role-selection.ts` substring-matching bug fix
+> (above); the `agent-runner.ts` atomicity gap fix (above, a proactive
+> fix within the explicitly authorized "if you discover a genuine
+> atomicity gap... fix it" scope, not a user-reported bug).
+>
+> **Known issues / accepted limitations**: the global (not
+> per-project-fair) eligibility ordering means a failing project can
+> delay — never indefinitely, per the bounded-starvation analysis above
+> — a healthy project's progress until its retry ceiling is exhausted;
+> acceptable per the brief's explicit "no sophisticated fairness needed."
+> `start.ts`'s `SIGINT`/`SIGTERM` handling is unit-reasoned (bounded
+> execution + transactional terminal writes + existing crash recovery)
+> and smoke-tested for startup/idle behavior, but genuinely
+> concurrent OS-level signal delivery to a `node`-under-`npm` child
+> process was not independently reproduced in this Windows/Git-Bash
+> development environment; the underlying `stop()` logic itself (not the
+> OS signal plumbing) is directly covered by an automated test.
+
 - **Objective**: Replace hand-triggered task creation and execution
   (used for Phase 4 testing) with the real Orchestrator (planning) and
   the Durable Local Execution Runner (dispatch) — idea in, full task
