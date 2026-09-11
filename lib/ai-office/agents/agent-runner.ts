@@ -76,7 +76,25 @@ function callAdapterWithTimeout(
 ): Promise<import("../providers/types.ts").AgentTaskResult> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new AdapterTimeoutError(`Execution timed out after ${timeoutMs}ms.`)), timeoutMs);
-    adapter.runAgentTask(input).then(
+
+    // A malformed/misbehaving adapter can throw *synchronously* —
+    // before ever returning a Promise — rather than rejecting one.
+    // `adapter.runAgentTask(input).then(...)` would never reach
+    // `.then()` in that case, leaving `timer` uncleared for its full
+    // duration (up to the real 5-minute default) even though the
+    // Promise below still settles correctly via the executor's
+    // implicit catch. Caught explicitly so a synchronous throw clears
+    // the timer exactly like an asynchronous rejection does.
+    let pending: Promise<import("../providers/types.ts").AgentTaskResult>;
+    try {
+      pending = adapter.runAgentTask(input);
+    } catch (syncError) {
+      clearTimeout(timer);
+      reject(syncError);
+      return;
+    }
+
+    pending.then(
       (result) => {
         clearTimeout(timer);
         resolve(result);
@@ -147,15 +165,24 @@ export async function executeTask(
       options.timeoutMs ?? DEFAULT_TASK_TIMEOUT_MS,
     );
   } catch (error) {
-    if (!(error instanceof AdapterTimeoutError)) throw error;
-    // Synthesize a FAILED result so the timeout flows through the exact
-    // same retry/escalation path as any other failure — no separate
-    // "timeout" code path to keep in sync.
+    // Every provider-side failure — a timeout, a thrown exception, a
+    // rejected promise, a malformed adapter — is a normal, expected
+    // *operational* failure, not a reason to let an exception escape
+    // executeTask(). All three collapse to the same synthesized FAILED
+    // result so they flow through the exact same retry/escalation path
+    // as a fixture-driven failure, with no separate "timeout" or
+    // "adapter threw" code path to keep in sync. This is the boundary
+    // that matters: nothing past this point in executeTask() may throw
+    // for a provider-caused reason — only a genuine internal/persistence
+    // error (below) may still propagate, and the Runner treats that
+    // differently (see runner.ts's crash-recovery note).
+    const timedOut = error instanceof AdapterTimeoutError;
+    const reason = error instanceof Error ? error.message : String(error);
     result = {
       status: "FAILED",
-      output: { summary: "", artifacts: [], decisions: [], testResults: [], events: [], recommendedNextActions: [], failure: { reason: error.message } },
+      output: { summary: "", artifacts: [], decisions: [], testResults: [], events: [], recommendedNextActions: [], failure: { reason } },
       usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
-      raw: { timedOut: true },
+      raw: { timedOut, threw: !timedOut },
     };
   }
 

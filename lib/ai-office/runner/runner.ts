@@ -2,9 +2,19 @@ import "server-only";
 import type { DatabaseSync } from "node:sqlite";
 import { getOfficeStatus } from "../domain/office.ts";
 import { getProject, updateProjectStatus } from "../domain/projects.ts";
-import { updateTaskStatus, releaseLease, claimTask, findStaleLeasedTasks, type TaskRow } from "../domain/tasks.ts";
+import {
+  updateTaskStatus,
+  releaseLease,
+  claimTask,
+  findStaleLeasedTasks,
+  listTaskAttempts,
+  updateTaskAttemptStatus,
+  getAgentRun,
+  updateAgentRunStatus,
+  type TaskRow,
+} from "../domain/tasks.ts";
 import { recordEvent } from "../domain/events.ts";
-import { executeTask, type ExecuteTaskResult, type ExecuteTaskOptions } from "../agents/agent-runner.ts";
+import { executeTask, type ExecuteTaskOptions } from "../agents/agent-runner.ts";
 import { findEligibleTasks, hasAnyPendingTask } from "./eligibility.ts";
 
 /**
@@ -50,10 +60,17 @@ export interface RunnerCycleOutcome {
  *    event — Phase 7's real provider work has nothing to change here,
  *    since AgentRunner's own budget gate already refuses LIVE mode at a
  *    lower layer too (belt-and-suspenders, not the only check).
- * 5. Otherwise, execute through AgentRunner and always release the
- *    lease afterward, regardless of outcome — a retried task must be
- *    immediately eligible again next cycle, not stuck waiting for its
- *    lease to expire naturally.
+ * 5. Otherwise, execute through AgentRunner and release the lease once
+ *    `executeTask()` returns — a retried task must be immediately
+ *    eligible again next cycle, not stuck waiting for its lease to
+ *    expire naturally. If `executeTask()` *throws* instead of
+ *    returning (a genuine internal/persistence error, never a
+ *    provider-side one — AgentRunner converts those to a normal FAILED
+ *    result internally), the lease is deliberately **not** released:
+ *    doing so would strand the task `IN_PROGRESS` with no lease, which
+ *    is invisible to both eligibility and the stale-lease
+ *    crash-recovery sweep below. Left alone, the lease simply expires
+ *    and that same sweep recovers it correctly.
  *
  * Genuinely `async` (not a sync function wearing a Promise) — it
  * `await`s `executeTask` directly rather than assuming anything about
@@ -128,14 +145,24 @@ export async function runOneCycle(
 
     const executionOptions = typeof options.execution === "function" ? options.execution(candidate) : options.execution;
 
-    let result: ExecuteTaskResult;
-    try {
-      result = await executeTask(db, candidate.id, executionOptions);
-    } finally {
-      // Always released — a task that comes back PENDING (retry) or
-      // BLOCKED (escalated) must never remain artificially leased.
-      releaseLease(db, candidate.id);
-    }
+    // Deliberately no try/finally around this await. AgentRunner
+    // already converts every provider-side failure — including a
+    // timeout, a thrown exception, or a rejected promise — into a
+    // normal FAILED result internally (see agent-runner.ts); it never
+    // throws for a provider-caused reason. If executeTask() throws
+    // here, it is therefore a genuine internal/persistence/programming
+    // error, and the task may be left IN_PROGRESS with a torn
+    // attempt/run state (exactly as if the process had crashed at this
+    // point). Releasing the lease in that case would strand the task:
+    // an IN_PROGRESS task with no lease is invisible to both
+    // findEligibleTasks() (requires PENDING) and the stale-lease
+    // crash-recovery sweep (requires a non-null, expired lease) — an
+    // unrecoverable orphan. Leaving the lease in place instead lets it
+    // expire naturally and be picked up by that same crash-recovery
+    // path, which already knows how to safely close out an interrupted
+    // TaskAttempt/AgentRun and return the task to PENDING.
+    const result = await executeTask(db, candidate.id, executionOptions);
+    releaseLease(db, candidate.id);
 
     recordEvent(db, {
       projectId: candidate.projectId,
@@ -153,34 +180,83 @@ export async function runOneCycle(
 /**
  * Startup / per-cycle crash recovery — docs/ai-office/03-system-architecture.md
  * §9.6. A task left `IN_PROGRESS` with an already-expired lease means
- * the process that held it died mid-attempt. Reset to `PENDING` so it's
- * eligible again; `attemptCount` is left exactly as it was (already
- * incremented when that interrupted attempt began), so the existing
- * `role.maxRetries` ceiling in AgentRunner still applies to
- * crash-interrupted attempts — recovery cannot become an unbounded
- * retry loop. No artifacts are touched: the interrupted attempt never
- * reached AgentRunner's terminal transaction (or that transaction
- * itself rolled back on crash), so there is nothing to duplicate.
+ * the process that held it died (or threw an internal error — see
+ * runOneCycle's execution step) mid-attempt. Recovery does two things,
+ * not one: it returns the task to `PENDING` (so it's eligible again),
+ * *and* it closes out whatever `TaskAttempt`/`AgentRun` that interrupted
+ * execution left `RUNNING`/`QUEUED` — otherwise those rows would stay
+ * `RUNNING` forever, producing false history (e.g. "Attempt 1 =
+ * RUNNING forever, Attempt 2 = SUCCEEDED"). Both are terminated into the
+ * existing `FAILED` status — already valid for both tables per
+ * `001-init.sql`, no schema change needed — never left `RUNNING`, and
+ * never silently treated as if they'd succeeded. `attemptCount` is left
+ * exactly as it was (already incremented when that interrupted attempt
+ * began), so the existing `role.maxRetries` ceiling in AgentRunner still
+ * applies to crash-interrupted attempts — recovery cannot become an
+ * unbounded retry loop. No artifacts are touched: the interrupted
+ * attempt never reached AgentRunner's terminal transaction (or that
+ * transaction itself rolled back on crash), so there is nothing to
+ * duplicate.
  */
 function recoverStaleLeases(db: DatabaseSync): string[] {
   const stale = findStaleLeasedTasks(db);
   const recoveredIds: string[] = [];
 
   for (const task of stale) {
-    releaseLease(db, task.id);
-    if (task.status === "IN_PROGRESS") {
+    if (task.status !== "IN_PROGRESS") {
+      // Leftover lease bookkeeping on an already-terminal/PENDING task
+      // — never an interrupted execution to restore, just clear it.
+      releaseLease(db, task.id);
+      continue;
+    }
+
+    // A genuine interrupted execution. One transaction: closing out the
+    // stale attempt/run, releasing the lease, returning the task to
+    // PENDING, and recording the recovery event all land together or
+    // not at all — a crash mid-recovery leaves the task exactly as it
+    // was (still leased, still IN_PROGRESS), safely retried by the next
+    // sweep rather than left half-recovered.
+    db.exec("BEGIN");
+    let interruptedAttemptId: string | null = null;
+    let interruptedAgentRunId: string | null = null;
+    try {
+      const attempts = listTaskAttempts(db, task.id);
+      const latestAttempt = attempts[attempts.length - 1];
+
+      if (latestAttempt && latestAttempt.status === "RUNNING") {
+        interruptedAttemptId = latestAttempt.id;
+        if (latestAttempt.agentRunId) {
+          const run = getAgentRun(db, latestAttempt.agentRunId);
+          if (run && (run.status === "RUNNING" || run.status === "QUEUED")) {
+            updateAgentRunStatus(db, run.id, "FAILED", Date.now());
+            interruptedAgentRunId = run.id;
+          }
+        }
+        updateTaskAttemptStatus(db, latestAttempt.id, "FAILED");
+      }
+
+      releaseLease(db, task.id);
       updateTaskStatus(db, task.id, "PENDING");
       recordEvent(db, {
         projectId: task.projectId,
         type: "task.recovered_after_crash",
-        payload: { taskId: task.id, attemptCount: task.attemptCount },
+        payload: {
+          taskId: task.id,
+          attemptCount: task.attemptCount,
+          interruptedAttemptId,
+          interruptedAgentRunId,
+          reason: "Lease expired while the task was IN_PROGRESS — the process that held it stopped responding before completing the attempt.",
+        },
         actor: "system",
       });
-      recoveredIds.push(task.id);
+
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
     }
-    // A stale lease on a task in any other status (DONE/BLOCKED/PENDING)
-    // is just leftover bookkeeping from a prior cycle — cleared above,
-    // nothing else to do; it was never "interrupted work" to restore.
+
+    recoveredIds.push(task.id);
   }
 
   return recoveredIds;

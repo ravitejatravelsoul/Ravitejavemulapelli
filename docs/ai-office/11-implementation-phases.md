@@ -956,6 +956,98 @@ Definition of Done implicitly.
 > process was not independently reproduced in this Windows/Git-Bash
 > development environment; the underlying `stop()` logic itself (not the
 > OS signal plumbing) is directly covered by an automated test.
+>
+> **Post-review correction (same phase, before Phase 6 began)**: an
+> independent review found two durability gaps in the above — both
+> fixed here, no redesign.
+>
+> 1. **Crash recovery left interrupted `TaskAttempt`/`AgentRun` rows
+>    `RUNNING` forever.** The original `recoverStaleLeases()` correctly
+>    returned an interrupted task from `IN_PROGRESS` to `PENDING` with
+>    `attemptCount` preserved, but never touched the `TaskAttempt`/
+>    `AgentRun` that interrupted execution had left `RUNNING`/`QUEUED` —
+>    producing false history (e.g. "Attempt 1 = RUNNING forever, Attempt
+>    2 = SUCCEEDED"). Fixed: recovery now finds the task's latest
+>    `TaskAttempt`, and if it's `RUNNING`, terminates it (and its
+>    `AgentRun`, if one exists and is `RUNNING`/`QUEUED`) into `FAILED`
+>    — an existing, already-valid status for both tables per
+>    `001-init.sql`; no schema migration needed, matching the review's
+>    own "prefer existing statuses" guidance. `finishedAt` is populated
+>    on the closed `AgentRun` via the existing `updateAgentRunStatus()`
+>    parameter. The whole per-task recovery (attempt/run closeout, lease
+>    release, task → `PENDING`, recovery event) is one transaction, for
+>    the same reason `finishSuccess`/`finishFailure` are: a crash
+>    mid-recovery must leave the task exactly as it was — still leased,
+>    still `IN_PROGRESS` — not half-recovered, so the next sweep simply
+>    retries it cleanly.
+> 2. **A non-timeout provider exception could strand a task
+>    `IN_PROGRESS` with no lease.** `executeTask()` already converted a
+>    *timeout* into a normal `FAILED` result, but any other adapter
+>    exception (a thrown error, a rejected promise, a malformed/misbehaving
+>    adapter) re-threw past that point — and the Runner's old
+>    `try { await executeTask(...) } finally { releaseLease(...) }`
+>    pattern released the lease unconditionally, including on that
+>    throw. An `IN_PROGRESS` task with a cleared lease is invisible to
+>    both `findEligibleTasks()` (requires `PENDING`) and the stale-lease
+>    sweep (requires a non-null, expired lease) — an unrecoverable
+>    orphan; a real durability bug, not a cosmetic one. Fixed with two
+>    complementary changes:
+>    - **Every provider-side failure is now unified in `executeTask()`**:
+>      the timeout catch block was widened to catch *any* rejection from
+>      `callAdapterWithTimeout()` — timeout, thrown exception, or
+>      rejected promise all synthesize the same `FAILED` result and flow
+>      through the existing retry/escalation pipeline identically. This
+>      also fixed a related bug found while testing it: a
+>      *synchronously*-throwing adapter (one that throws before ever
+>      returning a Promise) bypassed `callAdapterWithTimeout()`'s
+>      `.then()`-attached `clearTimeout()`, leaking the up-to-5-minute
+>      timeout timer — harmless to correctness but a real resource leak,
+>      caught by a test that hung on exactly this. Fixed by wrapping the
+>      synchronous call itself in `try/catch`.
+>    - **The Runner no longer releases the lease when `executeTask()`
+>      throws.** Since every provider-caused failure is now handled
+>      *inside* `executeTask()` (above) and returns normally, an
+>      exception escaping `executeTask()` is now, by construction, a
+>      genuine internal/persistence/programming error — and the fix is
+>      to *not* release the lease in that case, letting it expire
+>      naturally and be picked up by the same (now-fixed)
+>      crash-recovery sweep that handles a real process crash. This is
+>      the "retain the lease until stale recovery can repair the state"
+>      option, chosen over hand-rolling in-place repair logic inside the
+>      Runner's error path — one recovery mechanism, not two.
+>
+> **The invariant this establishes**: there is no code path by which a
+> committed state can have `task.status = IN_PROGRESS` and
+> `leaseOwnerId IS NULL` at the same time. Every transition into
+> `IN_PROGRESS` happens while the claiming runner still holds the lease;
+> the lease is released only on the three paths that also move the task
+> out of `IN_PROGRESS` in the same call (`succeeded` → `DONE`, `retried`
+> → `PENDING`, `escalated` → `BLOCKED`) or that never reached
+> `IN_PROGRESS` at all (`not-eligible`, `budget-refused`). Every other
+> path — a crash, an internal error, a timeout, a provider exception —
+> either never released the lease in the first place, or converts into
+> one of those same three terminal transitions. Proven directly by a
+> test that forces an internal persistence error, asserts the invariant
+> holds on the resulting committed state, then drives the existing
+> crash-recovery sweep to repair it.
+>
+> **New tests**: 7 — 4 in `agents/__tests__/agent-runner.test.ts`
+> (synchronously-throwing adapter, rejecting-promise adapter, repeated-exception
+> escalation, $0 usage on a thrown error), 3 in
+> `runner/__tests__/runner.test.ts` (a task interrupted before its
+> `AgentRun` was ever created still recovers; a throwing provider
+> through the Runner releases its lease normally, distinguishing it from
+> an internal error; the internal-error/lease-invariant test above). The
+> existing crash-recovery test was substantially extended (not just
+> appended to) to construct a fully realistic interrupted execution
+> (lease + `TaskAttempt` + `AgentRun`, not just a lease) and assert
+> directly on the original attempt/run records — not only the task —
+> including that a post-recovery retry creates attempt number 2, never
+> reuses or duplicates attempt number 1. 176 total AI Office tests, all
+> green.
+>
+> **Schema migration**: still none required — both `FAILED` statuses
+> used above already existed in `001-init.sql`.
 
 - **Objective**: Replace hand-triggered task creation and execution
   (used for Phase 4 testing) with the real Orchestrator (planning) and

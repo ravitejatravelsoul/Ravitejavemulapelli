@@ -3,7 +3,19 @@ import assert from "node:assert/strict";
 import { createTestDb, reopenTestDb } from "../../db/test-helpers.ts";
 import { getOwner } from "../../domain/users.ts";
 import { createProjectWithIdea, getProject, updateProjectStatus } from "../../domain/projects.ts";
-import { createTask, createTaskWithDependencies, getTask, claimTask, createTaskAttempt, updateTaskStatus, listTasksForProject } from "../../domain/tasks.ts";
+import {
+  createTask,
+  createTaskWithDependencies,
+  getTask,
+  claimTask,
+  createTaskAttempt,
+  updateTaskStatus,
+  listTasksForProject,
+  createAgentRunForAttempt,
+  updateAgentRunStatus,
+  listTaskAttempts,
+  getAgentRun,
+} from "../../domain/tasks.ts";
 import { setOfficeStatus } from "../../domain/office.ts";
 import { listArtifactsForProject } from "../../domain/project-outputs.ts";
 import { listEventsForProject } from "../../domain/events.ts";
@@ -105,19 +117,29 @@ describe("runOneCycle — basic outcomes", () => {
 });
 
 describe("crash recovery", () => {
-  test("an IN_PROGRESS task with an expired lease is restored to PENDING with attemptCount preserved, and a recovery event is recorded", async () => {
+  /**
+   * Puts a task into the exact state AgentRunner leaves it in mid-attempt
+   * — lease held, TaskAttempt RUNNING, AgentRun RUNNING — then simulates
+   * a crash (the lease is set already-expired) before either record
+   * could ever be closed out. Order matters: `claimTask` only succeeds
+   * against a PENDING task, mirroring the Runner's real claim-then-execute
+   * sequence, so the lease is set first and only then does everything
+   * else move to its "in flight" state.
+   */
+  function simulateInterruptedExecution(t: ReturnType<typeof createTestDb>, taskId: string, roleId: string) {
+    claimTask(t.db, { taskId, leaseOwnerId: "dead-runner", leaseDurationMs: -1000 });
+    const attempt = createTaskAttempt(t.db, taskId);
+    let agentRun = createAgentRunForAttempt(t.db, { taskAttemptId: attempt.id, roleId, provider: "simulated" });
+    agentRun = updateAgentRunStatus(t.db, agentRun.id, "RUNNING");
+    updateTaskStatus(t.db, taskId, "IN_PROGRESS");
+    return { attempt, agentRun };
+  }
+
+  test("an IN_PROGRESS task with an expired lease is restored to PENDING with attemptCount preserved, and the interrupted TaskAttempt/AgentRun are closed out, not left RUNNING", async () => {
     const t = createTestDb();
     const project = setupInProgressProject(t);
     const task = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "x" });
-
-    // Simulate the exact state AgentRunner leaves mid-attempt, then a
-    // crash before the lease could ever be released. Order matters:
-    // claimTask only succeeds against a PENDING task (mirroring the
-    // Runner's real claim-then-execute sequence), so the lease is set
-    // first, and only then does the task move to IN_PROGRESS.
-    claimTask(t.db, { taskId: task.id, leaseOwnerId: "dead-runner", leaseDurationMs: -1000 });
-    createTaskAttempt(t.db, task.id);
-    updateTaskStatus(t.db, task.id, "IN_PROGRESS");
+    const { attempt: interruptedAttempt, agentRun: interruptedRun } = simulateInterruptedExecution(t, task.id, "product-owner");
     assert.equal(getTask(t.db, task.id)?.attemptCount, 1);
 
     const outcome = await runOneCycle(t.db, "runner-2");
@@ -129,14 +151,73 @@ describe("crash recovery", () => {
     assert.equal(recovered.attemptCount, 1, "attemptCount must not reset or double-increment on recovery");
     assert.equal(recovered.leaseOwnerId, null);
 
-    const events = listEventsForProject(t.db, project.id);
-    assert.ok(events.some((e) => e.type === "task.recovered_after_crash"));
+    // The original interrupted records — inspected directly, not just
+    // the task — must be terminal, never left RUNNING, and never
+    // reported as having succeeded.
+    const closedAttempt = t.db.prepare("SELECT * FROM task_attempts WHERE id = ?").get(interruptedAttempt.id) as {
+      status: string;
+    };
+    assert.equal(closedAttempt.status, "FAILED", "the interrupted TaskAttempt must not stay RUNNING forever");
 
-    // A recovered task is genuinely re-executable on the very next cycle.
+    const closedRun = getAgentRun(t.db, interruptedRun.id)!;
+    assert.equal(closedRun.status, "FAILED", "the interrupted AgentRun must not stay RUNNING forever");
+    assert.ok(closedRun.finishedAt, "a recovered AgentRun must have finishedAt populated");
+
+    // No RUNNING attempt or RUNNING/QUEUED run survives recovery for
+    // this task at all — not just the one record checked above.
+    const allAttempts = listTaskAttempts(t.db, task.id);
+    assert.ok(!allAttempts.some((a) => a.status === "RUNNING"), "no RUNNING TaskAttempt may remain after recovery");
+
+    const events = listEventsForProject(t.db, project.id);
+    const recoveryEvent = events.find((e) => e.type === "task.recovered_after_crash");
+    assert.ok(recoveryEvent, "a recovery event must be recorded");
+    const payload = JSON.parse(recoveryEvent!.payload);
+    assert.equal(payload.interruptedAttemptId, interruptedAttempt.id);
+    assert.equal(payload.interruptedAgentRunId, interruptedRun.id);
+
+    // A recovered task is genuinely re-executable on the very next
+    // cycle, and that retry creates the *next* attempt number — never
+    // reuses or duplicates the interrupted one.
     const next = await runOneCycle(t.db, "runner-2", { execution: { scenario: "success" } });
     assert.equal(next.kind, "executed");
     assert.equal(getTask(t.db, task.id)?.status, "DONE");
+    assert.equal(getTask(t.db, task.id)?.attemptCount, 2);
+
+    const finalAttempts = listTaskAttempts(t.db, task.id);
+    assert.deepEqual(
+      finalAttempts.map((a) => ({ attemptNumber: a.attemptNumber, status: a.status })),
+      [
+        { attemptNumber: 1, status: "FAILED" },
+        { attemptNumber: 2, status: "SUCCEEDED" },
+      ],
+    );
+    assert.ok(
+      !listTaskAttempts(t.db, task.id).some((a) => a.status === "RUNNING"),
+      "no RUNNING TaskAttempt may remain after the retry either",
+    );
+
     assert.equal(listArtifactsForProject(t.db, project.id).length, 1, "recovery + re-execution must not duplicate the eventual successful artifact");
+
+    t.close();
+  });
+
+  test("a task interrupted before its AgentRun was ever created (createTaskAttempt succeeded, createAgentRunForAttempt did not run) still recovers cleanly", async () => {
+    const t = createTestDb();
+    const project = setupInProgressProject(t);
+    const task = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "x" });
+
+    // No agent_run at all — the interruption happened between
+    // createTaskAttempt and createAgentRunForAttempt.
+    claimTask(t.db, { taskId: task.id, leaseOwnerId: "dead-runner", leaseDurationMs: -1000 });
+    const attempt = createTaskAttempt(t.db, task.id);
+    updateTaskStatus(t.db, task.id, "IN_PROGRESS");
+
+    const outcome = await runOneCycle(t.db, "runner-2");
+    assert.equal(outcome.kind, "recovered");
+
+    const closedAttempt = t.db.prepare("SELECT * FROM task_attempts WHERE id = ?").get(attempt.id) as { status: string };
+    assert.equal(closedAttempt.status, "FAILED");
+    assert.equal(getTask(t.db, task.id)?.status, "PENDING");
 
     t.close();
   });
@@ -185,6 +266,113 @@ describe("execution timeout, through the Runner", () => {
     assert.equal(after.status, "PENDING");
     assert.equal(after.leaseOwnerId, null, "the lease must be released even though the attempt failed via timeout");
     assert.equal(project.id, after.projectId);
+
+    t.close();
+  });
+});
+
+describe("provider execution exceptions, through the Runner", () => {
+  const throwingAdapter = {
+    name: "simulated",
+    runAgentTask(): Promise<AgentTaskResult> {
+      throw new Error("simulated adapter crash");
+    },
+    estimateCost() {
+      return { estimatedInputTokens: 0, estimatedOutputTokens: 0, estimatedCostUsd: 0 };
+    },
+  };
+
+  test("a throwing provider is treated as a normal retryable failure — outcome 'executed'/'retried', and the lease IS released (this is not an internal error)", async () => {
+    const t = createTestDb();
+    const project = setupInProgressProject(t);
+    const task = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "x" });
+
+    const outcome = await runOneCycle(t.db, "runner-1", { execution: { provider: throwingAdapter } });
+    assert.equal(outcome.kind, "executed");
+    assert.equal(outcome.detail?.outcome, "retried");
+
+    const after = getTask(t.db, task.id)!;
+    assert.equal(after.status, "PENDING");
+    assert.equal(after.leaseOwnerId, null, "a provider-side failure is handled inside executeTask() and returns normally — the lease must still be released");
+
+    t.close();
+  });
+});
+
+describe("internal/persistence error — the IN_PROGRESS-with-no-lease invariant", () => {
+  /**
+   * A well-formed adapter (no throw, no rejection — a genuine provider
+   * success) that returns a structurally malformed result: `artifacts`
+   * is not an array. This is not a provider-side failure — the adapter
+   * did its job and returned SUCCEEDED — it's a bug surfacing during
+   * `AgentRunner`'s own persistence step (`finishSuccess`'s `for (const
+   * artifact of output.artifacts)`), simulating exactly the kind of
+   * internal/programming error the crash-recovery mechanism, not the
+   * retry/escalation pipeline, is responsible for.
+   */
+  const malformedResultAdapter = {
+    name: "simulated",
+    async runAgentTask(): Promise<AgentTaskResult> {
+      return {
+        status: "SUCCEEDED",
+        output: {
+          summary: "ok",
+          artifacts: null as unknown as [],
+          decisions: [],
+          testResults: [],
+          events: [],
+          recommendedNextActions: [],
+        },
+        usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+      };
+    },
+    estimateCost() {
+      return { estimatedInputTokens: 0, estimatedOutputTokens: 0, estimatedCostUsd: 0 };
+    },
+  };
+
+  test("an internal persistence error surfaces as 'error' and leaves the lease intact — never a committed IN_PROGRESS-with-no-lease state — and the next crash-recovery sweep repairs it", async () => {
+    const t = createTestDb();
+    const project = setupInProgressProject(t);
+    const task = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "x" });
+
+    const outcome = await runOneCycle(t.db, "runner-1", { execution: { provider: malformedResultAdapter } });
+    assert.equal(outcome.kind, "error", "an internal persistence error must surface as 'error', not be disguised as an agent failure");
+
+    const stuck = getTask(t.db, task.id)!;
+    assert.equal(stuck.status, "IN_PROGRESS");
+    // The invariant under test: there must never be a committed state
+    // where task.status = IN_PROGRESS and leaseOwnerId IS NULL.
+    assert.notEqual(stuck.leaseOwnerId, null, "the lease must be retained — releasing it would strand the task IN_PROGRESS with no lease, invisible to both eligibility and crash recovery");
+
+    // The underlying records are exactly what a real crash at this
+    // point would have left behind — RUNNING, not yet closed, since
+    // finishSuccess's own transaction rolled back before reaching its
+    // status-update statements.
+    const attempts = listTaskAttempts(t.db, task.id);
+    assert.equal(attempts.length, 1);
+    assert.equal(attempts[0].status, "RUNNING");
+    const run = getAgentRun(t.db, attempts[0].agentRunId!);
+    assert.equal(run?.status, "RUNNING");
+
+    // Simulate time passing until the still-held lease expires, then
+    // let the ordinary crash-recovery sweep repair the state — the same
+    // mechanism a real process restart relies on. (claimTask() only
+    // matches a PENDING task, so a direct field update is used here to
+    // age the existing lease, mirroring what wall-clock time alone
+    // would do.)
+    t.db.prepare("UPDATE tasks SET leaseExpiresAt = ? WHERE id = ?").run(Date.now() - 1000, task.id);
+
+    const recoveryOutcome = await runOneCycle(t.db, "runner-2");
+    assert.equal(recoveryOutcome.kind, "recovered");
+
+    const repaired = getTask(t.db, task.id)!;
+    assert.equal(repaired.status, "PENDING");
+    assert.equal(repaired.leaseOwnerId, null);
+    assert.ok(!listTaskAttempts(t.db, task.id).some((a) => a.status === "RUNNING"), "no RUNNING TaskAttempt may remain after recovery");
+    const closedRun = getAgentRun(t.db, run!.id)!;
+    assert.notEqual(closedRun.status, "RUNNING", "no RUNNING AgentRun may remain after recovery");
+    assert.notEqual(closedRun.status, "QUEUED");
 
     t.close();
   });

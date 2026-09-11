@@ -338,6 +338,92 @@ describe("execution timeout — a hung provider call cannot stall the office for
   });
 });
 
+describe("provider execution exceptions — converted to a controlled failure, never escape executeTask()", () => {
+  const throwingAdapter = {
+    name: "simulated",
+    runAgentTask(): Promise<import("../../providers/types.ts").AgentTaskResult> {
+      throw new Error("simulated adapter crash — synchronous throw");
+    },
+    estimateCost() {
+      return { estimatedInputTokens: 0, estimatedOutputTokens: 0, estimatedCostUsd: 0 };
+    },
+  };
+
+  const rejectingAdapter = {
+    name: "simulated",
+    runAgentTask(): Promise<import("../../providers/types.ts").AgentTaskResult> {
+      return Promise.reject(new Error("simulated network error — rejected promise"));
+    },
+    estimateCost() {
+      return { estimatedInputTokens: 0, estimatedOutputTokens: 0, estimatedCostUsd: 0 };
+    },
+  };
+
+  test("a synchronously-throwing adapter does not escape executeTask() — it is treated as a retryable failure, same as any other", async () => {
+    const t = createTestDb();
+    const { project } = setupProject(t);
+    const task = createTask(t.db, { projectId: project.id, roleId: "solution-architect", title: "x" });
+
+    const result = await executeTask(t.db, task.id, { provider: throwingAdapter });
+
+    assert.equal(result.outcome, "retried");
+    assert.equal(result.task.status, "PENDING");
+    assert.match(result.reason ?? "", /simulated adapter crash/);
+
+    const attempts = listTaskAttempts(t.db, task.id);
+    assert.equal(attempts.length, 1);
+    assert.equal(attempts[0].status, "FAILED", "no dangling RUNNING attempt from an adapter that threw");
+    const agentRun = getAgentRun(t.db, attempts[0].agentRunId!);
+    assert.equal(agentRun?.status, "FAILED");
+
+    t.close();
+  });
+
+  test("a rejecting-promise adapter (network/SDK-style error) is treated identically", async () => {
+    const t = createTestDb();
+    const { project } = setupProject(t);
+    const task = createTask(t.db, { projectId: project.id, roleId: "solution-architect", title: "x" });
+
+    const result = await executeTask(t.db, task.id, { provider: rejectingAdapter });
+
+    assert.equal(result.outcome, "retried");
+    assert.match(result.reason ?? "", /simulated network error/);
+
+    t.close();
+  });
+
+  test("repeated provider exceptions exhaust the retry ceiling and escalate, exactly like any other repeated failure", async () => {
+    const t = createTestDb();
+    const { project } = setupProject(t);
+    lowerMaxRetries(t, "solution-architect", 1);
+    const task = createTask(t.db, { projectId: project.id, roleId: "solution-architect", title: "x" });
+
+    const first = await executeTask(t.db, task.id, { provider: throwingAdapter });
+    assert.equal(first.outcome, "retried");
+
+    const second = await executeTask(t.db, task.id, { provider: throwingAdapter });
+    assert.equal(second.outcome, "escalated");
+    assert.equal(second.task.status, "BLOCKED");
+    assert.equal(getProject(t.db, project.id)?.status, "BLOCKED");
+
+    t.close();
+  });
+
+  test("$0 usage is still recorded when the provider throws — no cost for work that never returned a result", async () => {
+    const t = createTestDb();
+    const { project } = setupProject(t);
+    const task = createTask(t.db, { projectId: project.id, roleId: "solution-architect", title: "x" });
+
+    await executeTask(t.db, task.id, { provider: throwingAdapter });
+
+    const usage = listAiUsageForProject(t.db, project.id);
+    assert.equal(usage.length, 1);
+    assert.equal(usage[0].costUsd, 0);
+
+    t.close();
+  });
+});
+
 describe("context scoping", () => {
   test("QA's context includes requirements + code artifacts but not architecture (not in qa-agent's allowedInputs)", async () => {
     const t = createTestDb();
