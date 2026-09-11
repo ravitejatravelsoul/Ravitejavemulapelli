@@ -392,6 +392,145 @@ Definition of Done implicitly.
 
 ## Phase 4 — Simulated agent workflows
 
+> **Implemented** on `feature/teja-ai-office`. A deterministic, zero-cost
+> simulation layer proves the full idea → approval-readiness workflow
+> (including QA failure, retry, and escalation) without calling any AI
+> model. No orchestration intelligence, no Durable Runner, no live
+> provider — persistence-adjacent execution only, as scoped.
+>
+> **Schema migration**: none required. Migration `001-init.sql` (Phase
+> 3) was analyzed against every Phase 4 transition and found already
+> sufficient — treated as immutable, not touched. Two clarifications
+> were needed (not schema gaps, just resolving informal task-brief
+> phrasing against the literal approved enums):
+> - "PENDING → RUNNING → DONE" in the task brief maps to the schema's
+>   actual `tasks.status` values `PENDING → IN_PROGRESS → DONE` (there
+>   is no literal `RUNNING` value for `tasks.status` — that word
+>   describes `task_attempts.status`/`agent_runs.status`, which do have
+>   it).
+> - "FAILED → BLOCKED/ESCALATED" maps to `tasks.status = 'BLOCKED'` +
+>   `agent_runs.status = 'ESCALATED'` (both already in the Phase 3
+>   schema) + a `failures` row — **not** a new `approvals` row. None of
+>   `approvals.kind`'s ten values ([08-security-plan.md](./08-security-plan.md)
+>   §9) semantically fit "a task exhausted its retries," and
+>   [04-agent-architecture.md](./04-agent-architecture.md) §6 itself
+>   allows escalation to surface as either "a pending Approval **or** a
+>   flagged item on the dashboard" — the latter is what `tasks.status =
+>   BLOCKED` + an unresolved `failures` row already provides.
+>
+> **Provider interface**
+> (`lib/ai-office/providers/types.ts`): implements
+> [04-agent-architecture.md](./04-agent-architecture.md) §4's
+> `AIProviderAdapter`/`AgentTaskInput`/`CostEstimate` exactly, with one
+> deliberate, documented refinement — `AgentTaskResult.output` is a
+> single `StructuredAgentOutput` shape (summary, artifacts[],
+> decisions[], testResults[], events[], recommendedNextActions[],
+> optional failure) rather than the planning sketch's bare
+> `ArtifactPayload | TestResultPayload | DecisionPayload` union, which
+> couldn't represent a role producing more than one kind of output at
+> once (the Architect routinely needs to emit both an artifact *and* a
+> decision in the same run). Provider-neutral; a future `ClaudeAdapter`
+> (Phase 7+) implements the same interface unchanged.
+>
+> **`SimulatedAdapter`**
+> (`lib/ai-office/providers/simulated/`): the only provider in this
+> phase. `estimateCost()` always returns zero. Fixtures
+> (`fixtures.ts`) are keyed by `roleId` + an explicit `scenario` string
+> read from `TaskContext.scenario` — never random. Every one of the 11
+> approved roles has `success` and `failure` fixtures; the two developer
+> roles (frontend/backend) additionally have `retry-success` (visibly
+> different content — "applied a fix for the QA-reported issue" — not
+> just a different status, so the fix is evidenced in artifact content,
+> not only in attempt history). QA's `failure` fixture is modeled as
+> `AgentTaskResult.status: "FAILED"` even though the QA *agent itself*
+> didn't error — the task's Definition of Done (passing tests) wasn't
+> met, which is what "failed" means at this framework level; the fixture
+> still carries a real `testResults` entry (`status: "FAIL"`) alongside
+> the failure reason.
+>
+> **`AgentRunner`**
+> (`lib/ai-office/agents/agent-runner.ts`, `executeTask()`): loads task/
+> role/project, checks the budget gate, creates the `TaskAttempt`, builds
+> scoped context, creates the `AgentRun`, invokes the adapter, persists
+> `AIUsage` unconditionally, then on success persists artifacts/
+> decisions/test results/events, marks the attempt/run/task DONE,
+> resolves any failure previously recorded against this task, advances
+> project status (bookkeeping against the five fixed quality gates in
+> [05-orchestration-workflow.md](./05-orchestration-workflow.md) §5 —
+> not role-selection or planning), and refreshes project memory. On
+> failure it persists any partial test result, the failure record, and
+> the event, then either requeues (attempt count ≤ role.maxRetries) or
+> escalates. `executeTask()` refuses to run a task that isn't `PENDING`
+> ("not-eligible") — the concrete guard against ever re-running a
+> terminal or already-claimed task, since Phase 4 has no dispatch loop
+> to accidentally call it twice. `lib/ai-office/agents/budget-gate.ts`'s
+> `authorizeBudget()` is the preserved Phase 6 hook — SIMULATED always
+> authorizes, LIVE is refused outright (no adapter exists yet). No
+> module outside `agent-runner.ts` imports `SimulatedAdapter` — enforced
+> by an architectural test, not just convention.
+>
+> **Retry/escalation behavior**: review-type roles (`qa-agent`,
+> `security-reviewer`, `code-reviewer`) reopen the task they depend on
+> (via `task_dependencies`) on failure, per
+> [05-orchestration-workflow.md](./05-orchestration-workflow.md) §4's
+> "QA failure re-opens the developer task... not the QA task itself" —
+> generalized to every review-type role for consistency. Every other
+> role retries itself. The ceiling check follows
+> [04-agent-architecture.md](./04-agent-architecture.md) §3's lifecycle
+> diagram literally (`attempt++ ≤ maxRetries` retries, otherwise
+> escalates) — with the seeded default `maxRetries: 3`, that's 4 total
+> attempts allowed before escalation, not 3; recorded here since the
+> diagram's exact arithmetic is easy to misread.
+>
+> **Context scoping**
+> (`lib/ai-office/agents/context-builder.ts`): built directly from each
+> role's own `allowedInputs` tags (already seeded in
+> `agent-role-catalog.ts`) — fetches only the latest artifact per
+> allowed type and, only when `project-memory` is an allowed input, the
+> project summary and decisions. Structurally reads only `artifacts`/
+> `project_decisions`/`project_memory_cache` — there is no code path by
+> which `budget_records`, `ai_usage`, or `users` rows could ever reach a
+> role's context, regardless of `allowedInputs` content.
+>
+> **Project memory**
+> (`lib/ai-office/domain/project-memory.ts`, new — not built in Phase 3,
+> whose required-entity list didn't include it): `refreshProjectMemory()`
+> is plain counting/templating over already-persisted rows (task
+> completion count, current task, latest test status, unresolved
+> failures, decision count) — not a summarizer model, deterministic by
+> construction. Called by AgentRunner after every terminal task outcome,
+> *after* project status is advanced so the summary reflects the final
+> state of that run.
+>
+> **Tests**: 100 automated tests (up from Phase 3's 53), across 6 new
+> files (`providers/__tests__/simulated-adapter.test.ts`,
+> `agents/__tests__/{import-boundary,agent-runner,phase4-simulation}.test.ts`,
+> plus 2 domain/db files unchanged from Phase 3). All Phase 3 tests
+> remain green — no Phase 3 file was modified. The full acceptance
+> scenario (idea → product → research → architecture → dev → QA fail →
+> fix → QA pass → security → code review → release readiness) is run
+> both once and 3 consecutive times against fresh temp databases in the
+> same test file, asserting byte-identical artifact content and project-
+> memory summaries across runs. `npm run test:ai-office`'s script was
+> changed from a hard-coded file list to a quoted glob
+> (`"lib/ai-office/**/*.test.ts"`) once it became clear Node's test
+> runner *does* support glob arguments (a bare directory path does not)
+> — new test files are picked up automatically from here on, no more
+> manual script edits per file.
+>
+> **Deviations from the planning docs, recorded rather than silently
+> made**: the `AgentTaskResult.output` shape refinement (above); the
+> "retry ceiling" arithmetic clarification (above); QA's failure
+> being modeled as `AgentTaskResult.status: "FAILED"` rather than a
+> "succeeded but reported a failure" shape (there is no such third state
+> in the approved lifecycle diagram, and this reading is what makes the
+> QA→developer reopening rule apply without a special case); the
+> review-role-reopens-dependency rule was generalized from QA (the only
+> role the docs give a worked example for) to security-reviewer and
+> code-reviewer as well, for consistency — no test currently exercises
+> security/code-review *failure* end-to-end (only success, per this
+> phase's acceptance scenario), flagged here rather than left implicit.
+
 - **Objective**: Run the brief's full required scenario (idea → ... →
   approval, including QA failure/retry) end to end using
   `SimulatedAdapter`, at $0. **Deliberately without the Durable Runner

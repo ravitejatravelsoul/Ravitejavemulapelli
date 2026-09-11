@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test:ai-office": "node --conditions=react-server --test lib/ai-office/auth/token.test.ts lib/ai-office/db/__tests__/schema.test.ts lib/ai-office/domain/__tests__/repositories.test.ts"
+    "test:ai-office": "node --conditions=react-server --test \"lib/ai-office/**/*.test.ts\""
   },
   "dependencies": {
     "@hookform/resolvers": "^5.4.0",
