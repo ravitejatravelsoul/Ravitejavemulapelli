@@ -45,16 +45,19 @@ purely *mechanism and timing*, not *whether*:
   framed as a mechanism/timing question for him to resolve, not a
   foregone "hide everything" conclusion.
 
-## 2. SQLite driver: `node:sqlite` vs. `better-sqlite3`?
+## 2. SQLite driver: `node:sqlite` vs. `better-sqlite3` — **RESOLVED (Phase 3)**
 
-Depends entirely on the developer machine's actual Node version at the
-time Phase 3 starts (`node --version`). `node:sqlite` avoids a new
-dependency and any native-module build risk; `better-sqlite3` is more
-battle-tested and works on any Node 20+ install. Recommendation leans
-`node:sqlite` if available, `better-sqlite3` otherwise — but this must be
-checked against the real environment, not decided from the README's
-stated "Node.js 20+" floor alone. See
-[06-data-model.md](./06-data-model.md) §1.
+`node:sqlite` was chosen — the real developer environment runs Node
+v24.13.0, where `node:sqlite`'s `DatabaseSync` works with zero flags
+(still logging an `ExperimentalWarning`, harmless and one-time per
+process) and needed only a devDependency version bump
+(`@types/node` `^20` → `^24.13.4`, to unlock its type declarations — no
+new runtime dependency). Zero native-module/Windows prebuild risk,
+since it ships inside the Node binary itself. Full writeup — alternatives
+considered, dependency impact, Windows compatibility, cost — in
+[11-implementation-phases.md](./11-implementation-phases.md)'s Phase 3
+status note. See [06-data-model.md](./06-data-model.md) §1 for the
+original two-option framing this resolves.
 
 ## 3. Durable Runner implementation shape: in-process singleton vs. standalone companion process
 
@@ -68,11 +71,28 @@ behavior against the installed Next.js version's own docs (per
 `AGENTS.md`) at implementation time, not on anything decidable from this
 package alone.
 
-## 4. Test runner choice
+## 4. Test runner choice — **RESOLVED (Phase 3): stayed with `node:test`, did not add Vitest**
 
-Vitest is recommended (fast, TypeScript-native, no config-file sprawl,
-pairs naturally with a future component-testing need) but not installed
-or committed to in this planning task. See
+The original planning-time lean toward Vitest (below) was reconsidered
+and reversed once Phase 3's actual scope was in front of an
+implementer: pure Node-side persistence/integration tests need no
+DOM/component-testing environment, no mocking framework, no snapshot
+tooling — everything Node's built-in `node:test` + `node:assert`
+already cover. Adding Vitest now would be a dependency with no
+capability this phase actually needed. `npm run test:ai-office` covers
+the auth (`token.test.ts`) and Phase 3 persistence
+(`db/__tests__/schema.test.ts`,
+`domain/__tests__/repositories.test.ts`) suites this way. This is
+scoped to Phase 3 specifically — a later phase that genuinely needs
+component/UI testing (per
+[10-testing-strategy.md](./10-testing-strategy.md) §2.12, not before
+Phase 8+) should re-open this question with that concrete need in hand,
+not reopen it speculatively.
+
+Original framing, for reference: Vitest was recommended (fast,
+TypeScript-native, no config-file sprawl, pairs naturally with a future
+component-testing need) but not installed or committed to in the
+original planning task. See
 [10-testing-strategy.md](./10-testing-strategy.md) §1.
 
 ## 5. Notification delivery for "project ready for review"

@@ -208,6 +208,140 @@ Definition of Done implicitly.
 
 ## Phase 3 — Projects/tasks/agents state engine
 
+> **Implemented** on `feature/teja-ai-office`. The full schema (19 domain
+> tables + `schema_migrations`), a deterministic migration runner,
+> idempotent seed data, and domain repositories for every entity in
+> [06-data-model.md](./06-data-model.md) §2 are live. No orchestration
+> intelligence, no simulated/live agent execution — persistence only, as
+> scoped.
+>
+> **SQLite driver decision**: `node:sqlite` (Node's built-in
+> `DatabaseSync`), not `better-sqlite3`. Actual environment: Node
+> **v24.13.0**. `node:sqlite` works with zero CLI flags on this version
+> (still emits a one-time `ExperimentalWarning` per process — harmless,
+> not a functional gate) and needs no native module at all, since it
+> ships inside the Node binary. The one real cost: `@types/node` was
+> pinned to `^20`, which predates `node:sqlite`'s type declarations —
+> bumped to `^24.13.4` (matching the actual runtime major version) as a
+> devDependency-only change; `npx tsc --noEmit` across the whole repo
+> was re-run clean afterward to confirm zero fallout elsewhere.
+> Alternatives considered: `better-sqlite3` (rejected — a native module
+> is genuine Windows-prebuild risk this developer's environment simply
+> doesn't need to take on, given `node:sqlite` covers every API surface
+> this phase needs: prepared statements, manual transactions, PRAGMA,
+> `sqlite_version()` — confirmed 3.50.4 bundled). Security/maintenance:
+> `node:sqlite` is Node core, versioned with Node itself, no separate
+> supply-chain surface; its "experimental" label is the one real
+> ongoing risk (API could still change in a future Node major) —
+> accepted for a personal local tool where the Node version is fully
+> within the owner's control. Cost: $0, zero new runtime dependencies.
+>
+> **Test runner decision**: stayed with Node's built-in `node:test` —
+> did not add Vitest. See
+> [14-open-questions.md](./14-open-questions.md) §4 for the reasoning.
+> `npm run test:ai-office` now runs `lib/ai-office/auth/token.test.ts`
+> plus two new Phase 3 suites
+> (`lib/ai-office/db/__tests__/schema.test.ts`,
+> `lib/ai-office/domain/__tests__/repositories.test.ts`), 53 tests
+> total, all green. Explicit file paths are passed to `node --test`
+> rather than a directory/glob — this Node version's directory-based
+> test discovery didn't reliably pick up `.test.ts` files in manual
+> verification, so explicit paths were used instead as the more robust
+> option; revisit if this becomes unwieldy as more suites are added.
+>
+> **Migration design**: hand-written SQL files under
+> `lib/ai-office/db/migrations/NNN-description.sql` (one so far:
+> `001-init.sql`), applied in order inside a transaction per file,
+> tracked in a `schema_migrations` table (version, name, appliedAt)
+> living in the same database. A failed migration rolls back and is
+> never recorded as applied — confirmed by test, not just asserted in
+> prose. `getSchemaVersion()`/`runMigrations()` in
+> `lib/ai-office/db/migrate.ts`.
+>
+> **Repository approach**: one module per closely-related table group
+> under `lib/ai-office/domain/**` (`office.ts`, `users.ts`,
+> `agent-roles.ts`, `projects.ts`, `tasks.ts` — tasks + dependencies +
+> attempts + agent runs, tightly coupled by design — `budget.ts`,
+> `events.ts`, `project-outputs.ts` — decisions + artifacts + test
+> results + failures + approvals). Every exported function is a plain,
+> readable, domain-named function (`createProjectWithIdea`,
+> `claimTask`, `recordDecision`, ...) — no generic
+> `Repository<T>`-style abstraction. `claimTask()` implements exactly
+> the atomic compare-and-swap statement shape from
+> [03-system-architecture.md](./03-system-architecture.md) §9.3, plus
+> `releaseLease()` and `findStaleLeasedTasks()` — persistence primitives
+> only, no dispatch loop, no eligibility-selection policy (that's
+> Phase 5, not implemented here, per this task's explicit scope limit).
+>
+> **Owner auth migration**: the `users` table is now real and
+> authoritative. `lib/ai-office/db/seed.ts`'s `seedOwnerFromEnv()`
+> seeds one owner row from `.env.local`'s `OFFICE_OWNER_EMAIL`/
+> `OFFICE_OWNER_PASSWORD_HASH` — but only once, only if the `users`
+> table is still empty; it never overwrites an existing row. This is
+> the exact "env-driven seed script" option
+> [08-security-plan.md](./08-security-plan.md) §1 names, now actually
+> wired up rather than deferred. `lib/ai-office/auth/credentials.ts`'s
+> `verifyOwnerCredentials()` now queries the `users` table instead of
+> reading the env vars directly on every login attempt — its exported
+> signature is unchanged, so `app/office/actions/auth.ts` (its only
+> caller) needed no changes. The Phase 1/2 timing-safe-comparison
+> property (a wrong email can't be distinguished from a wrong password
+> by response time) was deliberately preserved across this change via a
+> fixed dummy-salt scrypt computation when no matching user is found —
+> not automatic, had to be re-derived for the DB-backed shape and is
+> called out here so it isn't accidentally regressed later.
+>
+> **Office status / budget persistence**: `office_status` singleton
+> (id fixed to `'singleton'`, enforced by both the PK and a CHECK
+> constraint — a second insert cannot create a duplicate row, tested)
+> and a default `budget_records` office-scope row seeded at **$30**
+> capUsd / 80 warnAtPercent. No enforcement, no Office-Close workflow,
+> no spend gating — storage and repository behavior only, exactly as
+> scoped; Phase 6 wires the actual behavior on top of this.
+>
+> **Deviations from the planning docs, recorded rather than silently
+> made:**
+> - Added `'research-notes'` to the `artifacts.type` CHECK list — 
+>   [04-agent-architecture.md](./04-agent-architecture.md) §1 names
+>   "Research notes (artifact)" as the Research Agent's output, but
+>   [06-data-model.md](./06-data-model.md) §2's original `artifacts.type`
+>   enum didn't include it. Small gap between two of this package's own
+>   documents, resolved by extending the enum rather than left blocking
+>   implementation.
+> - `budget_records.scopeId` uses the literal string `'office'` (never
+>   `NULL`) for office-scope rows specifically so
+>   `UNIQUE (scope, scopeId, periodStart)` can actually prevent
+>   duplicates — SQLite treats every `NULL` as distinct from every other
+>   `NULL`, so a `NULL` scopeId would never collide with itself across
+>   repeated seed calls the way the sentinel string does.
+> - `budget_records.warnAtPercent` is a single column, seeded to `80`.
+>   [09-budget-and-cost-controls.md](./09-budget-and-cost-controls.md)
+>   §4's prose mentions two default thresholds ("50% and 80%") but the
+>   approved schema only ever had one `warnAtPercent` column — resolved
+>   by treating 80 as the stored, configurable hard-warning threshold;
+>   whether a second, lower "soft notice" threshold becomes a real
+>   second column or stays hardcoded application logic is a Phase 6
+>   decision, not reopened here.
+> - Agent role `id` slugs (`orchestrator`, `product-owner`,
+>   `research-agent`, `solution-architect`, `ui-ux-agent`,
+>   `frontend-developer`, `backend-developer`, `qa-agent`,
+>   `security-reviewer`, `code-reviewer`, `release-agent`) and each
+>   role's `maxRetries` (uniformly 3) / `escalatesTo` (`owner` for
+>   Orchestrator, `orchestrator` for every other role) are this
+>   implementation's own choice — the planning docs named only two
+>   example ids (`qa-agent`, `solution-architect`) and never fixed a
+>   numeric retry ceiling. Recorded here as the source of truth; see
+>   `lib/ai-office/domain/agent-role-catalog.ts`.
+> - `.gitignore` gained `*.sqlite-shm`/`*.sqlite-wal`/`*.sqlite-journal`,
+>   `*.db-shm`/`*.db-wal`/`*.db-journal`, and `/.data/` — WAL mode (used
+>   for the app database) creates `-shm`/`-wal` sidecar files that the
+>   pre-existing `*.sqlite`/`*.db` patterns did not cover. Found by
+>   actually creating a real local database and checking `git status`
+>   rather than assuming the existing patterns were sufficient — see
+>   [13-risk-register.md](./13-risk-register.md) for this logged as a
+>   risk that materialized and was caught before anything was ever
+>   committed.
+
 - **Objective**: The full data model is live (SQLite + migrations +
   repositories) and CRUD-testable, with no orchestration behavior yet —
   just correct persistence.

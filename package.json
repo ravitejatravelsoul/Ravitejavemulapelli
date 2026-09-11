@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test:ai-office": "node --conditions=react-server --test lib/ai-office/auth/token.test.ts"
+    "test:ai-office": "node --conditions=react-server --test lib/ai-office/auth/token.test.ts lib/ai-office/db/__tests__/schema.test.ts lib/ai-office/domain/__tests__/repositories.test.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.4.0",
@@ -41,7 +41,7 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
+    "@types/node": "^24.13.4",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/react-simple-maps": "^3.0.6",
