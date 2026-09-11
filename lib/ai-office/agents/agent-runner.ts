@@ -13,7 +13,6 @@ import {
   updateTaskAttemptStatus,
   createAgentRunForAttempt,
   updateAgentRunStatus,
-  listTaskDependencies,
   listTasksForProject,
   type TaskRow,
   type TaskAttemptRow,
@@ -34,6 +33,7 @@ import { recordAiUsage } from "../domain/budget.ts";
 import { refreshProjectMemory } from "../domain/project-memory.ts";
 import { buildTaskContext } from "./context-builder.ts";
 import { authorizeBudget } from "./budget-gate.ts";
+import { isReviewRole, findRemediationTargets, findStaleDownstreamReviews } from "./remediation.ts";
 import { SimulatedAdapter } from "../providers/simulated/simulated-adapter.ts";
 import type { AIProviderAdapter } from "../providers/types.ts";
 
@@ -63,17 +63,6 @@ export interface ExecuteTaskOptions {
   /** Defaults to SimulatedAdapter. Only ever SimulatedAdapter exists in Phase 4 — this parameter exists for test injection, not for selecting a live provider. */
   provider?: AIProviderAdapter;
 }
-
-/**
- * Review-type roles test/audit someone else's artifact rather than
- * producing their own — on failure, the task that gets reopened is the
- * dependency that produced the artifact under review, never the
- * reviewing task itself. See
- * docs/ai-office/05-orchestration-workflow.md §4 ("QA failure re-opens
- * the developer task... not the QA task itself") — generalized here to
- * every review-type role for consistency.
- */
-const REVIEW_ROLES = new Set(["qa-agent", "security-reviewer", "code-reviewer"]);
 
 export async function executeTask(
   db: DatabaseSync,
@@ -242,16 +231,28 @@ function finishFailure(
   const failureReason = output.failure?.reason ?? "Unspecified failure.";
   updateTaskAttemptStatus(db, attempt.id, "FAILED");
 
-  const retryTargetTaskIds = REVIEW_ROLES.has(role.id)
-    ? listTaskDependencies(db, task.id).map((d) => d.dependsOnTaskId)
-    : [task.id];
-  const failureTaskId = retryTargetTaskIds[0] ?? task.id;
+  // Remediation targets: for a review role (QA, Security, Code Review —
+  // derived semantically from allowedInputs/allowedOutputs, see
+  // remediation.ts, not a hardcoded role-id list or graph position),
+  // walk the dependency ancestry back to the development task(s) that
+  // actually need a code change — however many review hops away that
+  // is, not just the direct dependency. Every other role retries itself.
+  const isReview = isReviewRole(role);
+  const remediationTargets = isReview ? findRemediationTargets(db, task.id) : [task];
 
-  recordFailure(db, { projectId: project.id, taskId: failureTaskId, agentRunId: agentRun.id, reason: failureReason });
+  for (const target of remediationTargets) {
+    recordFailure(db, { projectId: project.id, taskId: target.id, agentRunId: agentRun.id, reason: failureReason });
+  }
   recordEvent(db, {
     projectId: project.id,
     type: "agent_run.failed",
-    payload: { taskId: task.id, roleId: role.id, attemptNumber: attempt.attemptNumber, reason: failureReason },
+    payload: {
+      taskId: task.id,
+      roleId: role.id,
+      attemptNumber: attempt.attemptNumber,
+      reason: failureReason,
+      remediationTargetTaskIds: remediationTargets.map((t) => t.id),
+    },
     actor: role.id,
   });
 
@@ -264,9 +265,34 @@ function finishFailure(
   if (!ceilingExceeded) {
     const finishedRun = updateAgentRunStatus(db, agentRun.id, "FAILED", Date.now());
     const updatedTask = updateTaskStatus(db, task.id, "PENDING");
-    for (const targetId of retryTargetTaskIds) {
-      if (targetId !== task.id) updateTaskStatus(db, targetId, "PENDING");
+    for (const target of remediationTargets) {
+      if (target.id !== task.id) updateTaskStatus(db, target.id, "PENDING");
     }
+
+    // Any already-DONE review task that transitively depends on a
+    // reopened development task is now stale — the code it validated is
+    // changing again — and must rerun too. Covers both a review step
+    // strictly between the development task and the one that just
+    // failed (QA, when Security fails) and an already-passed sibling
+    // branch validating the same code (Security, when Code Review fails
+    // after Security already passed).
+    if (isReview) {
+      const staleReviews = findStaleDownstreamReviews(
+        db,
+        project.id,
+        remediationTargets.map((t) => t.id),
+      ).filter((t) => t.id !== task.id);
+      for (const stale of staleReviews) {
+        updateTaskStatus(db, stale.id, "PENDING");
+        recordEvent(db, {
+          projectId: project.id,
+          type: "task.invalidated_by_upstream_change",
+          payload: { taskId: stale.id, causedByTaskId: task.id, causedByRoleId: role.id },
+          actor: "system",
+        });
+      }
+    }
+
     refreshProjectMemory(db, project.id);
     return {
       outcome: "retried",

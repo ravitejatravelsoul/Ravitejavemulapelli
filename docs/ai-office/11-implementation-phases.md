@@ -469,13 +469,20 @@ Definition of Done implicitly.
 > module outside `agent-runner.ts` imports `SimulatedAdapter` — enforced
 > by an architectural test, not just convention.
 >
-> **Retry/escalation behavior**: review-type roles (`qa-agent`,
-> `security-reviewer`, `code-reviewer`) reopen the task they depend on
-> (via `task_dependencies`) on failure, per
+> **Retry/escalation behavior — corrected post-review, see the
+> "Post-review correction" note below for the bug this replaced**:
+> review-type roles (`qa-agent`, `security-reviewer`, `code-reviewer` —
+> derived semantically, see below, not a hardcoded id list) resolve
+> their remediation target by walking the dependency ancestry *backwards*
+> until they find a development-role task, however many review hops
+> away that is — not just the immediate parent. Every already-`DONE`
+> review task that transitively depends on that development task is
+> also reopened (it validated code that's about to change again), and
+> the failing review task itself is reopened to rerun once the fix
+> lands. Every non-review role still retries itself on failure, per
 > [05-orchestration-workflow.md](./05-orchestration-workflow.md) §4's
-> "QA failure re-opens the developer task... not the QA task itself" —
-> generalized to every review-type role for consistency. Every other
-> role retries itself. The ceiling check follows
+> "QA failure re-opens the developer task... not the QA task itself."
+> The ceiling check follows
 > [04-agent-architecture.md](./04-agent-architecture.md) §3's lifecycle
 > diagram literally (`attempt++ ≤ maxRetries` retries, otherwise
 > escalates) — with the seeded default `maxRetries: 3`, that's 4 total
@@ -502,9 +509,9 @@ Definition of Done implicitly.
 > *after* project status is advanced so the summary reflects the final
 > state of that run.
 >
-> **Tests**: 100 automated tests (up from Phase 3's 53), across 6 new
-> files (`providers/__tests__/simulated-adapter.test.ts`,
-> `agents/__tests__/{import-boundary,agent-runner,phase4-simulation}.test.ts`,
+> **Tests**: 108 automated tests, across 7 new files
+> (`providers/__tests__/simulated-adapter.test.ts`,
+> `agents/__tests__/{import-boundary,agent-runner,phase4-simulation,remediation}.test.ts`,
 > plus 2 domain/db files unchanged from Phase 3). All Phase 3 tests
 > remain green — no Phase 3 file was modified. The full acceptance
 > scenario (idea → product → research → architecture → dev → QA fail →
@@ -518,6 +525,56 @@ Definition of Done implicitly.
 > — new test files are picked up automatically from here on, no more
 > manual script edits per file.
 >
+> **Post-review correction (same phase, before Phase 5 began)**: the
+> first version of this phase's retry logic reopened a failing review
+> task's *direct* dependency, which is only correct for QA (its direct
+> dependency is the development task). For the real Phase 4 workflow
+> graph — Developer → QA → Security and Developer → QA → Code Review —
+> that reopened QA when Security or Code Review failed, not the
+> development task the finding actually required a code change in
+> (concretely: a Security finding like "unvalidated file path input," or
+> a Code Review finding like "inconsistent error handling," would have
+> been "fixed" by merely rerunning QA, with no code change involved at
+> all). Root cause: "review role → reopen direct dependency" is a
+> graph-position assumption that only happens to hold for a two-hop
+> chain (Developer → QA); it silently breaks for any longer chain.
+> Fixed by deriving two role categories from data already seeded in
+> Phase 3 — never a hardcoded role-id list, never graph position — in
+> the new `lib/ai-office/agents/remediation.ts`: a **development role**
+> is any role whose `allowedOutputs` includes `"code"`; a **review
+> role** is any role whose `allowedInputs` includes `"code"` but whose
+> `allowedOutputs` does not. `findRemediationTargets()` walks the
+> dependency ancestry backwards from a failing review task past any
+> number of intermediate review hops until it finds development-role
+> task(s). `findStaleDownstreamReviews()` then finds every already-
+> `DONE` review task that transitively depends on those development
+> tasks — this is what correctly reopens QA when Security fails (a task
+> strictly *between* the development task and the one that failed) and
+> *also* correctly reopens an already-passed Security when Code Review
+> fails afterward on the same code (an already-`DONE` sibling branch,
+> not on the direct path to the failing task at all) — one rule covers
+> both cases. This generalizes automatically to any future development
+> role (a hypothetical `mobile-developer` seeded with `"code"` in
+> `allowedOutputs` needs no change to this file) and to any future
+> review role seeded the same way — see
+> [14-open-questions.md](./14-open-questions.md) if a role is ever added
+> that doesn't fit this input/output-based classification cleanly.
+> Verified with 8 new tests in
+> `agents/__tests__/remediation.test.ts`: Security failure → remediation
+> targets the developer task, not QA; Code Review failure → same; the
+> full remediation loop for each (dev fix → QA rerun → the failing
+> review reruns and passes); the combined case (Security already `DONE`,
+> Code Review fails, Security is invalidated and must rerun); escalation
+> for both Security and Code Review past their retry ceiling, with a
+> confirmed "no infinite loop" refusal afterward; and that
+> `READY_FOR_REVIEW` stays unreachable until every reopened review task
+> is `DONE` again (the existing `advanceProjectStatus` bookkeeping needed
+> no changes — it already required literally every task `DONE`, so once
+> this fix correctly reopens a stale review task to non-`DONE`, that
+> existing "all tasks `DONE`" check does the rest). Context scoping
+> (`context-builder.ts`) was not touched by this fix — confirmed by
+> rerunning the existing context-scoping tests unchanged.
+>
 > **Deviations from the planning docs, recorded rather than silently
 > made**: the `AgentTaskResult.output` shape refinement (above); the
 > "retry ceiling" arithmetic clarification (above); QA's failure
@@ -525,11 +582,10 @@ Definition of Done implicitly.
 > "succeeded but reported a failure" shape (there is no such third state
 > in the approved lifecycle diagram, and this reading is what makes the
 > QA→developer reopening rule apply without a special case); the
-> review-role-reopens-dependency rule was generalized from QA (the only
-> role the docs give a worked example for) to security-reviewer and
-> code-reviewer as well, for consistency — no test currently exercises
-> security/code-review *failure* end-to-end (only success, per this
-> phase's acceptance scenario), flagged here rather than left implicit.
+> review-role-reopens-remediation-target rule (corrected version, above)
+> was generalized from QA (the only role the docs give a worked example
+> for) to every review role via the semantic
+> allowedInputs/allowedOutputs classification, not a hardcoded id list.
 
 - **Objective**: Run the brief's full required scenario (idea → ... →
   approval, including QA failure/retry) end to end using
