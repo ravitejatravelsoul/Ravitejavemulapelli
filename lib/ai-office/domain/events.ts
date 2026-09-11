@@ -51,6 +51,11 @@ export function listEventsForProject(db: DatabaseSync, projectId: string): Messa
     .all(projectId) as unknown as MessageEventRow[];
 }
 
+/** Office-wide activity feed — every event regardless of project, most recent first, capped so a long-running office never has to render an unbounded list. */
+export function listRecentEvents(db: DatabaseSync, limit = 50): MessageEventRow[] {
+  return db.prepare("SELECT * FROM messages_events ORDER BY occurredAt DESC LIMIT ?").all(limit) as unknown as MessageEventRow[];
+}
+
 export function recordAuditEntry(
   db: DatabaseSync,
   input: { actor: string; action: string; targetType?: string; targetId?: string },

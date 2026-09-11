@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 // Relative + extension-explicit — see the comment in client.ts.
 import { AGENT_ROLE_CATALOG } from "../domain/agent-role-catalog.ts";
+import { startOfCurrentMonthUtc } from "../domain/budget.ts";
 
 /**
  * Deterministic, idempotent seed data — safe to call on every
@@ -11,11 +12,6 @@ import { AGENT_ROLE_CATALOG } from "../domain/agent-role-catalog.ts";
  * constraint), so re-running never creates duplicates and never
  * overwrites data the owner or a later phase may have changed.
  */
-
-function startOfCurrentMonthUtc(): number {
-  const now = new Date();
-  return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
-}
 
 /** Matches docs/ai-office/04-agent-architecture.md §1's catalog exactly — see lib/ai-office/domain/agent-role-catalog.ts for the source list and id-slug mapping. */
 export function seedAgentRoles(db: DatabaseSync): void {

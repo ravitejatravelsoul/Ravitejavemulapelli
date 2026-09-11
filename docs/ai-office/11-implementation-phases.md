@@ -1127,6 +1127,348 @@ Definition of Done implicitly.
 
 ## Phase 6 — Budget, pause and approval controls
 
+> **Implemented** on `feature/teja-ai-office`. The private `/office`
+> placeholder is now the real owner dashboard; Office Open/Close and
+> Project Pause/Resume are wired to authenticated Server Actions behind
+> a central transition policy; the Phase 5 approval stub is now a real
+> approve/reject workflow with **exact-scope enforcement**; a real
+> `BudgetService` implements monthly/project caps, a warning threshold,
+> and atomic reservation-based concurrency safety, tested entirely
+> through synthetic (never live) providers. `SimulatedAdapter` remains
+> the only provider; AI/API spend stayed $0 throughout.
+>
+> **Scope deviation from the planning bullets below, made explicitly**:
+> the original plan sketched separate `/office/approvals` and
+> `/office/budget` pages and a `lib/ai-office/domain/budget-service.ts`
+> location. The actual Phase 6 authorization instead asked for one
+> consolidated dashboard (command bar, overview cards, projects,
+> activity, an inline Approvals panel, an inline Budget panel) — that
+> authorization is what was built. `BudgetService` and the approval
+> workflow live in new top-level modules
+> (`lib/ai-office/budget/budget-service.ts`,
+> `lib/ai-office/approvals/approval-service.ts`), siblings to
+> `orchestrator/` and `runner/`, not inside `domain/` — they orchestrate
+> across multiple domain repositories (tasks, projects, approvals,
+> budget, events, audit) the same way `orchestrator.ts`/`runner.ts`
+> already do, so they follow that established pattern rather than the
+> single-table-repository shape everything under `domain/` otherwise
+> has.
+>
+> **Dashboard** (`app/office/(protected)/page.tsx`, all data from
+> `lib/ai-office/dashboard/dashboard-data.ts`, a read-only aggregation
+> layer — nothing there mutates): a command bar (Office OPEN/CLOSED
+> pill, Open/Close action, SIMULATED-mode + "$0 live AI spend"
+> indicators, Start New Project); ten overview stat cards (active/
+> paused/blocked/ready-for-review projects, pending approvals, tasks
+> completed/running/blocked, simulated runs, current-month LIVE cost);
+> a project list (status, idea summary, progress, current task, latest
+> agent, unresolved failures, pending approvals, simulated cost,
+> Pause/Resume, View); a Pending Approvals panel; a Budget panel; and an
+> Activity feed translating raw `messages_events` rows into sentences
+> (`describeEvent()` — a lookup table per event type, with a safe
+> "unknown type" fallback so a future event type never renders as
+> literally nothing, and never raw JSON). Every list has an explicit,
+> intentional empty state (verified for zero projects/approvals/
+> activity).
+>
+> **Project detail** (`app/office/(protected)/projects/[projectId]/page.tsx`,
+> data from `lib/ai-office/dashboard/project-detail-data.ts`): idea
+> text, status/AI-mode/timestamps, progress, a task-dependency **Task
+> Flow** view (`components/ai-office/dashboard/task-flow.tsx` — tasks
+> grouped into dependency-depth "waves," rendered as cards connected by
+> a plain chevron, not a graph library, per the brief's explicit "no
+> giant graph library"), per-task attempt/AgentRun history, decisions,
+> artifact previews (content truncated, not full dumps), this project's
+> approvals, unresolved failures, project memory, and activity —
+> everything section 2 of the brief listed.
+>
+> **Start New Project**
+> (`app/office/(protected)/projects/new/page.tsx` +
+> `app/office/actions/projects.ts`'s `createProjectAction`): a zod-validated
+> form (title, idea text) using `useActionState`; on success, calls the
+> unmodified Phase 5 `createProjectWithIdea()` (aiMode always omitted,
+> so it defaults to `"SIMULATED"` — never set to `"LIVE"` from this
+> form) then the unmodified Phase 5 `planProject()`, and redirects to
+> the new project's detail page. No AI is called; planning is the same
+> deterministic keyword classifier Phase 5 already shipped and tested.
+> The standalone Runner (`npm run ai-office:runner`, unchanged from
+> Phase 5) picks the resulting tasks up entirely on its own.
+>
+> **Office Open/Close**
+> (`lib/ai-office/control/office-control.ts`): thin but not trivial —
+> `openOffice()`/`closeOffice()` are no-ops (not errors, and critically
+> not a duplicate event) when the Office is already in the requested
+> state, and each real transition records both a `messages_events` row
+> (dashboard-facing) and an `audit_log` row (security-facing). Neither
+> function touches `projects`/`tasks`/leases/budget — Closing only ever
+> changes `office_status.state`, which is the one flag
+> `runOneCycle()` already checked before this phase (Phase 5) and still
+> checks identically now.
+>
+> **Project Pause/Resume — central transition policy**
+> (`lib/ai-office/control/project-transitions.ts`,
+> `evaluateProjectTransition()`): the single place Pause/Resume legality
+> is decided, per the brief's explicit "central transition policy
+> instead of scattering status checks through UI actions." Deliberately
+> narrow: **PAUSE is legal only from `IN_PROGRESS`** (pausing anything
+> else has no executing work to stop, and would only confuse the owner
+> about what "paused" means — `READY_FOR_REVIEW` correctly cannot become
+> `PAUSED`, matching the brief's own example verbatim). **RESUME is
+> legal only from `PAUSED`** — specifically *not* from `BLOCKED`: a
+> blocked project's block (an escalated task, a pending approval) has
+> its own resolution path, and a generic "resume" must never paper over
+> an unresolved block by just flipping the status back, matching the
+> brief's own `BLOCKED`-should-not-be-silently-resumed example. Every
+> rejected transition returns a specific, human-readable reason (e.g.
+> "Unable to resume this project because it is blocked — resolve the
+> underlying block... first"), never a stack trace. `pauseProject()`/
+> `resumeProject()` apply the policy, persist, and record the same
+> event+audit pair Office Open/Close does.
+>
+> **Approval workflow — exact-scope enforcement**
+> (`lib/ai-office/approvals/approval-service.ts`): migration `002`
+> (below) added `approvals.taskId` (nullable), `decidedBy`, and
+> `decisionNote`. `approvals.taskId IS NULL` means "blocks the whole
+> project" (Phase 5's original idea-level behavior, unchanged); a
+> non-null `taskId` means "blocks exactly this one task," leaving every
+> sibling task in the same project eligible — verified directly: a
+> task-scoped `production_deploy` approval on the `release-agent` task
+> blocks only that task while `backend-developer`/`qa-agent`/etc. keep
+> running in the same project. **The actual "exact scope" guarantee is
+> structural, not a matching rule to get right or wrong**: no code path
+> anywhere ever asks "does this project/task have *any* approved
+> approval" (the classic replay bug) — `eligibility.ts`'s join only
+> ever checks for a matching **PENDING** row, and each approval row is
+> created once, for one specific gate, decided once. An `APPROVED`
+> decision doesn't grant anything ongoing; it just means that one
+> PENDING row is no longer PENDING, so the exact thing it was blocking
+> naturally becomes eligible again through the ordinary state machine —
+> there is no "approval bypass" to construct because nothing ever
+> queries approved history as a grant. `rejectApproval()` explicitly
+> moves the scoped task (or project, if project-wide) to `BLOCKED` —
+> necessary because eligibility only filters on PENDING, so a rejection
+> that didn't actively transition the status would leave the task
+> silently re-eligible. `decideApproval()` (Phase 5, widened) is
+> idempotent via its existing `WHERE status = 'PENDING'` guard — a
+> double-decision race (or a duplicate click) can never double-apply
+> side effects.
+>
+> A second, independent synthetic idea-level signal
+> (`role-selection.ts`'s `requiresDeploymentApproval()`, a disjoint
+> keyword set from Phase 5's `requiresOwnerApproval()`) creates this
+> task-scoped `production_deploy` approval on the `release-agent` task
+> when matched, during `planProject()` — proving two *different*,
+> independently-decided approval flows can coexist in one project
+> without approving one ever satisfying the other.
+>
+> **BudgetService** (`lib/ai-office/budget/budget-service.ts`,
+> `authorizeBudget()`): the "authoritative budget gate for future LIVE
+> provider calls" the brief asked for — fully implemented and fully
+> tested via synthetic (`"synthetic-live-test"` etc.) providers, never a
+> real one. Money is converted to integer cents internally
+> (`toCents()`/`toUsd()`) for every comparison, so cap/spend/reservation
+> arithmetic never accumulates floating-point drift; `costUsd`/`capUsd`
+> stay `REAL` in SQLite (no migration needed — "safe conversion at the
+> domain layer is enough," exactly as the brief allowed). Checks, in
+> order: (1) a PENDING approval already scoped to this project/task →
+> `APPROVAL_REQUIRED` (the same exact-scope join as eligibility.ts,
+> reused rather than duplicated) — this is checked *before* any cap
+> math, since an unresolved approval is a more specific reason than
+> money; (2) a per-project cap (`projects.monthlyBudgetCapUsd`, an
+> already-existing nullable column — no migration needed for it either)
+> → `BLOCKED_PROJECT_CAP` if committed+estimate would exceed it, checked
+> before the office cap since it's the more specific constraint; (3) the
+> office monthly cap → `BLOCKED_MONTHLY_CAP`; (4) otherwise `AUTHORIZED`
+> or `WARNING` (committed+estimate crosses the single persisted
+> `warnAtPercent` threshold, seeded default 80 — see the discrepancy
+> note below) — both non-blocking, both reserve.
+>
+> **`budget_reservations` — atomic concurrency safety** (new table,
+> migration `002`): every `AUTHORIZED`/`WARNING` result immediately
+> inserts a `RESERVED` row for the estimated cost, in the *same*
+> synchronous call as the check — so the very next `authorizeBudget()`
+> call (even one issued "concurrently") sees this amount already
+> committed. Node/`node:sqlite` are single-threaded and fully
+> synchronous here, so two calls in the same process are always
+> strictly serialized by construction — proven with a test where a $0
+> starting balance and two $23 requests against a $30 cap must produce
+> exactly one `AUTHORIZED` and one `BLOCKED_MONTHLY_CAP`, never both
+> authorized (which a naive check-then-act implementation, re-reading a
+> stale "amount already spent" snapshot for each call, would wrongly
+> allow). `reconcileReservation()` moves a `RESERVED` row to
+> `RECONCILED` with its real cost (no longer counted as "reserved,"
+> replaced by the real `ai_usage` sum once actually recorded);
+> `releaseReservation()` moves it to `RELEASED` (freed, no cost ever
+> recorded) for a call that was authorized but never actually incurred
+> cost. Both are idempotent no-ops past their first call (mirroring
+> `decideApproval()`'s pattern) so a duplicate reconcile/release can
+> never double-count or overwrite a settled record.
+>
+> **Simulated vs. LIVE accounting, kept structurally separate**: every
+> spend query in `domain/budget.ts` filters explicitly on
+> `provider != 'simulated'` (LIVE) or `provider = 'simulated'`
+> (simulated) — never a bare, unfiltered sum. A real bug caught while
+> writing the project-detail aggregation: an early draft's
+> `ProjectDetail.simulatedCostUsd` was actually computed from
+> `sumAiUsageCostForProject()` (every provider, LIVE included) —
+> harmless while every project is SIMULATED-only, but exactly the
+> "simulated usage treated as real spending" confusion the brief warned
+> against, and a real risk the moment any project is ever set to
+> `LIVE`. Fixed by adding `sumSimulatedCostForProject()`/
+> `sumLiveCostForProject()` (all-time, for the detail view) alongside
+> the existing period-scoped office/BudgetService sums, and a test that
+> records a synthetic LIVE-provider usage row and asserts it appears in
+> `liveCostUsd`, never `simulatedCostUsd`.
+>
+> **Budget-increase approval** (`requestBudgetIncreaseApproval()` in
+> `approval-service.ts`): creates a `budget_increase`-kind approval
+> carrying `{oldCapUsd, newCapUsd, reason}` in its context — the
+> persisted cap (`updateOfficeBudgetCap()`, new) changes only inside
+> `approveApproval()`'s handling of that specific kind, after the
+> decision, never on request and never automatically on a blocked
+> authorization. `getOrCreateOfficeBudgetRecord()` (new) lazily creates
+> the current month's `budget_records` row on first access, carrying the
+> cap/threshold forward from the most recent prior record rather than
+> silently reverting to the seeded $30 default on a month rollover — so
+> an owner's cap change persists across months.
+>
+> **Warning threshold — resolved discrepancy**: docs/09 §4 described
+> "default 50% and 80%" (two thresholds); the actual schema/seed
+> (`budget_records.warnAtPercent INTEGER DEFAULT 80`, one column) only
+> ever supported one. Per the brief's own "do not create confusing
+> schema just to satisfy old prose... decide cleanly," this phase kept
+> the single-threshold design the schema already had — `warnAtPercent`
+> (default 80) is the only configurable threshold; the docs' "50%" was
+> not implemented. Documented here as the final, deliberate behavior.
+>
+> **Server Action security**: every mutation
+> (`app/office/actions/{office,projects,approvals}.ts`) independently
+> calls `verifySession()` first — never relies on the `(protected)`
+> layout alone, per docs/ai-office/08-security-plan.md §5 (layouts don't
+> re-run on client-side navigation). Every id arriving from the browser
+> (`projectId`, `approvalId`) is treated as untrusted: a service-layer
+> function given a bad/foreign id returns a clean `{ error }`, never
+> throws a raw stack trace to the owner. No GET request mutates anything
+> — every mutation is a Server Action, which Next.js's App Router only
+> ever invokes via POST; there is no route handler in this phase at all.
+> No custom CSRF infrastructure was added — Next.js's built-in Server
+> Action origin-check mechanism is the framework-provided protection
+> here, used as intended rather than duplicated. Session cookies remain
+> `HttpOnly` (unchanged from Phase 1/2). The domain/service layer itself
+> is deliberately auth-agnostic — `pauseProject()`, `openOffice()`,
+> `approveApproval()`, etc. all take an explicit `actorUserId`/
+> `decidedByUserId` parameter rather than reading a session internally,
+> so the *only* place authentication is checked is the Server Action
+> layer, and the service layer stays fully unit-testable without any
+> Next.js request context.
+>
+> **A real cross-boundary bug found and fixed via live browser
+> testing** (not caught by any automated test, since it only manifests
+> when a Server Component passes a prop to a Client Component): several
+> UI components originally wrote
+> `<ActionButton action={() => pauseProjectAction(project.id)}>` —
+> passing a plain inline closure from a Server Component
+> (`ProjectDetailPage`, `ProjectList`) into a Client Component
+> (`ActionButton`) prop. Next.js can only serialize a *Server Action
+> reference* across that boundary, not an arbitrary function — this
+> throws `"Functions cannot be passed directly to Client Components
+> unless you explicitly expose it by marking it with 'use server'"` at
+> render time (server-logged only; production strips the client-visible
+> detail, so this initially looked like a plain, silent failure to
+> submit — the console showed nothing actionable client-side). Fixed
+> throughout (`project-list.tsx`, `approvals-panel.tsx`,
+> `[projectId]/page.tsx`) by using `pauseProjectAction.bind(null,
+> project.id)` instead — `.bind()` on a Server Action reference *is*
+> recognized and correctly serialized, unlike a wrapping arrow function.
+> Caught only by an actual Playwright walkthrough (headless Chromium,
+> production build) clicking through the real flow — proof this was the
+> right call given the brief's UI-testing requirement, not a
+> box-ticking exercise.
+>
+> **Runner visibility — honest, no fake heartbeat**
+> (`getRunnerActivityView()` in `dashboard-data.ts`): never displays
+> "Runner Online" (no real heartbeat mechanism exists, and the brief
+> explicitly forbids claiming one that doesn't). Derives the most recent
+> Runner-originated event (`task.executed`/`task.recovered_after_crash`/
+> `task.claimed`/`project.live_mode_refused`) and shows a plain relative
+> timestamp ("Last runner activity: 2 minutes ago"); if the Office is
+> open with no activity in the last two minutes (a heuristic freshness
+> window, explicitly documented as such, not a heartbeat protocol), it
+> shows "Office is open, but no recent runner activity was detected.
+> Start the local runner with `npm run ai-office:runner`." No new
+> persisted state/migration was needed for this — it's derived entirely
+> from the existing `messages_events` table.
+>
+> **Schema migration**: `002-budget-and-approval-scope.sql` — the first
+> migration since `001-init.sql` (which remains untouched and
+> immutable). Adds nullable `approvals.taskId`/`decidedBy`/
+> `decisionNote` columns (`ALTER TABLE ... ADD COLUMN`, confirmed to
+> work cleanly with `node:sqlite` including FK enforcement on the new
+> columns) and the new `budget_reservations` table. Every Phase 1-5 row
+> remains valid as-is — no backfill needed. A dedicated test
+> (`db/__tests__/schema.test.ts`) hand-applies only `001-init.sql` to a
+> fresh database (bypassing `runMigrations()`, which would apply both),
+> writes real pre-Phase-6 data against that v1-only schema, then runs
+> the real `runMigrations()` and asserts the v1 data survives unchanged
+> and the new columns/table are immediately usable.
+>
+> **Tests**: 60 new — 13 (`control/__tests__/{project-transitions,
+> office-control}.test.ts`), 11 (`approvals/__tests__/approval-service.test.ts`),
+> 18 (`budget/__tests__/budget-service.test.ts`), 11
+> (`dashboard/__tests__/dashboard-data.test.ts`), 4 new
+> `role-selection`/`orchestrator` cases for the second approval signal,
+> 1 new migration-002-from-v1 test in `db/__tests__/schema.test.ts`
+> (four of that file's *pre-existing* tests also had their expected
+> schema-version numbers updated from 1→2, not counted as new), 2
+> (`__tests__/phase6-acceptance.test.ts`, the brief's full §25/§26
+> scenarios end to end through the real dashboard-facing services). 236
+> total AI Office tests, all green — every one of the 176 Phase 1-5
+> tests still passes unmodified except those four version-number
+> updates the new migration made necessary.
+>
+> **UI verification**: a live Playwright walkthrough (headless
+> Chromium, production `next build`/`next start`, against a
+> backed-up-and-restored copy of the real dev database) at 1440/1280/
+> 768/390px covering: empty-state dashboard → Start New Project → idea
+> submission → project detail (task flow, decisions, memory) →
+> dashboard reflecting the new project → Close Office → Reopen → Sign
+> out; a second pass covering a synthetic approval-required project →
+> dashboard shows it pending and the project `BLOCKED` → Approve (native
+> confirm dialog) → project unblocks → Pause → Resume. Zero console
+> errors, zero horizontal overflow at any width, throughout both passes.
+> This is the walkthrough that caught the cross-boundary closure bug
+> above.
+>
+> **Deviations from the planning docs, recorded rather than silently
+> made**: the consolidated-dashboard-not-separate-pages scope change
+> (above); `BudgetService`/approval-service module locations (above);
+> the single (not dual 50%/80%) warning threshold (above); the
+> synthetic `production_deploy` deployment-approval signal is new,
+> demonstrating task-scoped approval alongside Phase 5's existing
+> project-wide one.
+>
+> **Known issues / accepted limitations**: a direct "Owner Budget
+> Settings" mutation UI (§16 of the brief — directly editing the
+> monthly cap, warning threshold, or project cap outside the approval
+> workflow) was **not** built. Only cap *increases*, via the auditable
+> `requestBudgetIncreaseApproval()`/approve flow, are implemented — the
+> brief's own conditional wording ("for significant increases, use the
+> approval workflow... if that matches the security model") was read as
+> license to scope this narrowly rather than build a second, parallel
+> direct-mutation path for the lower-risk directions (decreases,
+> threshold changes) in the same phase. `updateOfficeBudgetCap()`
+> exists and is fully tested, so adding that settings surface later is
+> additive, not a redesign. No per-project warning threshold exists — every project's WARNING status is judged against
+> the single office-wide `warnAtPercent`; acceptable given the
+> single-threshold decision above. The two-`$23`-request concurrency
+> test proves race-safety within one Node process (the only kind
+> possible while `SimulatedAdapter` is the only provider and there is
+> exactly one standalone Runner process type) — true multi-process
+> concurrent authorization is inherently exercised the same way Phase
+> 5's dual-runner lease test was (two independent connections against
+> the same file), not literally two OS processes, matching that
+> established precedent.
+
 - **Objective**: Wire in every owner-facing control:
   Open/Close Office, Pause/Resume Project, budget caps/warnings, and the
   Approvals queue — all enforced in code, not just displayed.

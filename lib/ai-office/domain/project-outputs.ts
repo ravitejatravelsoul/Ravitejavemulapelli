@@ -81,11 +81,15 @@ export interface FailureRow {
 export interface ApprovalRow {
   id: string;
   projectId: string | null;
+  /** NULL = blocks the whole project (Phase 5's original idea-level behavior); set = blocks exactly this one task, leaving the rest of the project's tasks eligible. See eligibility.ts. */
+  taskId: string | null;
   kind: ApprovalKind;
   status: ApprovalStatus;
   requestedBy: string;
   context: string; // JSON
   decidedAt: number | null;
+  decidedBy: string | null;
+  decisionNote: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -183,14 +187,14 @@ export function listUnresolvedFailures(db: DatabaseSync, projectId: string): Fai
 
 export function createApproval(
   db: DatabaseSync,
-  input: { projectId?: string; kind: ApprovalKind; requestedBy: string; context: Record<string, unknown> },
+  input: { projectId?: string; taskId?: string; kind: ApprovalKind; requestedBy: string; context: Record<string, unknown> },
 ): ApprovalRow {
   const id = randomUUID();
   const now = Date.now();
   db.prepare(
-    `INSERT INTO approvals (id, projectId, kind, status, requestedBy, context, decidedAt, createdAt, updatedAt)
-     VALUES (?, ?, ?, 'PENDING', ?, ?, NULL, ?, ?)`,
-  ).run(id, input.projectId ?? null, input.kind, input.requestedBy, JSON.stringify(input.context), now, now);
+    `INSERT INTO approvals (id, projectId, taskId, kind, status, requestedBy, context, decidedAt, decidedBy, decisionNote, createdAt, updatedAt)
+     VALUES (?, ?, ?, ?, 'PENDING', ?, ?, NULL, NULL, NULL, ?, ?)`,
+  ).run(id, input.projectId ?? null, input.taskId ?? null, input.kind, input.requestedBy, JSON.stringify(input.context), now, now);
   return getApproval(db, id) as unknown as ApprovalRow;
 }
 
@@ -198,16 +202,37 @@ export function getApproval(db: DatabaseSync, id: string): ApprovalRow | undefin
   return db.prepare("SELECT * FROM approvals WHERE id = ?").get(id) as unknown as ApprovalRow | undefined;
 }
 
-export function decideApproval(db: DatabaseSync, id: string, decision: "APPROVED" | "REJECTED"): ApprovalRow {
-  db.prepare("UPDATE approvals SET status = ?, decidedAt = ?, updatedAt = ? WHERE id = ? AND status = 'PENDING'").run(
-    decision,
-    Date.now(),
-    Date.now(),
-    id,
-  );
+/**
+ * Decides a PENDING approval. The `WHERE status = 'PENDING'` guard makes
+ * this idempotent-safe against a double-decision race: a second call
+ * against an already-decided row updates zero rows and simply returns
+ * the (unchanged) row as it already stood — callers that need to know
+ * whether *this* call was the one that actually decided it should check
+ * the returned row's `status`/`decidedBy` against what they expected,
+ * not assume success from the call not throwing.
+ */
+export function decideApproval(
+  db: DatabaseSync,
+  id: string,
+  decision: "APPROVED" | "REJECTED",
+  options: { decidedBy?: string; note?: string } = {},
+): ApprovalRow {
+  db.prepare(
+    "UPDATE approvals SET status = ?, decidedAt = ?, decidedBy = ?, decisionNote = ?, updatedAt = ? WHERE id = ? AND status = 'PENDING'",
+  ).run(decision, Date.now(), options.decidedBy ?? null, options.note ?? null, Date.now(), id);
   return getApproval(db, id) as unknown as ApprovalRow;
 }
 
 export function listPendingApprovals(db: DatabaseSync): ApprovalRow[] {
   return db.prepare("SELECT * FROM approvals WHERE status = 'PENDING' ORDER BY createdAt").all() as unknown as ApprovalRow[];
+}
+
+export function listPendingApprovalsForProject(db: DatabaseSync, projectId: string): ApprovalRow[] {
+  return db
+    .prepare("SELECT * FROM approvals WHERE status = 'PENDING' AND projectId = ? ORDER BY createdAt")
+    .all(projectId) as unknown as ApprovalRow[];
+}
+
+export function listApprovalsForProject(db: DatabaseSync, projectId: string): ApprovalRow[] {
+  return db.prepare("SELECT * FROM approvals WHERE projectId = ? ORDER BY createdAt DESC").all(projectId) as unknown as ApprovalRow[];
 }

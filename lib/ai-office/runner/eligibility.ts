@@ -17,7 +17,16 @@ import type { TaskRow } from "../domain/tasks.ts";
  *   have AgentRunner's existing budget gate refuse it with a proper
  *   event, per "do not silently fall back," rather than this function
  *   silently hiding them)
- * - its project has no unresolved (PENDING) approval blocking it
+ * - it has no PENDING approval blocking it — either a project-wide one
+ *   (`approvals.taskId IS NULL`, Phase 5's original idea-level behavior:
+ *   blocks every task in the project) or one scoped to this exact task
+ *   (`approvals.taskId = t.id`: blocks only this task, leaving sibling
+ *   tasks in the same project eligible). This is the Phase 6
+ *   "exact-scope enforcement" requirement — a task-scoped approval must
+ *   never block unrelated work in the same project, and an approval
+ *   decided for one task/project must never be consulted by any other
+ *   task's eligibility check (each approval row is scoped once, at
+ *   creation, and never re-matched against a different task).
  * - it has no unexpired lease (someone else — or a not-yet-expired
  *   earlier claim — already has it)
  * - every task it depends on is DONE
@@ -37,7 +46,12 @@ export function findEligibleTasks(db: DatabaseSync, asOf: number = Date.now()): 
        WHERE t.status = 'PENDING'
          AND p.status = 'IN_PROGRESS'
          AND (t.leaseExpiresAt IS NULL OR t.leaseExpiresAt < ?)
-         AND NOT EXISTS (SELECT 1 FROM approvals a WHERE a.projectId = p.id AND a.status = 'PENDING')
+         AND NOT EXISTS (
+           SELECT 1 FROM approvals a
+           WHERE a.projectId = p.id
+             AND a.status = 'PENDING'
+             AND (a.taskId IS NULL OR a.taskId = t.id)
+         )
        ORDER BY t.createdAt ASC`,
     )
     .all(asOf) as unknown as TaskRow[];

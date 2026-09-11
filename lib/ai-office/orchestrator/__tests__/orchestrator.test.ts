@@ -137,4 +137,23 @@ describe("planProject", () => {
     first.t.close();
     second.t.close();
   });
+
+  test("an idea matching the deployment-approval signal creates a task-scoped approval on the release task only — the project itself is not BLOCKed", () => {
+    const { t, project } = setup("Build a small web application for tracking reading habits, and deploy to production once it's ready.");
+    const result = planProject(t.db, project.id);
+
+    assert.equal(result.deploymentApprovalRequired, true);
+    assert.equal(result.approvalRequired, false, "the two approval signals are independent");
+    assert.equal(result.project.status, "IN_PROGRESS", "a task-scoped approval must not block the whole project");
+
+    const releaseTask = result.tasks.find((task) => task.roleId === "release-agent")!;
+    const approval = t.db.prepare("SELECT * FROM approvals WHERE projectId = ? AND kind = 'production_deploy'").get(project.id) as {
+      taskId: string;
+      status: string;
+    };
+    assert.equal(approval.taskId, releaseTask.id);
+    assert.equal(approval.status, "PENDING");
+
+    t.close();
+  });
 });

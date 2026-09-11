@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { selectRoles, requiresOwnerApproval } from "../role-selection.ts";
+import { selectRoles, requiresOwnerApproval, requiresDeploymentApproval } from "../role-selection.ts";
 
 describe("selectRoles — deterministic keyword classifier", () => {
   test("a small, unambiguous backend-only idea skips UI/UX and Frontend", () => {
@@ -72,6 +72,24 @@ describe("requiresOwnerApproval — synthetic approval signal", () => {
 
   test("an idea with no approval signal does not require approval", () => {
     const result = requiresOwnerApproval("Build a small tool to reformat CSV files.");
+    assert.equal(result.required, false);
+  });
+});
+
+describe("requiresDeploymentApproval — the second, independent synthetic scope signal", () => {
+  test("an idea mentioning production deployment requires a (task-scoped) deployment approval", () => {
+    const result = requiresDeploymentApproval("Build a small tool and deploy to production once it's ready.");
+    assert.equal(result.required, true);
+    assert.ok(result.matchedSignal);
+  });
+
+  test("an idea with no deployment signal does not require one", () => {
+    const result = requiresDeploymentApproval("Build a small tool to reformat CSV files.");
+    assert.equal(result.required, false);
+  });
+
+  test("the two approval signals are independent — a paid-service idea alone does not also trigger the deployment signal", () => {
+    const result = requiresDeploymentApproval("Integrate a paid service subscription for SMS notifications.");
     assert.equal(result.required, false);
   });
 });

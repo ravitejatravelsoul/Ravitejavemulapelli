@@ -7,7 +7,7 @@ import { insertTaskRow, insertTaskDependencyRow, getTask, type TaskRow } from ".
 import { recordDecision, createApproval } from "../domain/project-outputs.ts";
 import { recordEvent } from "../domain/events.ts";
 import { refreshProjectMemory } from "../domain/project-memory.ts";
-import { selectRoles, requiresOwnerApproval } from "./role-selection.ts";
+import { selectRoles, requiresOwnerApproval, requiresDeploymentApproval } from "./role-selection.ts";
 import { validateTaskGraph, type PlanTaskNode } from "./graph.ts";
 
 /**
@@ -25,6 +25,8 @@ export interface PlanProjectResult {
   selectedRoles: string[];
   rationale: string[];
   approvalRequired: boolean;
+  /** Whether a task-scoped (release-only) `production_deploy` approval was created — distinct from `approvalRequired`, which blocks the whole project. See role-selection.ts's `requiresDeploymentApproval`. */
+  deploymentApprovalRequired: boolean;
 }
 
 /**
@@ -126,6 +128,8 @@ export function planProject(db: DatabaseSync, projectId: string): PlanProjectRes
   }
 
   const approval = requiresOwnerApproval(idea.rawText);
+  const deployApproval = requiresDeploymentApproval(idea.rawText);
+  const releaseNode = planNodes.find((n) => n.roleId === "release-agent");
 
   db.exec("BEGIN");
   try {
@@ -164,6 +168,26 @@ export function planProject(db: DatabaseSync, projectId: string): PlanProjectRes
       updateProjectStatus(db, projectId, "IN_PROGRESS");
     }
 
+    // Task-scoped — never touches project status. Only the release task
+    // itself stays ineligible (eligibility.ts's taskId-aware join) until
+    // this specific approval is decided; every other task keeps
+    // running, including in the same project.
+    if (deployApproval.required && releaseNode) {
+      createApproval(db, {
+        projectId,
+        taskId: releaseNode.id,
+        kind: "production_deploy",
+        requestedBy: "orchestrator",
+        context: { reason: `Idea text matched a synthetic deployment-approval signal: "${deployApproval.matchedSignal}".` },
+      });
+      recordEvent(db, {
+        projectId,
+        type: "approval.required",
+        payload: { matchedSignal: deployApproval.matchedSignal, taskId: releaseNode.id, kind: "production_deploy" },
+        actor: "orchestrator",
+      });
+    }
+
     recordEvent(db, {
       projectId,
       type: "project.planned",
@@ -185,5 +209,6 @@ export function planProject(db: DatabaseSync, projectId: string): PlanProjectRes
     selectedRoles: roles,
     rationale,
     approvalRequired: approval.required,
+    deploymentApprovalRequired: deployApproval.required && !!releaseNode,
   };
 }

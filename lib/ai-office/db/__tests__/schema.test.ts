@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { openDatabase } from "../client.ts";
 import { runMigrations, getSchemaVersion } from "../migrate.ts";
 import { seedAgentRoles, seedOfficeStatus, seedDefaultOfficeBudget, seedAll } from "../seed.ts";
@@ -18,14 +19,14 @@ describe("clean DB creation + migrations from zero", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test("runMigrations on that fresh connection applies migration 001 and reaches version 1", () => {
+  test("runMigrations on that fresh connection applies every migration in order and reaches the latest version", () => {
     const dir = mkdtempSync(join(tmpdir(), "ai-office-fresh-"));
     const db = openDatabase(join(dir, "fresh.db"));
 
     const result = runMigrations(db);
-    assert.equal(result.version, 1);
-    assert.deepEqual(result.applied, ["001-init.sql"]);
-    assert.equal(getSchemaVersion(db), 1);
+    assert.equal(result.version, 2);
+    assert.deepEqual(result.applied, ["001-init.sql", "002-budget-and-approval-scope.sql"]);
+    assert.equal(getSchemaVersion(db), 2);
 
     const tableCount = db
       .prepare("SELECT COUNT(*) as count FROM sqlite_master WHERE type = 'table' AND name != 'sqlite_sequence'")
@@ -42,11 +43,11 @@ describe("migrations are idempotent / safe to run repeatedly", () => {
     const t = createTestDb({ seed: false });
     const first = runMigrations(t.db); // no-op, createTestDb already migrated
     assert.deepEqual(first.applied, []);
-    assert.equal(first.version, 1);
+    assert.equal(first.version, 2);
 
     const second = runMigrations(t.db);
     assert.deepEqual(second.applied, []);
-    assert.equal(second.version, 1);
+    assert.equal(second.version, 2);
     t.close();
   });
 });
@@ -60,8 +61,72 @@ describe("schema version is inspectable", () => {
       version: number;
       name: string;
     }>).map((r) => ({ ...r }));
-    assert.deepEqual(rows, [{ version: 1, name: "001-init.sql" }]);
+    assert.deepEqual(rows, [
+      { version: 1, name: "001-init.sql" },
+      { version: 2, name: "002-budget-and-approval-scope.sql" },
+    ]);
     t.close();
+  });
+});
+
+describe("migration 002 applies cleanly on top of an existing v1 database", () => {
+  test("Phase 1-5 data survives the upgrade, and the new columns/table work afterward", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ai-office-v1-"));
+    const db = openDatabase(join(dir, "v1.db"));
+
+    // Simulate a real pre-Phase-6 database: only migration 001 has ever
+    // been applied (hand-applied here, bypassing runMigrations, so this
+    // test doesn't depend on 002 not existing yet).
+    const sql001 = readFileSync(join(process.cwd(), "lib", "ai-office", "db", "migrations", "001-init.sql"), "utf8");
+    db.exec(sql001);
+    db.exec(
+      "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, appliedAt INTEGER NOT NULL)",
+    );
+    db.prepare("INSERT INTO schema_migrations (version, name, appliedAt) VALUES (1, '001-init.sql', ?)").run(Date.now());
+    assert.equal(getSchemaVersion(db), 1);
+
+    // Real pre-Phase-6 data, written against the v1 schema only (no
+    // taskId/decidedBy/decisionNote columns exist yet at this point).
+    seedAgentRoles(db);
+    seedOfficeStatus(db);
+    seedDefaultOfficeBudget(db);
+    const now = Date.now();
+    db.prepare("INSERT INTO users (id, email, passwordHash, role, createdAt, updatedAt) VALUES ('u1','a@b.c','h','owner',?,?)").run(now, now);
+    db.prepare(
+      "INSERT INTO projects (id, title, status, aiMode, monthlyBudgetCapUsd, ownerId, createdAt, updatedAt) VALUES ('p1','t','DRAFT','SIMULATED',NULL,'u1',?,?)",
+    ).run(now, now);
+    db.prepare(
+      "INSERT INTO approvals (id, projectId, kind, status, requestedBy, context, decidedAt, createdAt, updatedAt) VALUES ('a1','p1','paid_service_purchase','PENDING','orchestrator','{}',NULL,?,?)",
+    ).run(now, now);
+
+    const result = runMigrations(db);
+    assert.deepEqual(result.applied, ["002-budget-and-approval-scope.sql"]);
+    assert.equal(getSchemaVersion(db), 2);
+
+    // The pre-existing rows survive, unmodified except for the new
+    // columns now existing (and being NULL, since this data predates
+    // them).
+    const project = db.prepare("SELECT * FROM projects WHERE id = 'p1'").get();
+    assert.ok(project);
+    const approval = db.prepare("SELECT * FROM approvals WHERE id = 'a1'").get() as {
+      status: string;
+      taskId: string | null;
+      decidedBy: string | null;
+      decisionNote: string | null;
+    };
+    assert.equal(approval.status, "PENDING");
+    assert.equal(approval.taskId, null);
+    assert.equal(approval.decidedBy, null);
+    assert.equal(approval.decisionNote, null);
+
+    // The new table is fully usable afterward.
+    db.prepare(
+      "INSERT INTO budget_reservations (id, projectId, provider, estimatedCostUsd, actualCostUsd, status, periodStart, createdAt, updatedAt) VALUES ('r1','p1','synthetic',1,NULL,'RESERVED',?,?,?)",
+    ).run(now, now, now);
+    assert.ok(db.prepare("SELECT * FROM budget_reservations WHERE id = 'r1'").get());
+
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 
@@ -211,7 +276,7 @@ describe("DB survives reopen/reconnect", () => {
     t.db.close();
 
     const reopened = reopenTestDb(dir);
-    assert.equal(getSchemaVersion(reopened), 1);
+    assert.equal(getSchemaVersion(reopened), 2);
     const roles = reopened.prepare("SELECT COUNT(*) as count FROM agent_roles").get() as { count: number };
     assert.equal(roles.count, AGENT_ROLE_CATALOG.length);
     reopened.close();

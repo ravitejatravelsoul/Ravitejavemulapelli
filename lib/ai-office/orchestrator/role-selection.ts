@@ -20,6 +20,7 @@ const UI_SIGNALS = ["web app", "web application", "website", "ui", "screen", "in
 const SECURITY_SIGNALS = ["auth", "login", "password", "payment", "credit card", "pii", "personal data", "external api", "third-party", "integration", "network"];
 const RESEARCH_SIGNALS = ["explore", "research", "investigate", "unfamiliar", "not sure", "prior art", "feasibility"];
 const APPROVAL_SIGNALS = ["paid service", "purchase", "subscription", "buy a", "external account"];
+const DEPLOY_SIGNALS = ["deploy to production", "production deployment", "ship to production", "go live in production"];
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -103,4 +104,21 @@ export function requiresOwnerApproval(ideaText: string): { required: boolean; ma
   const text = ideaText.toLowerCase();
   const hit = APPROVAL_SIGNALS.find((s) => text.includes(s));
   return hit ? { required: true, matchedSignal: hit } : { required: false };
+}
+
+/**
+ * A second, independent synthetic approval signal — Phase 6's
+ * demonstration that approval *scope* matters
+ * (docs/ai-office/11-implementation-phases.md's Phase 6 status note,
+ * "exact-scope enforcement"). Unlike `requiresOwnerApproval` above
+ * (which blocks the *whole project*, matching Phase 5's original
+ * behavior unchanged), a match here scopes its approval to exactly the
+ * project's `release-agent` task — every other task keeps running.
+ * Deliberately a disjoint keyword set from `APPROVAL_SIGNALS` so the two
+ * triggers can be exercised independently (approving one must never
+ * satisfy the other) without relying on a shared idea text.
+ */
+export function requiresDeploymentApproval(ideaText: string): { required: boolean; matchedSignal?: string } {
+  const hits = includesAny(ideaText, DEPLOY_SIGNALS);
+  return hits.length > 0 ? { required: true, matchedSignal: hits[0] } : { required: false };
 }
