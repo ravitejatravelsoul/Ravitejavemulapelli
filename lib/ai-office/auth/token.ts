@@ -11,17 +11,36 @@ import { SignJWT, jwtVerify } from "jose";
 
 const encoder = new TextEncoder();
 
+/**
+ * Minimum key material for HS256. 32 bytes (256 bits) matches HS256's
+ * output/security strength — the same floor `openssl rand -base64 32`
+ * (the generation command documented in .env.example) is sized for.
+ * Deliberately a simple length check on the exact bytes used as key
+ * material (`encoder.encode(secret)`), not an entropy estimate — no new
+ * dependency required, and a short-but-"random-looking" secret is exactly
+ * the case this needs to catch.
+ */
+const MIN_SESSION_SECRET_BYTES = 32;
+
 export interface OfficeSessionPayload {
   userId: string;
 }
 
+/**
+ * Fails closed for both a missing AND a too-short secret — never pads,
+ * truncates, hashes, or otherwise transforms a weak value into something
+ * "usable." A misconfigured secret means no session can be created or
+ * verified, full stop; see docs/ai-office/08-security-plan.md §2.
+ */
 function getSecretKey(): Uint8Array | null {
   const secret = process.env.OFFICE_SESSION_SECRET;
   if (!secret) return null;
-  return encoder.encode(secret);
+  const keyBytes = encoder.encode(secret);
+  if (keyBytes.length < MIN_SESSION_SECRET_BYTES) return null;
+  return keyBytes;
 }
 
-/** Returns null (rather than throwing) when OFFICE_SESSION_SECRET is unset, so a missing secret fails closed as "no session" instead of crashing route resolution. */
+/** Returns null (rather than throwing) when OFFICE_SESSION_SECRET is unset or too weak, so a bad secret fails closed as "no session" instead of crashing route resolution or silently signing with weak key material. */
 export async function signSessionToken(
   payload: OfficeSessionPayload,
   expiresIn: string,

@@ -146,16 +146,40 @@ Approvals are decided only by the authenticated owner, from the
 `/office/approvals` queue, each with enough context (§ product spec) to
 decide without needing to inspect raw logs.
 
-## 10. Rate limiting (future deployment)
+## 10. Rate limiting — MANDATORY prerequisite before public exposure
 
 Not applicable to a single-user `localhost` MVP with no public write
 endpoints beyond the existing contact form (already unaffected by this
-feature). **If** the Office is ever deployed publicly-reachable (Phase
-10, optional, not planned): add rate limiting to `/office/login` (brute
-force protection) and any Route Handler under `app/api/office/**`,
-following the same reasoning `FIREBASE_MIGRATION.md` §7 already applies
-to the (also unbuilt) contact-message write path — this is a recurring,
-sound pattern in this repo's own planning docs, not a new idea.
+feature) — **not built now, and that's correct for the current
+localhost-only checkpoint.**
+
+But this is not merely a nice-to-have for later: **brute-force/login
+throttling on `/office/login` (and any Route Handler under
+`app/api/office/**`) is a mandatory prerequisite that MUST be implemented
+and verified before `/office/login` is ever reachable from outside
+`localhost`** — whether that's Phase 10's optional deployment or any
+earlier ad-hoc exposure (e.g. a tunnel, a preview URL, port-forwarding).
+The authentication design in this document (§1–§2) has no failed-attempt
+throttling of its own — a correctly-implemented `verifySession()`
+boundary does not protect a password from being brute-forced if nothing
+limits login attempts. Concretely, before any public exposure:
+
+- Rate-limit `/office/login` POST attempts (e.g. per-IP and/or per-email,
+  a sliding window or token-bucket — implementation choice deferred to
+  when this is actually built, not fixed here).
+- Rate-limit every Route Handler under `app/api/office/**`, if any exist
+  by that point.
+- Verify the throttling actually blocks a scripted brute-force attempt
+  before calling this prerequisite satisfied — a rate limiter that's
+  configured but never tested against a real attempt isn't done.
+
+This follows the same reasoning `FIREBASE_MIGRATION.md` §7 already
+applies to the (also unbuilt) contact-message write path — a recurring,
+sound pattern in this repo's own planning docs, not a new idea. See
+[11-implementation-phases.md](./11-implementation-phases.md) Phase 10 for
+where this gate is enforced in the phase plan, and
+[12-definition-of-done.md](./12-definition-of-done.md) for it as an
+explicit Definition-of-Done item.
 
 ## 11. Local vs. deployed security differences
 
@@ -163,7 +187,7 @@ sound pattern in this repo's own planning docs, not a new idea.
 |---|---|---|
 | Transport | HTTP is acceptable locally; cookie `Secure` flag should still be conditionally set (true when `NODE_ENV=production`/HTTPS detected) so the same code path works in both | HTTPS required, `Secure` cookie mandatory |
 | Auth strength | Single password, no MFA | Recommend adding TOTP-based MFA (e.g. via `otpauth`) before any public exposure |
-| Rate limiting | None needed | Required, per §10 |
+| Rate limiting | None needed | **Mandatory prerequisite** — must be implemented and verified before `/office/login` is reachable outside localhost, per §10 |
 | Secrets | `.env.local`, developer's own machine | A real secrets manager or hosting platform's env var store, never committed either way |
 | Session storage | Cookie-only is sufficient | Consider database-backed sessions (§ docs' "Database Sessions" pattern) for revocation-on-demand at scale |
 

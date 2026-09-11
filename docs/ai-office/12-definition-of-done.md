@@ -51,8 +51,33 @@ only when:
    (lease atomicity, crash recovery, timeout enforcement) — a phase that
    touches dispatch, budget, or provider code is not done on test-suite
    green alone if it hasn't also been checked against that section.
+9. From the Phase 1/2 auth checkpoint onward: `OFFICE_SESSION_SECRET`
+   strength is enforced in code (minimum 32 bytes, fails closed for both
+   missing and too-short values, per
+   [08-security-plan.md](./08-security-plan.md) §2) — a phase that
+   touches session/auth code re-confirms this still holds rather than
+   assuming it's untouched.
 
-## 3. Definition of Done for the planning package itself (this task)
+## 3. Deployment Definition of Done (Phase 10 specific — public exposure gate)
+
+Beyond the generic per-phase checklist in §2, Phase 10 additionally
+cannot be considered done — and `/office/login` must not be reachable
+from outside `localhost` — until:
+
+1. Brute-force/login throttling is implemented on `/office/login` and
+   every Route Handler under `app/api/office/**`, per
+   [08-security-plan.md](./08-security-plan.md) §10.
+2. That throttling has been verified against an actual scripted
+   brute-force attempt, not merely configured and assumed to work.
+3. The full "Local vs. deployed security differences" table in
+   [08-security-plan.md](./08-security-plan.md) §11 has been reviewed
+   line by line for the specific deployment target, not just the rate
+   limiting row.
+
+This is a hard gate, not a checklist item that can be deferred to "a
+follow-up" once the Office is already publicly reachable.
+
+## 4. Definition of Done for the planning package itself (this task)
 
 1. All 15 documents + README exist in `docs/ai-office/`.
 2. No contradiction between documents (e.g. the data model matches what

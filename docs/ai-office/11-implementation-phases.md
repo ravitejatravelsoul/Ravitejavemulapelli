@@ -535,17 +535,28 @@ Definition of Done implicitly.
   (this phase is not assumed to happen — see
   [00-master-plan.md](./00-master-plan.md) §2, local-first is the
   standing target).
-- **Implementation tasks**: TBD at the time this phase is actually
+- **Implementation tasks**: Mostly TBD at the time this phase is actually
   greenlit — deliberately not designed in detail now, since the brief
   explicitly says not to design the first implementation around
   deployment, and any concrete choice made today would likely be stale
-  by the time this phase starts.
+  by the time this phase starts. **One task is fixed regardless of what
+  else this phase turns out to involve**: implement and verify
+  brute-force/login throttling on `/office/login` (and any
+  `app/api/office/**` Route Handler) — see
+  [08-security-plan.md](./08-security-plan.md) §10, which names this a
+  mandatory prerequisite, not an optional hardening pass.
 - **Expected files affected**: TBD.
 - **Tests**: TBD, but must include everything in
   [10-testing-strategy.md](./10-testing-strategy.md) §2.13 against the
-  deployed environment, not just localhost.
-- **Acceptance criteria**: TBD.
-- **Definition of Done**: TBD.
+  deployed environment, not just localhost — **plus** a test that a
+  scripted brute-force attempt against `/office/login` is actually
+  blocked by the rate limiter, not merely that one is configured.
+- **Acceptance criteria**: TBD for deployment-specific items, but fixed
+  for one: `/office/login` is never reachable from outside `localhost`
+  without login throttling already in place and verified.
+- **Definition of Done**: TBD, but cannot be reached without the rate
+  limiting task above — see
+  [12-definition-of-done.md](./12-definition-of-done.md).
 - **Risks**: Premature optimization if planned in detail now. Mitigation:
   intentionally deferred.
 - **Rollback**: N/A until scoped.
