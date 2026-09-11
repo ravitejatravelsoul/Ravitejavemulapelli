@@ -6,6 +6,7 @@ import { GlassCard } from "@/components/common/glass-card";
 import { Badge } from "@/components/ui/badge";
 import { ActionButton } from "@/components/ai-office/action-button";
 import { TaskFlow } from "@/components/ai-office/dashboard/task-flow";
+import { AutoRefresh } from "@/components/ai-office/auto-refresh";
 import { pauseProjectAction, resumeProjectAction } from "@/app/office/actions/projects";
 
 export const metadata: Metadata = { title: "Project" };
@@ -24,8 +25,11 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
   const canPause = project.status === "IN_PROGRESS";
   const canResume = project.status === "PAUSED";
 
+  const isActive = project.status === "IN_PROGRESS";
+
   return (
     <div className="flex flex-col gap-6">
+      {isActive && <AutoRefresh />}
       <GlassCard>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -67,7 +71,9 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
       </GlassCard>
 
       <GlassCard>
-        <h2 className="text-sm font-semibold tracking-tight">Task Graph</h2>
+        <h2 className="text-sm font-semibold tracking-tight">
+          Task Graph <span className="font-normal text-muted-foreground">· {tasks.length} steps</span>
+        </h2>
         <div className="mt-4">
           <TaskFlow tasks={tasks} />
         </div>

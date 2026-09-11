@@ -13,6 +13,7 @@ import { ProjectList } from "@/components/ai-office/dashboard/project-list";
 import { ActivityFeed } from "@/components/ai-office/dashboard/activity-feed";
 import { ApprovalsPanel } from "@/components/ai-office/dashboard/approvals-panel";
 import { BudgetPanel } from "@/components/ai-office/dashboard/budget-panel";
+import { AutoRefresh } from "@/components/ai-office/auto-refresh";
 
 /**
  * The real owner dashboard — "Teja's private digital engineering
@@ -35,6 +36,7 @@ export default async function OfficeHomePage() {
 
   return (
     <div className="flex flex-col gap-6">
+      {overview.activeProjects > 0 && <AutoRefresh />}
       <CommandBar officeState={overview.officeState} runnerActivity={runnerActivity} />
       <OverviewCards overview={overview} />
 

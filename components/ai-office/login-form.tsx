@@ -17,11 +17,13 @@ export function OfficeLoginForm() {
       <div className="space-y-2">
         <Label htmlFor="office-email">Email</Label>
         <Input
+          key={state?.email ?? ""}
           id="office-email"
           name="email"
           type="email"
           autoComplete="username"
           required
+          defaultValue={state?.email ?? ""}
           aria-invalid={!!state?.error}
         />
       </div>

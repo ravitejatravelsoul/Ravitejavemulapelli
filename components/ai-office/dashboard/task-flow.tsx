@@ -41,11 +41,13 @@ function computeWaves(tasks: TaskDetailView[]): TaskDetailView[][] {
   return waves;
 }
 
-function TaskCard({ task }: { task: TaskDetailView }) {
+function TaskCard({ task, step }: { task: TaskDetailView; step: number }) {
   return (
-    <div className="w-full rounded-xl border border-border/60 p-3 sm:w-56">
+    <div className="w-full shrink-0 rounded-xl border border-border/60 p-3 sm:w-56">
       <div className="flex items-center justify-between gap-2">
-        <p className="truncate text-xs font-semibold">{task.roleName}</p>
+        <p className="truncate text-xs font-semibold">
+          <span className="text-muted-foreground">{step}.</span> {task.roleName}
+        </p>
         <Badge variant={STATUS_VARIANT[task.status] ?? "outline"} className="shrink-0">
           {task.status.replace(/_/g, " ")}
         </Badge>
@@ -65,21 +67,36 @@ export function TaskFlow({ tasks }: { tasks: TaskDetailView[] }) {
   }
 
   const waves = computeWaves(tasks);
+  const stepById = new Map(waves.flat().map((task, i) => [task.id, i + 1]));
 
   return (
-    <div className="flex flex-col gap-3 overflow-x-auto pb-2 sm:flex-row sm:items-start">
-      {waves.map((wave, index) => (
-        <div key={index} className="flex flex-col gap-3 sm:flex-row sm:items-start">
-          <div className="flex flex-col gap-2">
-            {wave.map((task) => (
-              <TaskCard key={task.id} task={task} />
-            ))}
+    <div className="relative">
+      <div
+        tabIndex={0}
+        role="group"
+        aria-label={`Task sequence, ${tasks.length} steps across ${waves.length} stages. Scrollable horizontally on wide screens.`}
+        className="flex flex-col gap-3 overflow-x-auto pb-2 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring sm:flex-row sm:items-start"
+      >
+        {waves.map((wave, index) => (
+          <div key={index} className="flex flex-col gap-3 sm:flex-row sm:items-start">
+            <div className="flex flex-col gap-2">
+              {wave.map((task) => (
+                <TaskCard key={task.id} task={task} step={stepById.get(task.id)!} />
+              ))}
+            </div>
+            {index < waves.length - 1 && (
+              <ChevronRight className="mx-auto size-4 shrink-0 rotate-90 text-muted-foreground sm:mx-0 sm:mt-6 sm:rotate-0" />
+            )}
           </div>
-          {index < waves.length - 1 && (
-            <ChevronRight className="mx-auto size-4 shrink-0 rotate-90 text-muted-foreground sm:mx-0 sm:mt-6 sm:rotate-0" />
-          )}
-        </div>
-      ))}
+        ))}
+      </div>
+      {waves.length > 1 && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-y-0 right-0 hidden w-10 sm:block"
+          style={{ background: "linear-gradient(to left, color-mix(in oklch, var(--card) 70%, transparent), transparent)" }}
+        />
+      )}
     </div>
   );
 }

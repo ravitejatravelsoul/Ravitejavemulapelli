@@ -7,6 +7,8 @@ import { createOfficeSession, destroyOfficeSession } from "@/lib/ai-office/auth/
 
 export interface OfficeLoginState {
   error?: string;
+  /** Echoed back so the login form can refill it after a failed attempt — React 19 clears uncontrolled form fields on every action submission, success or failure, and retyping a correct email after only mistyping a password is needless friction. Never the password. */
+  email?: string;
 }
 
 /**
@@ -24,18 +26,21 @@ export async function login(
   _prevState: OfficeLoginState | undefined,
   formData: FormData,
 ): Promise<OfficeLoginState> {
+  const rawEmail = formData.get("email");
+  const echoEmail = typeof rawEmail === "string" ? rawEmail : undefined;
+
   const parsed = officeLoginSchema.safeParse({
-    email: formData.get("email"),
+    email: rawEmail,
     password: formData.get("password"),
   });
 
   if (!parsed.success) {
-    return { error: "Enter a valid email and password." };
+    return { error: "Enter a valid email and password.", email: echoEmail };
   }
 
   const isValid = verifyOwnerCredentials(parsed.data.email, parsed.data.password);
   if (!isValid) {
-    return { error: "Invalid email or password." };
+    return { error: "Invalid email or password.", email: parsed.data.email };
   }
 
   const sessionCreated = await createOfficeSession(parsed.data.email);
