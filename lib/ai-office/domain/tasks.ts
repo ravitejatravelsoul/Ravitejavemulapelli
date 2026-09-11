@@ -291,6 +291,31 @@ export function getAgentRun(db: DatabaseSync, id: string): AgentRunRow | undefin
   return db.prepare("SELECT * FROM agent_runs WHERE id = ?").get(id) as unknown as AgentRunRow | undefined;
 }
 
+/**
+ * Walks the forward chain `agent_runs.taskAttemptId -> task_attempts.taskId
+ * -> tasks.projectId` in one query — the authoritative way to answer
+ * "which project does this AgentRun actually belong to," used by
+ * `lib/ai-office/budget/budget-service.ts`'s reconciliation to verify a
+ * caller-supplied `agentRunId` genuinely belongs to the project a budget
+ * reservation was authorized for, rather than trusting a caller-supplied
+ * projectId directly. Every column in this chain is `NOT NULL` with FK
+ * enforcement on, so a `undefined` result means only one thing: no
+ * `agent_runs` row exists with this id at all — there is no way for the
+ * chain itself to be "broken" for a row that does exist.
+ */
+export function resolveProjectIdForAgentRun(db: DatabaseSync, agentRunId: string): string | undefined {
+  const row = db
+    .prepare(
+      `SELECT t.projectId as projectId
+       FROM agent_runs ar
+       JOIN task_attempts ta ON ta.id = ar.taskAttemptId
+       JOIN tasks t ON t.id = ta.taskId
+       WHERE ar.id = ?`,
+    )
+    .get(agentRunId) as { projectId: string } | undefined;
+  return row?.projectId;
+}
+
 export function updateAgentRunStatus(
   db: DatabaseSync,
   id: string,

@@ -1617,6 +1617,117 @@ Definition of Done implicitly.
 > `authorizeBudget()`'s math — a small duplication, kept because sharing
 > logic between the two functions would have coupled reconciliation to
 > authorization's exact internal shape for a handful of lines.
+>
+> **Second post-review correction (same phase, before Phase 7 began)**:
+> the concurrency-safety correction above was itself reviewed, and its
+> reconciliation design had one remaining accounting-integrity gap —
+> `reconcileReservationWithUsage()` accepted caller-supplied `projectId`
+> and `provider` and wrote them straight into the `ai_usage` row,
+> without ever checking they matched the reservation actually being
+> settled. A caller bug (or, later, a real `ClaudeAdapter` bug) could
+> silently attribute spend to the wrong project, or — far worse —
+> reconcile a paid `"anthropic"` reservation while claiming
+> `provider: "simulated"`, which every LIVE budget query excludes by
+> design, making real paid spend invisible to the cap.
+>
+> **Fixed by making the persisted reservation the sole source of
+> financial identity.** `ReconcileWithUsageInput` no longer has
+> `projectId`/`provider` fields at all — removed from the type, not
+> just ignored at runtime, so a caller literally cannot supply them.
+> The function now takes only what genuinely becomes known *after* a
+> provider call completes (`reservationId`, `agentRunId`,
+> `actualCostUsd`, token counts) and, inside the same `BEGIN IMMEDIATE`
+> transaction as before, validates in order: the reservation is
+> `RESERVED`; its `projectId` is non-null; its `provider` isn't
+> `"simulated"` (defense-in-depth — see below); the referenced project
+> still exists; `agentRunId` refers to a real `agent_runs` row; that row
+> resolves to a project (new: `resolveProjectIdForAgentRun()`,
+> `lib/ai-office/domain/tasks.ts` — one query walking the existing,
+> already-FK-enforced `agent_runs.taskAttemptId -> task_attempts.taskId
+> -> tasks.projectId` chain); and that resolved project matches the
+> reservation's exactly. Only after all of that does `projectId`/
+> `provider` get *read from the reservation* and written to `ai_usage` —
+> a caller can no longer mis-supply either, because it no longer
+> supplies them at all. Any failed check throws
+> `ReservationIdentityError` from inside the transaction, which the
+> existing `catch { safeRollback(db); throw error; }` handles exactly
+> like every other failure mode here: the reservation stays `RESERVED`,
+> no `ai_usage` row is created, nothing is partially settled.
+>
+> **Simulated-provider policy, decided and documented explicitly**:
+> `authorizeBudget()` now refuses (throws `ReservationIdentityError`)
+> any request whose `provider === "simulated"`, *before* opening a
+> transaction — this LIVE-only ledger never accepts that provider value
+> at all. `SimulatedAdapter` work keeps using its own, separate,
+> always-authorized path (`lib/ai-office/agents/budget-gate.ts`'s
+> `authorizeBudget({aiMode})`, from Phase 4, entirely unchanged) and
+> never touches `budget-service.ts`. Because a `budget_reservations` row
+> can therefore never be created with `provider = 'simulated'` through
+> the normal path, it becomes *structurally* impossible — not merely
+> checked-for — for a reconciled reservation to ever produce a
+> `"simulated"` `ai_usage` row this way. `reconcileReservationWithUsage()`
+> still asserts `reservation.provider !== "simulated"` defensively, in
+> case a reservation is ever created by some future code path that
+> bypasses `authorizeBudget()` (proven directly by a test that hand-inserts
+> such a row via raw SQL and confirms reconciliation still refuses it).
+>
+> **Token validation, added alongside money validation**: `inputTokens`/
+> `outputTokens` are now validated by a new `toSafeNonNegativeInt()`
+> (`domain/budget.ts`) — rejects negative, non-integer, `NaN`, and
+> unsafe-integer values, throwing a new `InvalidTokenCountError` before
+> any database work, the same "fail fast, before the transaction opens"
+> posture `toCentsStrict()` already had for money.
+>
+> **Schema**: no migration, as anticipated — `budget_reservations`
+> already stored authoritative `projectId`/`provider`, and the
+> `agent_runs -> task_attempts -> tasks -> projects` chain needed to
+> verify `AgentRun` identity already existed with FK enforcement from
+> `001-init.sql`. The entire fix is a validation/query addition at the
+> service layer; nothing needed to be added to persist.
+>
+> **The Phase 7 live-provider financial contract, restated with this
+> correction folded in** (still no `ClaudeAdapter`, still no live
+> provider): (1) `AgentRunner` already knows the Project/Task/AgentRun
+> it's executing (it creates the `AgentRun` row itself, before calling
+> any adapter); (2) the provider adapter estimates cost; (3)
+> `authorizeBudget()` atomically checks and reserves against that
+> estimate, fixing `projectId`/`provider` into the reservation row at
+> creation — this is the one and only moment those two values are ever
+> caller-supplied; (4) the provider executes; (5) on success,
+> `reconcileReservationWithUsage()` receives only the `reservationId`
+> already in hand, the `agentRunId` already in hand, and the real usage
+> numbers — `AgentRunner` never re-states which project/provider this
+> was for, because `BudgetService` already knows and verifies it; (6) on
+> a provider error/timeout/refusal with no cost incurred,
+> `releaseReservation()` frees the hold; (7) the next
+> `authorizeBudget()` call naturally sees the updated committed total.
+> **The live adapter itself must never call `recordAiUsage()` or insert
+> into `ai_usage` directly** — `BudgetService` (via
+> `reconcileReservationWithUsage()`) is the sole writer of LIVE usage
+> history, exactly as it is already the sole writer of reservations;
+> `AgentRunner` remains the sole importer of any provider adapter
+> (`agents/__tests__/import-boundary.test.ts`, unchanged).
+>
+> **Tests**: 8 new in `budget/__tests__/budget-service.test.ts` (41
+> total in that file, up from 33). Covers: same-project reconciliation
+> succeeds; cross-project `AgentRun` is rejected, leaves the reservation
+> `RESERVED`, and creates zero `ai_usage` rows; the resulting `ai_usage`
+> row's provider always matches the reservation's own (`"anthropic"` in,
+> `"anthropic"` out, never anything else); `authorizeBudget()` refuses
+> `provider: "simulated"` outright; two defensive tests hand-inserting a
+> malformed reservation (null `projectId`, `provider: "simulated"`) via
+> raw SQL to prove reconciliation refuses them even though the normal
+> path can never produce them; a missing `AgentRun` is rejected; and
+> negative/non-integer/unsafe-large token counts are all rejected before
+> any database work. 259 total AI Office tests, all green, stable across
+> repeated runs.
+>
+> **Regression**: every existing concurrency, project-cap-concurrency,
+> month-rollover, approval, and simulated-vs-LIVE test still passes
+> unmodified in behavior (only call-site signatures were updated to
+> drop the now-removed `projectId`/`provider` reconciliation fields).
+> The autonomous Runner acceptance suite, dual-runner race test, and
+> Phase 6 dashboard (verified live) all remain green.
 
 - **Objective**: Wire in every owner-facing control:
   Open/Close Office, Pause/Resume Project, budget caps/warnings, and the

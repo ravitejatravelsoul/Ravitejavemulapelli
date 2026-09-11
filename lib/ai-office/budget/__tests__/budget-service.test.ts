@@ -7,7 +7,16 @@ import { createTestDb, reopenTestDb } from "../../db/test-helpers.ts";
 import { getOwner } from "../../domain/users.ts";
 import { createProjectWithIdea, updateProjectStatus, getProject } from "../../domain/projects.ts";
 import { createTask, createTaskAttempt, createAgentRunForAttempt } from "../../domain/tasks.ts";
-import { recordAiUsage, getOfficeBudgetRecord, startOfCurrentMonthUtc, getBudgetReservation, InvalidMoneyError, updateOfficeBudgetCap } from "../../domain/budget.ts";
+import {
+  recordAiUsage,
+  getOfficeBudgetRecord,
+  startOfCurrentMonthUtc,
+  getBudgetReservation,
+  InvalidMoneyError,
+  InvalidTokenCountError,
+  ReservationIdentityError,
+  updateOfficeBudgetCap,
+} from "../../domain/budget.ts";
 import { authorizeBudget, getBudgetSnapshot, reconcileReservationWithUsage, releaseReservation, type AuthorizeBudgetInput, type BudgetAuthorizationResult } from "../budget-service.ts";
 import { requestBudgetIncreaseApproval, approveApproval } from "../../approvals/approval-service.ts";
 
@@ -183,8 +192,6 @@ describe("reservation / reconciliation — atomic, single source of truth per st
       reservationId: authResult.reservationId!,
       actualCostUsd: 8,
       agentRunId,
-      projectId: project.id,
-      provider: "synthetic-live-test",
       inputTokens: 1,
       outputTokens: 1,
     });
@@ -218,8 +225,6 @@ describe("reservation / reconciliation — atomic, single source of truth per st
       reservationId: authResult.reservationId!,
       actualCostUsd: 12,
       agentRunId,
-      projectId: project.id,
-      provider: "synthetic-live-test",
       inputTokens: 1,
       outputTokens: 1,
     });
@@ -244,8 +249,6 @@ describe("reservation / reconciliation — atomic, single source of truth per st
       reservationId: authResult.reservationId!,
       actualCostUsd: 15,
       agentRunId,
-      projectId: project.id,
-      provider: "synthetic-live-test",
       inputTokens: 1,
       outputTokens: 1,
     });
@@ -289,8 +292,6 @@ describe("reservation / reconciliation — atomic, single source of truth per st
       reservationId: authResult.reservationId!,
       actualCostUsd: 5,
       agentRunId,
-      projectId: project.id,
-      provider: "synthetic-live-test",
       inputTokens: 1,
       outputTokens: 1,
     });
@@ -299,8 +300,6 @@ describe("reservation / reconciliation — atomic, single source of truth per st
       reservationId: authResult.reservationId!,
       actualCostUsd: 999,
       agentRunId,
-      projectId: project.id,
-      provider: "synthetic-live-test",
       inputTokens: 1,
       outputTokens: 1,
     });
@@ -328,6 +327,152 @@ describe("reservation / reconciliation — atomic, single source of truth per st
     // The lock must have been released, not left held — a subsequent valid call must succeed normally.
     const result = authorizeBudget(t.db, { projectId: project.id, provider: "synthetic-live-test", estimatedCostUsd: 5 });
     assert.equal(result.status, "AUTHORIZED");
+
+    t.close();
+  });
+});
+
+describe("reservation identity is authoritative — the caller can no longer redefine project/provider at settlement time", () => {
+  test("a reservation reconciled against an AgentRun belonging to the same project succeeds normally", () => {
+    const t = createTestDb();
+    const { project } = setupProject(t);
+    const authResult = authorizeBudget(t.db, { projectId: project.id, provider: "synthetic-live-test", estimatedCostUsd: 10 });
+    const agentRunId = seedAgentRun(t, project.id);
+
+    const reconciled = reconcileReservationWithUsage(t.db, { reservationId: authResult.reservationId!, agentRunId, actualCostUsd: 8, inputTokens: 1, outputTokens: 1 });
+    assert.equal(reconciled.applied, true);
+    assert.equal(reconciled.usage?.projectId, project.id);
+
+    t.close();
+  });
+
+  test("reconciling against an AgentRun that belongs to a DIFFERENT project is rejected, leaves the reservation RESERVED, and creates zero ai_usage rows", () => {
+    const t = createTestDb();
+    const { project: projectA } = setupProject(t);
+    const { project: projectB } = setupProject(t);
+
+    const authResult = authorizeBudget(t.db, { projectId: projectA.id, provider: "synthetic-live-test", estimatedCostUsd: 10 });
+    assert.equal(authResult.status, "AUTHORIZED");
+    const wrongProjectAgentRunId = seedAgentRun(t, projectB.id); // belongs to B, not A
+
+    const usageCountBefore = (t.db.prepare("SELECT COUNT(*) as c FROM ai_usage").get() as { c: number }).c;
+
+    assert.throws(
+      () => reconcileReservationWithUsage(t.db, { reservationId: authResult.reservationId!, agentRunId: wrongProjectAgentRunId, actualCostUsd: 8, inputTokens: 1, outputTokens: 1 }),
+      ReservationIdentityError,
+    );
+
+    const reservation = getBudgetReservation(t.db, authResult.reservationId!);
+    assert.equal(reservation?.status, "RESERVED", "a cross-project mismatch must leave the reservation exactly as it was — RESERVED");
+    assert.equal(reservation?.actualCostUsd, null, "no actual cost may be recorded for a rejected reconciliation");
+
+    const usageCountAfter = (t.db.prepare("SELECT COUNT(*) as c FROM ai_usage").get() as { c: number }).c;
+    assert.equal(usageCountAfter, usageCountBefore, "a rejected cross-project reconciliation must create zero ai_usage rows");
+
+    t.close();
+  });
+
+  test("the resulting ai_usage row always uses the reservation's own provider, never anything a caller could influence", () => {
+    const t = createTestDb();
+    const { project } = setupProject(t);
+    const authResult = authorizeBudget(t.db, { projectId: project.id, provider: "anthropic", estimatedCostUsd: 5 });
+    const agentRunId = seedAgentRun(t, project.id);
+
+    const reconciled = reconcileReservationWithUsage(t.db, { reservationId: authResult.reservationId!, agentRunId, actualCostUsd: 5, inputTokens: 1, outputTokens: 1 });
+    assert.equal(reconciled.usage?.provider, "anthropic", "the ai_usage row's provider must come from the reservation, not any caller-supplied value (the input type no longer even accepts one)");
+
+    t.close();
+  });
+
+  test("authorizeBudget refuses a \"simulated\" provider outright — a paid reservation can therefore never exist with, and never produce, simulated usage", () => {
+    const t = createTestDb();
+    const { project } = setupProject(t);
+    assert.throws(() => authorizeBudget(t.db, { projectId: project.id, provider: "simulated", estimatedCostUsd: 5 }), ReservationIdentityError);
+
+    // No reservation was created by the refused attempt.
+    const reservations = t.db.prepare("SELECT COUNT(*) as c FROM budget_reservations WHERE provider = 'simulated'").get() as { c: number };
+    assert.equal(reservations.c, 0);
+
+    t.close();
+  });
+
+  test("a reservation with no projectId (a malformed/foreign row, not reachable through authorizeBudget) is refused by reconciliation, defensively", () => {
+    const t = createTestDb();
+    const { project } = setupProject(t);
+    const agentRunId = seedAgentRun(t, project.id);
+
+    const id = randomUUID();
+    t.db
+      .prepare(
+        `INSERT INTO budget_reservations (id, projectId, provider, estimatedCostUsd, actualCostUsd, status, periodStart, createdAt, updatedAt)
+         VALUES (?, NULL, 'synthetic-live-test', 5, NULL, 'RESERVED', ?, ?, ?)`,
+      )
+      .run(id, startOfCurrentMonthUtc(), Date.now(), Date.now());
+
+    assert.throws(() => reconcileReservationWithUsage(t.db, { reservationId: id, agentRunId, actualCostUsd: 5, inputTokens: 1, outputTokens: 1 }), ReservationIdentityError);
+    assert.equal(getBudgetReservation(t.db, id)?.status, "RESERVED");
+
+    t.close();
+  });
+
+  test("a reservation with provider = \"simulated\" (a malformed/foreign row) is refused defensively, even though authorizeBudget can never create one", () => {
+    const t = createTestDb();
+    const { project } = setupProject(t);
+    const agentRunId = seedAgentRun(t, project.id);
+
+    const id = randomUUID();
+    t.db
+      .prepare(
+        `INSERT INTO budget_reservations (id, projectId, provider, estimatedCostUsd, actualCostUsd, status, periodStart, createdAt, updatedAt)
+         VALUES (?, ?, 'simulated', 5, NULL, 'RESERVED', ?, ?, ?)`,
+      )
+      .run(id, project.id, startOfCurrentMonthUtc(), Date.now(), Date.now());
+
+    assert.throws(() => reconcileReservationWithUsage(t.db, { reservationId: id, agentRunId, actualCostUsd: 5, inputTokens: 1, outputTokens: 1 }), ReservationIdentityError);
+    assert.equal(getBudgetReservation(t.db, id)?.status, "RESERVED");
+
+    t.close();
+  });
+
+  test("a missing AgentRun is rejected — covers both 'agentRunId does not exist' and 'chain is broken', which are the same case under FK enforcement", () => {
+    const t = createTestDb();
+    const { project } = setupProject(t);
+    const authResult = authorizeBudget(t.db, { projectId: project.id, provider: "synthetic-live-test", estimatedCostUsd: 5 });
+
+    assert.throws(
+      () => reconcileReservationWithUsage(t.db, { reservationId: authResult.reservationId!, agentRunId: "does-not-exist", actualCostUsd: 5, inputTokens: 1, outputTokens: 1 }),
+      ReservationIdentityError,
+    );
+    assert.equal(getBudgetReservation(t.db, authResult.reservationId!)?.status, "RESERVED");
+
+    t.close();
+  });
+
+  test("negative, non-integer, and absurdly large token counts are all rejected before any database work", () => {
+    const t = createTestDb();
+    const { project } = setupProject(t);
+    const authResult = authorizeBudget(t.db, { projectId: project.id, provider: "synthetic-live-test", estimatedCostUsd: 5 });
+    const agentRunId = seedAgentRun(t, project.id);
+
+    assert.throws(
+      () => reconcileReservationWithUsage(t.db, { reservationId: authResult.reservationId!, agentRunId, actualCostUsd: 5, inputTokens: -1, outputTokens: 1 }),
+      InvalidTokenCountError,
+    );
+    assert.throws(
+      () => reconcileReservationWithUsage(t.db, { reservationId: authResult.reservationId!, agentRunId, actualCostUsd: 5, inputTokens: 1.5, outputTokens: 1 }),
+      InvalidTokenCountError,
+    );
+    assert.throws(
+      () => reconcileReservationWithUsage(t.db, { reservationId: authResult.reservationId!, agentRunId, actualCostUsd: 5, inputTokens: NaN, outputTokens: 1 }),
+      InvalidTokenCountError,
+    );
+    assert.throws(
+      () => reconcileReservationWithUsage(t.db, { reservationId: authResult.reservationId!, agentRunId, actualCostUsd: 5, inputTokens: 1, outputTokens: Number.MAX_SAFE_INTEGER + 10 }),
+      InvalidTokenCountError,
+    );
+
+    // None of the rejected attempts may have touched the reservation.
+    assert.equal(getBudgetReservation(t.db, authResult.reservationId!)?.status, "RESERVED");
 
     t.close();
   });
@@ -423,8 +568,6 @@ describe("invalid monetary input is rejected before any database work", () => {
           reservationId: authResult.reservationId!,
           actualCostUsd: NaN,
           agentRunId,
-          projectId: project.id,
-          provider: "x",
           inputTokens: 1,
           outputTokens: 1,
         }),

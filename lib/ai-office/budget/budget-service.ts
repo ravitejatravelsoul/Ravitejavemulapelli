@@ -1,6 +1,7 @@
 import "server-only";
 import type { DatabaseSync } from "node:sqlite";
 import { getProject } from "../domain/projects.ts";
+import { getAgentRun, resolveProjectIdForAgentRun } from "../domain/tasks.ts";
 import { recordEvent, recordAuditEntry } from "../domain/events.ts";
 import {
   startOfCurrentMonthUtc,
@@ -18,10 +19,15 @@ import {
   recordAiUsage,
   toCentsStrict,
   centsToUsd,
+  toSafeNonNegativeInt,
+  ReservationIdentityError,
   type BudgetRecordRow,
   type BudgetReservationRow,
   type AiUsageRow,
 } from "../domain/budget.ts";
+
+/** `SimulatedAdapter` work never enters this financial ledger at all — see the module docblock's "Simulated-provider policy" note. */
+const SIMULATED_PROVIDER = "simulated";
 
 /**
  * The authoritative Phase 6/7 budget gate — "authoritative" meaning:
@@ -62,6 +68,37 @@ import {
  * (`lib/ai-office/domain/budget.ts`'s `sumLiveAiUsageCostFor*`), not
  * filtered here, so there is exactly one place that rule can ever be
  * wrong, not several.
+ *
+ * **Simulated-provider policy — this ledger never accepts `"simulated"`
+ * at all, by construction.** `authorizeBudget()` refuses (throws) a
+ * request whose `provider === "simulated"` outright, before ever
+ * opening a transaction — `SimulatedAdapter` work already has its own,
+ * separate, always-authorized path
+ * (`lib/ai-office/agents/budget-gate.ts`'s `authorizeBudget({aiMode})`,
+ * unchanged since Phase 4) and must never pass through this LIVE-only
+ * gate. Because a `budget_reservations` row can therefore never be
+ * created with `provider = 'simulated'` in the first place, it is
+ * structurally impossible — not just checked-for — for a reconciled
+ * reservation to ever produce a `"simulated"` `ai_usage` row through
+ * this path. `reconcileReservationWithUsage()` still asserts this
+ * defensively (a reservation's `provider` is authoritative and
+ * caller-supplied provider values are never accepted at
+ * reconciliation time either way — see below), in case a reservation
+ * is ever created by some future code path that bypasses
+ * `authorizeBudget()`.
+ *
+ * **Reservation identity is authoritative at reconciliation time.**
+ * `reconcileReservationWithUsage()` takes only what genuinely becomes
+ * known *after* a provider call completes — `reservationId`,
+ * `agentRunId`, `actualCostUsd`, token counts — and derives `projectId`/
+ * `provider` from the persisted reservation row itself, never from
+ * caller input. It additionally verifies the given `agentRunId`
+ * resolves (via `resolveProjectIdForAgentRun()`,
+ * `lib/ai-office/domain/tasks.ts`) to the *same* project the reservation
+ * was authorized for, rejecting (rolling back, creating nothing) any
+ * mismatch. See the "Post-review correction" note in
+ * docs/ai-office/11-implementation-phases.md's Phase 6 status for the
+ * concrete mis-attribution risk this closes.
  */
 
 export type BudgetAuthorizationStatus =
@@ -150,9 +187,16 @@ function findBlockingApproval(db: DatabaseSync, projectId: string, taskId?: stri
 }
 
 export function authorizeBudget(db: DatabaseSync, input: AuthorizeBudgetInput): BudgetAuthorizationResult {
-  // Validated *before* ever taking the write lock — an invalid estimate
-  // is a caller bug, not a business decision, and should fail fast
-  // without touching the database at all.
+  // Validated *before* ever taking the write lock — an invalid estimate,
+  // or a "simulated" provider (which must never enter this LIVE-only
+  // ledger at all — see the module docblock), is a caller bug, not a
+  // business decision, and should fail fast without touching the
+  // database.
+  if (input.provider === SIMULATED_PROVIDER) {
+    throw new ReservationIdentityError(
+      `authorizeBudget() refuses provider "${SIMULATED_PROVIDER}" — simulated work is always authorized through its own separate, free path and must never create a LIVE budget reservation.`,
+    );
+  }
   const estimatedCents = toCentsStrict(input.estimatedCostUsd, "estimatedCostUsd");
 
   const periodStart = startOfCurrentMonthUtc();
@@ -254,10 +298,9 @@ export function authorizeBudget(db: DatabaseSync, input: AuthorizeBudgetInput): 
 
 export interface ReconcileWithUsageInput {
   reservationId: string;
-  actualCostUsd: number;
+  /** The only way `projectId`/`provider` for the resulting `ai_usage` row are determined — never taken from caller input. See the module docblock's "Reservation identity is authoritative" note. */
   agentRunId: string;
-  projectId: string;
-  provider: string;
+  actualCostUsd: number;
   inputTokens: number;
   outputTokens: number;
 }
@@ -280,11 +323,24 @@ export interface ReconcileWithUsageResult {
  * this function inserts *in the same transaction* starts counting
  * instead — there is no code path, and therefore no possible crash
  * point, where the reservation has already flipped to `RECONCILED` but
- * the corresponding `ai_usage` row does not yet exist (the Phase 6 gap
- * this correction closes). If the process dies between `BEGIN
- * IMMEDIATE` and `COMMIT`, the whole transaction rolls back and the
- * reservation is simply still `RESERVED` — safely retriable, exactly
- * like any other interrupted write in this codebase.
+ * the corresponding `ai_usage` row does not yet exist (the earlier
+ * Phase 6 correction this builds on).
+ *
+ * **Identity validation happens before any mutation, in this order**
+ * (all inside the same transaction, so any rejection rolls back
+ * cleanly — the reservation stays `RESERVED`, no `ai_usage` row is
+ * created, nothing is partially settled): (1) the reservation exists
+ * and is `RESERVED` (otherwise this is the pre-existing idempotent
+ * no-op path, `applied: false`); (2) `reservation.projectId` is not
+ * null; (3) `reservation.provider` is not `"simulated"` (defense in
+ * depth — `authorizeBudget()` already refuses to create such a
+ * reservation at all); (4) the referenced project still exists; (5)
+ * `agentRunId` refers to a real `agent_runs` row; (6) that row resolves
+ * (`resolveProjectIdForAgentRun()`) to a project; (7) the resolved
+ * project matches `reservation.projectId` exactly. Only once all seven
+ * hold does `projectId`/`provider` get read from the reservation and
+ * used for the `ai_usage` row — a caller can no longer supply, and
+ * therefore can no longer mis-supply, either value.
  *
  * Idempotent: a reservation not currently `RESERVED` (already
  * reconciled or released by an earlier call) is a no-op —
@@ -300,7 +356,11 @@ export interface ReconcileWithUsageResult {
  * until the owner raises the cap.
  */
 export function reconcileReservationWithUsage(db: DatabaseSync, input: ReconcileWithUsageInput): ReconcileWithUsageResult {
-  toCentsStrict(input.actualCostUsd, "actualCostUsd"); // validated up front, before any DB work
+  // Validated up front, before any DB work — malformed numeric input is
+  // a caller bug, not a business outcome.
+  toCentsStrict(input.actualCostUsd, "actualCostUsd");
+  toSafeNonNegativeInt(input.inputTokens, "inputTokens");
+  toSafeNonNegativeInt(input.outputTokens, "outputTokens");
 
   if (!tryBeginImmediate(db)) {
     throw new Error("reconcileReservationWithUsage: the budget ledger is busy handling another request. Try again shortly.");
@@ -312,11 +372,39 @@ export function reconcileReservationWithUsage(db: DatabaseSync, input: Reconcile
     if (!before || before.status !== "RESERVED") {
       result = { applied: false, reservation: before as BudgetReservationRow, overCap: false };
     } else {
+      if (!before.projectId) {
+        throw new ReservationIdentityError(`Reservation ${input.reservationId} has no projectId and cannot be reconciled.`);
+      }
+      if (before.provider === SIMULATED_PROVIDER) {
+        throw new ReservationIdentityError(
+          `Reservation ${input.reservationId} is a "${SIMULATED_PROVIDER}"-provider reservation and must never be reconciled through this LIVE financial path.`,
+        );
+      }
+      const project = getProject(db, before.projectId);
+      if (!project) {
+        throw new ReservationIdentityError(`Reservation ${input.reservationId} references project ${before.projectId}, which no longer exists.`);
+      }
+      const agentRun = getAgentRun(db, input.agentRunId);
+      if (!agentRun) {
+        throw new ReservationIdentityError(`AgentRun ${input.agentRunId} does not exist.`);
+      }
+      const resolvedProjectId = resolveProjectIdForAgentRun(db, input.agentRunId);
+      if (!resolvedProjectId) {
+        throw new ReservationIdentityError(`AgentRun ${input.agentRunId} does not resolve to a valid TaskAttempt/Task/Project chain.`);
+      }
+      if (resolvedProjectId !== before.projectId) {
+        throw new ReservationIdentityError(
+          `AgentRun ${input.agentRunId} belongs to project ${resolvedProjectId}, but reservation ${input.reservationId} was authorized for project ${before.projectId}.`,
+        );
+      }
+
+      // Identity confirmed — the reservation, not the caller, is now
+      // the source of truth for projectId/provider.
       const reservation = reconcileBudgetReservation(db, input.reservationId, input.actualCostUsd);
       const usage = recordAiUsage(db, {
         agentRunId: input.agentRunId,
-        projectId: input.projectId,
-        provider: input.provider,
+        projectId: before.projectId,
+        provider: before.provider,
         inputTokens: input.inputTokens,
         outputTokens: input.outputTokens,
         costUsd: input.actualCostUsd,
@@ -341,7 +429,7 @@ export function reconcileReservationWithUsage(db: DatabaseSync, input: Reconcile
 
   if (result.overCap) {
     recordEvent(db, {
-      projectId: input.projectId,
+      projectId: result.reservation.projectId,
       type: "budget.overage_detected",
       payload: { reservationId: input.reservationId, actualCostUsd: input.actualCostUsd },
       actor: "system",

@@ -58,6 +58,43 @@ export function centsToUsd(cents: number): number {
   return cents / 100;
 }
 
+/** Thrown for a token count that isn't a small, sane, non-negative integer — the same "reject before touching the database" posture as `InvalidMoneyError`, for a different kind of accounting number. */
+export class InvalidTokenCountError extends Error {}
+
+/**
+ * Validates a token count (`ai_usage.inputTokens`/`outputTokens`):
+ * must be a non-negative, finite, safe integer. Unlike money, token
+ * counts have no fractional/rounding concern — they're rejected outright
+ * rather than coerced if they aren't already an integer.
+ */
+export function toSafeNonNegativeInt(value: number, fieldName = "value"): number {
+  if (typeof value !== "number" || Number.isNaN(value) || !Number.isFinite(value)) {
+    throw new InvalidTokenCountError(`${fieldName} must be a finite number, got ${value}.`);
+  }
+  if (!Number.isInteger(value)) {
+    throw new InvalidTokenCountError(`${fieldName} must be a whole number, got ${value}.`);
+  }
+  if (value < 0) {
+    throw new InvalidTokenCountError(`${fieldName} must not be negative, got ${value}.`);
+  }
+  if (!Number.isSafeInteger(value)) {
+    throw new InvalidTokenCountError(`${fieldName} is outside the safely representable range, got ${value}.`);
+  }
+  return value;
+}
+
+/**
+ * Thrown when a budget reservation's persisted financial identity
+ * (`projectId`, `provider`) cannot be safely tied to the execution being
+ * reconciled against it — a cross-project `AgentRun`, a missing/broken
+ * `AgentRun -> TaskAttempt -> Task -> Project` chain, a reservation with
+ * no `projectId`, or an attempt to reconcile/authorize a `"simulated"`-
+ * provider reservation through this LIVE-only financial path. Always
+ * thrown *before* any mutation — see
+ * `lib/ai-office/budget/budget-service.ts`'s `reconcileReservationWithUsage()`.
+ */
+export class ReservationIdentityError extends Error {}
+
 export type BudgetScope = "office" | "project";
 
 export interface BudgetRecordRow {
