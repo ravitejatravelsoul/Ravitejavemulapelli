@@ -2,13 +2,19 @@
 
 **Status: planning only.** Nothing described here has been implemented.
 Produced on branch `feature/teja-ai-office` (created from a clean
-`master`; not merged, not pushed).
+`master`; pushed to `origin`, planning commit
+`2e837f2f1ebaede28565fcd7ca69bdb189f5d75c`; not merged into `master`).
 
 This is the complete implementation specification for Teja's AI Office —
 a private, owner-only autonomous AI software-development workspace added
 to this portfolio. It was written after a full inspection of the current
 repository, so it reflects what actually exists today, not assumptions
 about a typical Next.js app.
+
+**This whole package is internal planning material**, not public
+content — see [08-security-plan.md](./08-security-plan.md) §12 for the
+exact boundary between what this describes and what the eventual public
+`/ai-office` page may show.
 
 ## Reading order
 

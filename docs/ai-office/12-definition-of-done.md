@@ -46,6 +46,11 @@ only when:
 7. Any new dependency added carries the documented
    reason/alternatives/maintenance/security/cost writeup required by the
    dependency policy in [00-master-plan.md](./00-master-plan.md).
+8. From Phase 5 onward specifically: the Durable Runner's behavior is
+   verified per [10-testing-strategy.md](./10-testing-strategy.md) §2.14
+   (lease atomicity, crash recovery, timeout enforcement) — a phase that
+   touches dispatch, budget, or provider code is not done on test-suite
+   green alone if it hasn't also been checked against that section.
 
 ## 3. Definition of Done for the planning package itself (this task)
 

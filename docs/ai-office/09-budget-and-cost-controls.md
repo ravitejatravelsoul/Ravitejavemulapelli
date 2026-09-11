@@ -19,9 +19,19 @@ directly (enforced by code organization — adapters are only imported
 inside `lib/ai-office/agents/agent-runner.ts` — and confirmed by a test
 in [10-testing-strategy.md](./10-testing-strategy.md)).
 
+This rule holds regardless of *what* triggers `AgentRunner` — whether
+that's the Durable Local Execution Runner's poll loop claiming a task
+in the normal flow (Phase 5+, see
+[03-system-architecture.md](./03-system-architecture.md) §9), or (Phase
+7) a real Claude-backed run. The Durable Runner claims a task and hands
+it to `AgentRunner`; it never talks to a provider adapter itself. Adding
+a live provider in Phase 7 therefore cannot bypass this gate by
+construction — there is no second entry point into provider execution
+for it to use.
+
 ```mermaid
 flowchart TD
-    A[AgentRunner about to run a LIVE task] --> B{OfficeStatus == OPEN?}
+    A[AgentRunner about to run a LIVE task, handed a claimed task by the Durable Runner] --> B{OfficeStatus == OPEN?}
     B -->|no| Z[Refuse, escalate]
     B -->|yes| C[BudgetService.estimate cost via adapter.estimateCost]
     C --> D{project spend + estimate <= project cap AND office spend + estimate <= office cap?}
@@ -70,15 +80,17 @@ Reaching 100% of either the project cap or the office cap:
 
 ## 6. Office open/closed and cost
 
-- `CLOSE OFFICE` → `AgentRunner`'s office-status check (§2, first gate)
-  refuses every run, LIVE or SIMULATED, office-wide, immediately.
-  Combined with "no background scheduler exists before Phase 7" (see
-  [03-system-architecture.md](./03-system-architecture.md) §6), a closed
-  Office has **zero** possible AI spend by construction, not by
-  convention.
-- Reopening does not retroactively run anything skipped — the Orchestrator
-  simply resumes normal dispatch from saved state on the next owner-
-  triggered action.
+- `CLOSE OFFICE` → the Durable Runner's poll loop stops claiming
+  anything on its very next cycle (see
+  [03-system-architecture.md](./03-system-architecture.md) §9.5), and
+  `AgentRunner`'s own office-status check (§2, first gate) is a second,
+  redundant check at execution time — a closed Office has **zero**
+  possible new AI spend by construction, checked at two independent
+  points, not by convention.
+- Reopening does not retroactively run anything skipped — the Durable
+  Runner simply resumes normal claim-and-execute on its next poll cycle
+  from saved state; no owner action beyond "Open Office" is needed to
+  restart dispatch.
 - The brief's caveat — "do not assume external consumer subscriptions
   such as Claude or ChatGPT can automatically be paused by this
   application" — is respected: this system only controls *its own* API

@@ -94,6 +94,8 @@ by users.
 | title | TEXT |
 | status | TEXT — `PENDING`\|`ASSIGNED`\|`IN_PROGRESS`\|`IN_REVIEW`\|`DONE`\|`FAILED`\|`BLOCKED` |
 | attemptCount | INTEGER default 0 |
+| leaseOwnerId | TEXT nullable | set by the Durable Runner on claim, see §8 |
+| leaseExpiresAt | INTEGER nullable | claim expiry / per-attempt timeout, see §8 |
 
 ### `task_dependencies`
 | Column | Type |
@@ -310,3 +312,21 @@ This keeps every agent call's context small and role-appropriate instead
 of dumping the full project history into every prompt — the concrete
 mechanism behind both the cost control and the "don't reread everything"
 requirement.
+
+## 8. Execution leases (durable runner)
+
+`tasks.leaseOwnerId`/`tasks.leaseExpiresAt` (§2) are the entire
+persistence layer the Durable Local Execution Runner needs — no separate
+queue table. A claim is one atomic `UPDATE ... WHERE status = 'PENDING'
+AND (leaseExpiresAt IS NULL OR leaseExpiresAt < now)` statement; SQLite's
+single-writer model makes this a correct mutual-exclusion lock with no
+additional lock service (see
+[03-system-architecture.md](./03-system-architecture.md) §9.3 for the
+full reasoning). `leaseExpiresAt` doubles as the per-attempt timeout
+(§9.6 of that document) and as the signal a crash-recovery sweep uses on
+process start to find interrupted attempts and safely requeue them
+(`attemptCount` is left incremented, so the existing `role.maxRetries`
+ceiling still applies to crash-interrupted attempts — no separate
+"recovery retry budget" is introduced). No new table was added for this
+deliberately — extending the existing `tasks` row keeps the schema
+small, matching "don't overengineer" for a single-user system.

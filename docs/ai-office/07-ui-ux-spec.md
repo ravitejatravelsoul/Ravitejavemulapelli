@@ -70,6 +70,13 @@ An "office floor" visual metaphor, applied with restraint:
 - Recent decisions (from `project_decisions`).
 - "Start New Project" as a persistent, prominent action (not buried).
 
+All of the above reflects durable, server-persisted state (from the
+Durable Local Execution Runner, see
+[03-system-architecture.md](./03-system-architecture.md) §9) — reopening
+`/office` after closing the browser for an hour shows work that
+continued in the background, not a resumed client-side session. The
+dashboard is a window onto that state, not the thing driving it.
+
 ### 4.2 Motion
 
 - Subtle, purposeful: a status tile's color/pulse animates on state

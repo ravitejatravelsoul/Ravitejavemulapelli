@@ -167,7 +167,66 @@ sound pattern in this repo's own planning docs, not a new idea.
 | Secrets | `.env.local`, developer's own machine | A real secrets manager or hosting platform's env var store, never committed either way |
 | Session storage | Cookie-only is sufficient | Consider database-backed sessions (§ docs' "Database Sessions" pattern) for revocation-on-demand at scale |
 
-## 12. What this security plan deliberately does *not* build (yet)
+## 12. Internal documentation boundary
+
+**This entire `docs/ai-office/**` package — this document included — is
+internal planning material, not public content.** It contains
+implementation-level detail (session/cookie mechanics, the full owner
+approval gate list, budget enforcement internals, the data model,
+retry/escalation internals, operational workflow internals) that must
+never reach the public portfolio surface. This is a distinct concern
+from the *product* boundary already covered in
+[01-product-spec.md](./01-product-spec.md) §5 and
+[07-ui-ux-spec.md](./07-ui-ux-spec.md) §2 (what the built `/ai-office`
+page shows visitors) — this section is about the *planning documents
+themselves*, which are far more detailed than anything the public page
+will ever render.
+
+Concretely, never expose to a public audience:
+- Security implementation details (this document, in full).
+- Agent permission internals — the `permittedActions` allowlist
+  mechanism, escalation trigger logic
+  ([04-agent-architecture.md](./04-agent-architecture.md)).
+- Budget enforcement internals — `BudgetService.authorize()`'s decision
+  logic, cap values, pricing tables
+  ([09-budget-and-cost-controls.md](./09-budget-and-cost-controls.md)).
+- Credential design — session signing, cookie handling, secrets masking
+  (this document §2, §6, §8).
+- Retry/escalation implementation — lease/timeout mechanics, crash
+  recovery ([03-system-architecture.md](./03-system-architecture.md)
+  §9, [04-agent-architecture.md](./04-agent-architecture.md) §3, §6).
+- Internal data model details — table/column-level schema
+  ([06-data-model.md](./06-data-model.md)).
+- Operational workflow internals — the orchestration state machine,
+  role-selection rule table
+  ([05-orchestration-workflow.md](./05-orchestration-workflow.md)).
+
+The public `/ai-office` page's content is scoped independently and
+deliberately shallow (per
+[07-ui-ux-spec.md](./07-ui-ux-spec.md) §2: concept, role names,
+one-line responsibilities, a high-level capability flow, a *conceptual*
+architecture sketch, and the ownership disclosure) — an implementer
+building that page should treat this whole `docs/ai-office/` package as
+background research, never as copy to lift from directly.
+
+**Open decision, not resolved by this note**: before this branch is
+ever merged into `master` or any part of it is deployed publicly, a
+decision is needed on *how* this internal package is kept out of the
+public production branch/artifact — e.g. keeping `docs/ai-office/**`
+tracked on `feature/teja-ai-office` (and any successor working branches)
+but excluding it at merge/release time, moving it to a
+gitignored/untracked location before merge, or a build/export step that
+strips internal docs from whatever becomes "the public repo." **Per
+explicit instruction, git history is not to be rewritten to achieve
+this** — the resolution must be forward-only (e.g. a future exclusion
+takes effect from a certain commit onward, not by erasing this package's
+existing history on this branch). Tracked as an open question in
+[14-open-questions.md](./14-open-questions.md) §1; must be resolved
+before Phase 10 (optional deployment) and is worth resolving before any
+`master` merge even for Phases 1–9's local-only work, so it isn't
+decided under time pressure later.
+
+## 13. What this security plan deliberately does *not* build (yet)
 
 - No OAuth/social login — unnecessary complexity for one owner who
   already has a password.

@@ -171,10 +171,15 @@ dependency policy in [00-master-plan.md](./00-master-plan.md).
   not public consumption."* This repository already has an established
   convention for keeping owner-only planning material out of the public
   repo. `docs/ai-office/**` (this package) is arguably the same category
-  and should be added to that `.gitignore` block — flagged as a decision
-  for Raviteja rather than made unilaterally here (see
-  [14-open-questions.md](./14-open-questions.md)); no `.gitignore` change
-  has been made in this task.
+  — and, per
+  [08-security-plan.md](./08-security-plan.md) §12, is now explicitly
+  classified as internal planning material regardless of how this
+  particular question is resolved — and could be added to that
+  `.gitignore` block. Flagged as a decision for Raviteja rather than made
+  unilaterally here (see [14-open-questions.md](./14-open-questions.md)
+  §1, which also covers the "no git history rewrite" constraint on
+  whatever is decided); no `.gitignore` change has been made in this
+  task.
 
 ## 10. Files & directories AI Office may safely use (read/reference, no modification needed)
 

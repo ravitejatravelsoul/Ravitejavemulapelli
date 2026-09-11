@@ -43,7 +43,10 @@ for an audience of one.
    required (not all projects need all roles), and produces a task plan.
 5. Tasks execute — simulated or live, depending on the current AI mode —
    with visible status on the project page: current task, agent, and
-   activity feed.
+   activity feed. Execution continues on its own, in the background,
+   whether or not Raviteja keeps `/office` open — he can close the tab,
+   close the laptop, and check back later to find work has advanced (see
+   [03-system-architecture.md](./03-system-architecture.md) §9).
 6. QA failures route back to the responsible agent automatically, up to a
    configured retry limit, then escalate to the owner if still failing.
 7. Security review and code review gates run before the project can reach

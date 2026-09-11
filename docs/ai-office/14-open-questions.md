@@ -6,20 +6,44 @@ silently assumed. Nothing in the rest of this package depends on these
 being resolved a particular way; each notes what changes if resolved
 differently.
 
-## 1. Should `docs/ai-office/**` be gitignored, like the other private planning docs?
+## 1. How is `docs/ai-office/**` kept out of a public production branch/artifact — and when must that be decided?
 
 This repo already excludes `ADMIN_SPEC.md`, `CMS_ARCHITECTURE.md`,
 `FIREBASE_MIGRATION.md`, `LAUNCH.md`, `MEDIA_GUIDE.md`, `AGENTS.md`, and
 `CLAUDE.md` from version control with an explicit "private planning/ops
-notes" comment. This new package is arguably the same category — maybe
-more so, since it describes a system whose entire premise is privacy.
-**Not changed in this task** (a `.gitignore` edit wasn't requested and
-felt like a decision worth surfacing rather than making). If yes: add
-`/docs/ai-office/` to the existing private-docs block in `.gitignore`.
-If no: it stays tracked, e.g. because Raviteja wants it visible as a
-portfolio artifact showing planning rigor to recruiters — a legitimate
-reason given the audience this repo already writes for (`README.md`
-Author/Contact section).
+notes" comment. This new package is now explicitly classified as
+internal planning material regardless (see
+[08-security-plan.md](./08-security-plan.md) §12) — the open question is
+purely *mechanism and timing*, not *whether*:
+
+- **Mechanism options**: (a) add `/docs/ai-office/` to the existing
+  private-docs block in `.gitignore` going forward (stops future commits
+  from tracking it further, doesn't remove what's already tracked); (b)
+  keep it tracked on working branches like `feature/teja-ai-office` for
+  development visibility, but exclude it at merge/release time (e.g. a
+  merge-time filter, or simply never merging this directory into
+  `master`, keeping it a branch-local artifact); (c) a build/export step
+  that produces "the public repo" as a derived artifact with internal
+  docs stripped, leaving the full history intact in the working
+  repository. Not decided here.
+- **Timing**: this does **not** need to be resolved before Phase 1
+  implementation starts (this task's own instruction was explicit: keep
+  working on the current feature branch normally for now). It **does**
+  need to be resolved before any merge of this work into `master`, and
+  certainly before Phase 10 (optional deployment).
+- **Hard constraint on any option chosen**: **git history is not to be
+  rewritten** to achieve this (explicit instruction — no `filter-branch`,
+  no history-rewriting removal of this package from past commits on this
+  branch). Whatever mechanism is picked must work forward from wherever
+  the codebase is when the decision is made, not by erasing that this
+  package existed in history.
+- A legitimate reason to lean toward keeping some or all of it publicly
+  visible eventually: Raviteja may want it visible as a portfolio
+  artifact demonstrating planning rigor to recruiters — a real
+  consideration given the audience this repo already writes for
+  (`README.md` Author/Contact section) — which is exactly why this is
+  framed as a mechanism/timing question for him to resolve, not a
+  foregone "hide everything" conclusion.
 
 ## 2. SQLite driver: `node:sqlite` vs. `better-sqlite3`?
 
@@ -32,14 +56,26 @@ checked against the real environment, not decided from the README's
 stated "Node.js 20+" floor alone. See
 [06-data-model.md](./06-data-model.md) §1.
 
-## 3. Test runner choice
+## 3. Durable Runner implementation shape: in-process singleton vs. standalone companion process
+
+[03-system-architecture.md](./03-system-architecture.md) §9.7 lays out
+both options (Option A: `instrumentation.ts`-based in-process singleton;
+Option B: a standalone `npm run office:runner` script) with a lean
+toward Option A for single-command developer experience, but leaves the
+final call to whoever implements Phase 5 — largely because Option A's
+viability depends on verifying `instrumentation.ts`'s exact current
+behavior against the installed Next.js version's own docs (per
+`AGENTS.md`) at implementation time, not on anything decidable from this
+package alone.
+
+## 4. Test runner choice
 
 Vitest is recommended (fast, TypeScript-native, no config-file sprawl,
 pairs naturally with a future component-testing need) but not installed
 or committed to in this planning task. See
 [10-testing-strategy.md](./10-testing-strategy.md) §1.
 
-## 4. Notification delivery for "project ready for review"
+## 5. Notification delivery for "project ready for review"
 
 The product spec (§3.2) commits only to an in-app activity feed
 notification at minimum. Whether to add anything beyond that — desktop
@@ -48,7 +84,7 @@ unnecessary SaaS dependencies" and local-first, the likely answer is
 "in-app only, indefinitely," but this is Raviteja's call, not assumed
 here.
 
-## 5. Should Orchestrator role-selection ever become an LLM call itself?
+## 6. Should Orchestrator role-selection ever become an LLM call itself?
 
 [05-orchestration-workflow.md](./05-orchestration-workflow.md) §1 notes
 this as a possible Phase 7+ enhancement (better judgment on ambiguous
@@ -59,23 +95,30 @@ strictly additive (a new option behind the same interface), never a
 required rewrite of the deterministic path, so simulated-mode testing
 keeps working unchanged.
 
-## 6. Standalone service for long-running LIVE multi-agent runs?
+## 7. Heavier background infrastructure for very long-running LIVE multi-agent operations?
 
-[03-system-architecture.md](./03-system-architecture.md) §8 rejects a
-separate app/service for the current design (everything is
-request/response driven from the owner's browser). If a genuine
-long-running background-worker need emerges once real Claude-backed runs
-are in daily use (Phase 7+), this decision should be revisited with real
-usage data, not re-litigated speculatively now.
+Superseded in part by the Durable Runner decision (§9 of
+[03-system-architecture.md](./03-system-architecture.md)) — a lightweight
+local poll loop now exists starting in Phase 5, so this is no longer
+"should any background execution exist at all" (resolved: yes, locally,
+zero infra). What remains genuinely open: if a real Claude-backed run
+(Phase 7+) turns out to need wall-clock time far beyond the per-attempt
+timeout default (§9.6 of that document — e.g. a single agent step that
+legitimately needs tens of minutes), whether to raise that timeout, add
+a checkpoint/resume mechanism within a single task, or introduce a
+heavier worker specifically for long operations. [03](./03-system-architecture.md)
+§9.8 already sketches the evolution path (swap the trigger, keep the
+claim/execute/lease logic) if this is ever needed — revisit with real
+Phase 7/8 usage data, not speculatively now.
 
-## 7. MFA and stronger auth timeline
+## 8. MFA and stronger auth timeline
 
 [08-security-plan.md](./08-security-plan.md) §11 recommends TOTP-based
 MFA "before any public exposure" but doesn't fix a phase for adding it —
 tied to the (also open, see §10 of that plan and Phase 10 here) decision
 of *whether and when* to deploy beyond localhost at all.
 
-## 8. Per-role budget sub-allocation
+## 9. Per-role budget sub-allocation
 
 [09-budget-and-cost-controls.md](./09-budget-and-cost-controls.md) §9
 explicitly scopes this out of the initial design as unnecessary
@@ -84,7 +127,7 @@ data shows a need. No decision needed now; revisit only if Phase 8/9
 usage data suggests one role dominates spend in a way the owner wants
 visibility or a cap on specifically.
 
-## 9. Exact wording/visual identity for the public ownership disclosure
+## 10. Exact wording/visual identity for the public ownership disclosure
 
 The product spec and UI/UX spec both require a disclosure statement
 ("this is a privately operated workspace belonging to Raviteja

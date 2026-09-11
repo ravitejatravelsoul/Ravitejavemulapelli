@@ -80,16 +80,29 @@ provider work begins.
 
 - Tasks form a DAG per project (`task_dependencies` table, see
   [06-data-model.md](./06-data-model.md) §2).
-- The Orchestrator's dispatch loop: find all tasks in `PENDING` whose
-  dependencies are all `DONE`, and whose project is `IN_PROGRESS` (not
-  `PAUSED`/`BLOCKED`) and whose Office is `OPEN` → assign to `AgentRunner`
-  in dependency order. No parallel execution ambiguity is needed at this
-  scale (single user, modest task graphs) — simple topological dispatch
-  is sufficient; true concurrent multi-agent execution is a later
-  optimization, not a Phase 4–6 requirement.
+- **Planning vs. dispatch are two different moments.** The Orchestrator
+  builds the DAG synchronously when a project is created (or when an
+  escalation is resolved and work resumes) — this is a normal Server
+  Action, done and returned within the request. *Dispatch* — finding all
+  tasks in `PENDING` whose dependencies are all `DONE`, whose project is
+  `IN_PROGRESS` (not `PAUSED`/`BLOCKED`), and whose Office is `OPEN`, then
+  claiming and executing one — is performed by the **Durable Local
+  Execution Runner**'s poll loop
+  ([03-system-architecture.md](./03-system-architecture.md) §9), running
+  independently of any browser session. This is what makes "the
+  workflow must not depend on keeping `/office` open" true: the DAG,
+  once planned, keeps advancing on its own as long as the runner's
+  process is running.
+- No parallel execution ambiguity is needed at this scale (single user,
+  modest task graphs) — simple topological dispatch, one claim per poll
+  cycle (or a small batch), is sufficient; true concurrent multi-agent
+  execution is a later optimization, not a Phase 4–6 requirement.
 - A failed task returns to its owning role (not to a different role) —
   QA failure re-opens the *developer* task that produced the artifact
-  under test, per §3.1, not the QA task itself.
+  under test, per §3.1, not the QA task itself. Re-opening a task simply
+  sets it back to `PENDING` with its dependency edges intact, so the
+  next poll cycle picks it up the same way any other eligible task would
+  — no special-cased "retry" code path distinct from ordinary dispatch.
 
 ## 5. Quality gates (must pass before `READY_FOR_REVIEW`)
 
@@ -141,10 +154,12 @@ asking, unless the missing information is one of:
 
 | Action | Effect |
 |---|---|
-| OPEN OFFICE | `OfficeStatus.state = OPEN`; Orchestrator dispatch loop resumes for all non-paused projects |
+| OPEN OFFICE | `OfficeStatus.state = OPEN`; the Durable Runner's poll loop resumes claiming for all non-paused projects on its next cycle |
 | CLOSE OFFICE | `OfficeStatus.state = CLOSED`; no new `AgentRun` is started anywhere; in-flight SIMULATED runs (near-instant) may finish, in-flight LIVE runs are not started in the first place because the gate is checked before invocation, not mid-call |
-| PAUSE PROJECT | `Project.status = PAUSED`; Orchestrator skips its tasks in dispatch; state fully preserved |
-| RESUME PROJECT | `Project.status` returns to `IN_PROGRESS`; dispatch resumes exactly where the dependency graph left off — no re-planning, no lost work |
+| PAUSE PROJECT | `Project.status = PAUSED`; the Durable Runner's eligibility query excludes its tasks; state fully preserved |
+| RESUME PROJECT | `Project.status` returns to `IN_PROGRESS`; the Durable Runner picks dispatch back up exactly where the dependency graph left off on its next cycle — no re-planning, no lost work |
 
 No agent role ever calls these controls itself — they are owner-only
-Server Actions (see [08-security-plan.md](./08-security-plan.md)).
+Server Actions (see [08-security-plan.md](./08-security-plan.md)). See
+[03-system-architecture.md](./03-system-architecture.md) §9.5 for the
+exact poll-cycle-level mechanics behind this table.

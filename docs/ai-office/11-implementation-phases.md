@@ -34,10 +34,26 @@ Definition of Done implicitly.
 
 ## Phase 1 — Portfolio integration and public AI Office entrance
 
+> **Combined release checkpoint with Phase 2's login shell.** The public
+> "Enter AI Office" button must never ship pointing at a 404 or an
+> unbuilt route. Phase 1 and the *minimal* portion of Phase 2 (§ below —
+> `proxy.ts`, session lib, login form, a restricted-looking but otherwise
+> empty `/office` landing) are implemented and released **together**,
+> even though they remain two separate phases for scope/effort
+> accounting and can be built in either order (they have no technical
+> dependency on each other, only this shared release gate). Phase 1 is
+> not considered complete in isolation — see its Definition of Done
+> below. Phase 2's *remaining* scope (the real, populated dashboard) can
+> ship immediately afterward without any further public-facing change,
+> since the entrance already resolves to something intentional.
+
 - **Objective**: Add the public `/ai-office` preview page and its single
-  entry point, with zero effect on existing routes.
+  entry point, with zero effect on existing routes — and ensure that
+  entry point always leads somewhere intentional, never a 404.
 - **Scope**: `app/ai-office/page.tsx` and its section components; a
-  navbar link; robots/sitemap updates.
+  navbar link; robots/sitemap updates. (The login destination itself is
+  Phase 2's scope — see the checkpoint note above for why both ship
+  together.)
 - **Prerequisites**: Phase 0 approved by owner.
 - **Implementation tasks**:
   1. Build `/ai-office` per [07-ui-ux-spec.md](./07-ui-ux-spec.md) §2,
@@ -48,9 +64,10 @@ Definition of Done implicitly.
      rule now costs nothing and prevents forgetting it later); ensure
      `/ai-office` is crawlable.
   4. Update `app/sitemap.ts` to include `/ai-office`.
-  5. The "Enter AI Office" button links to `/office` — acceptable to
-     404 until Phase 2 ships it, or ship Phase 1+2 together; either is
-     fine, called out as an implementer choice.
+  5. The "Enter AI Office" button links to `/office` — this route must
+     resolve to Phase 2's minimal login shell (task 1 of Phase 2) before
+     Phase 1 is considered shippable. Do not release Phase 1's public
+     entrance on its own with `/office` unresolved.
 - **Expected files affected**: `app/ai-office/**` (new),
   `components/layout/navbar.tsx`, `app/robots.ts`, `app/sitemap.ts`.
 - **Tests**: Visual/manual (per §2.12/2.13 of the testing strategy);
@@ -58,32 +75,52 @@ Definition of Done implicitly.
 - **Acceptance criteria**: Public page matches §2's content requirements
   (including the ownership disclosure), no private information present,
   passes the same accessibility bar as the rest of the site, existing
-  pages unaffected.
+  pages unaffected, and "Enter AI Office" resolves to a real, intentional
+  restricted-owner experience (Phase 2's minimal login shell) rather than
+  a 404.
 - **Definition of Done**: Page live on `localhost`, `npm run build`
-  clean, nav/robots/sitemap changes reviewed.
-- **Risks**: Navbar layout regression on mobile (shared component). 
+  clean, nav/robots/sitemap changes reviewed, **and** the entrance button
+  verified to lead to a working `/office/login` (i.e. Phase 2 task 1 is
+  done in the same release).
+- **Risks**: Navbar layout regression on mobile (shared component).
   Mitigation: test at the existing mobile breakpoint used elsewhere.
-- **Rollback**: Revert the 4 touched files; delete `app/ai-office/`.
+- **Rollback**: Revert the 4 touched files; delete `app/ai-office/`. If
+  rolling back Phase 1 alone (keeping the combined-checkpoint login
+  shell), the entrance button reverts too — the two are released
+  together specifically so this never happens in production, only as a
+  pre-release rollback.
 - **Effort**: Small.
 
 ---
 
 ## Phase 2 — Private authentication and owner dashboard shell
 
+> See the Phase 1 checkpoint note above — task 1 below ships together
+> with Phase 1 as a combined release; tasks 2+ (the populated dashboard)
+> can follow immediately after without any further change to the public
+> entrance.
+
 - **Objective**: Stand up `/office/login` and an authenticated, empty
   dashboard shell — auth works end to end before any real feature sits
-  behind it.
+  behind it, and the public entrance always resolves to this rather than
+  an unbuilt route.
 - **Scope**: `proxy.ts`, DAL, session lib, login Server Action, owner
   seed, dashboard shell layout (no live data yet — static/placeholder
   sections).
-- **Prerequisites**: Phase 1 (nav entry exists; not a hard technical
-  dependency, just logical sequencing).
-- **Implementation tasks**: Per
-  [08-security-plan.md](./08-security-plan.md) §1–2 exactly — session
-  secret, `jose` signing, HttpOnly cookie, `proxy.ts` optimistic check,
-  `verifySession()` DAL, owner seed script/route, login form + Server
-  Action, `app/office/layout.tsx` enforcing auth, empty dashboard
-  sections as placeholders for Phase 3+ data.
+- **Prerequisites**: Phase 1's page/nav work (logically paired, not a
+  hard technical dependency — see the combined-checkpoint note).
+- **Implementation tasks**:
+  1. **Minimal login shell (ships with Phase 1)**: `proxy.ts`, session
+     secret, `jose` signing, HttpOnly cookie, optimistic redirect check,
+     `verifySession()` DAL, owner seed script/route, login form + Server
+     Action, and an `app/office/page.tsx` that — once authenticated —
+     shows at minimum a "signed in, dashboard coming soon" state rather
+     than a blank page. This alone is enough for "Enter AI Office" to be
+     an intentional, restricted, owner-only experience.
+  2. **Full dashboard shell**: `app/office/layout.tsx` enforcing auth
+     app-wide for `/office/**`, the real (still data-empty, per Phase
+     3+) dashboard sections per
+     [07-ui-ux-spec.md](./07-ui-ux-spec.md) §4.
 - **Expected files affected**: `proxy.ts` (new),
   `lib/ai-office/auth/**` (new), `app/office/login/**` (new),
   `app/office/layout.tsx`, `app/office/page.tsx` (new),
@@ -95,12 +132,15 @@ Definition of Done implicitly.
   valid session; login/logout work; public site still needs zero env
   vars; `/ai-office` unaffected.
 - **Definition of Done**: All §2.4 tests pass; manual login/logout
-  verified in a browser.
+  verified in a browser; task 1 confirmed live at the same time as
+  Phase 1's public entrance (see checkpoint note).
 - **Risks**: `proxy.ts` matcher too broad, adding latency/risk to public
   routes. Mitigation: matcher scoped to `/office/:path*` only, tested
   explicitly.
 - **Rollback**: Remove the listed new files/dirs; `proxy.ts` deletion
-  fully restores pre-Office routing behavior.
+  fully restores pre-Office routing behavior — but see the Phase 1
+  rollback note: rolling this back also means reverting Phase 1's
+  entrance button, since the two ship as one checkpoint.
 - **Effort**: Medium.
 
 ---
@@ -118,8 +158,16 @@ Definition of Done implicitly.
 - **Implementation tasks**: Choose SQLite driver (§ open decision in
   [06-data-model.md](./06-data-model.md) §1 — document the choice made,
   with the "reason/alternatives/maintenance/security/cost" writeup the
-  dependency policy requires); write schema + migrations; write one
-  repository per table group; seed `agent_roles` from the catalog in
+  dependency policy requires); write schema + migrations, **including**
+  the `tasks.leaseOwnerId`/`leaseExpiresAt` columns per
+  [06-data-model.md](./06-data-model.md) §8 (schema-only here — the
+  Durable Runner that actually uses them arrives in Phase 5, but the
+  columns exist from this phase so Phase 5 doesn't need a migration of
+  its own); write one repository per table group, including an atomic
+  claim method (`claimEligibleTask()`) implementing the compare-and-swap
+  update in
+  [03-system-architecture.md](./03-system-architecture.md) §9.3, even
+  though nothing calls it yet; seed `agent_roles` from the catalog in
   [04-agent-architecture.md](./04-agent-architecture.md) §1; choose and
   add the test runner (§ open decision in
   [10-testing-strategy.md](./10-testing-strategy.md) §1, same
@@ -151,10 +199,16 @@ Definition of Done implicitly.
 
 - **Objective**: Run the brief's full required scenario (idea → ... →
   approval, including QA failure/retry) end to end using
-  `SimulatedAdapter`, at $0.
+  `SimulatedAdapter`, at $0. **Deliberately without the Durable Runner
+  yet** — tasks are advanced by direct, manual calls to
+  `AgentRunner.execute()` in this phase, proving the state machine and
+  the `SimulatedAdapter` contract are correct in isolation before adding
+  the dispatch/claim/lease machinery on top in Phase 5. This keeps each
+  phase's surface area reviewable on its own.
 - **Scope**: `lib/ai-office/providers/**` (interface +
   `SimulatedAdapter` + fixtures), `lib/ai-office/agents/agent-runner.ts`.
-- **Prerequisites**: Phase 3 (data engine) complete.
+- **Prerequisites**: Phase 3 (data engine, including the lease columns
+  and `claimEligibleTask()` repository method) complete.
 - **Implementation tasks**: Define `AIProviderAdapter` interface per
   [04-agent-architecture.md](./04-agent-architecture.md) §4; build
   `SimulatedAdapter` with at least one success and one failure fixture
@@ -162,7 +216,9 @@ Definition of Done implicitly.
   [04-agent-architecture.md](./04-agent-architecture.md) §5 (without the
   budget gate yet — that's Phase 6 — but structured so adding it later
   doesn't require a rewrite, i.e. the call site for the gate exists as a
-  no-op hook).
+  no-op hook); `AgentRunner.execute()` is written to accept an
+  already-claimed task, so it needs no changes when Phase 5 starts
+  calling it from the real claim loop instead of a test harness.
 - **Expected files affected**: `lib/ai-office/providers/**` (new),
   `lib/ai-office/agents/**` (new).
 - **Tests**: Workflow/state-machine test per
@@ -183,35 +239,80 @@ Definition of Done implicitly.
 
 ---
 
-## Phase 5 — Orchestrator
+## Phase 5 — Orchestrator and Durable Local Execution Runner
 
-- **Objective**: Replace hand-triggered task creation (used for Phase 4
-  testing) with the real Orchestrator — idea in, full task plan and role
-  selection out, automatically.
-- **Scope**: `lib/ai-office/orchestrator/**`.
+- **Objective**: Replace hand-triggered task creation and execution
+  (used for Phase 4 testing) with the real Orchestrator (planning) and
+  the Durable Local Execution Runner (dispatch) — idea in, full task
+  plan and role selection out automatically, and from this phase on,
+  work keeps advancing whether or not the owner's browser is open. This
+  is the phase that actually delivers the brief's "must not depend on
+  keeping `/office` open" requirement — everything before it is
+  necessary scaffolding, this is where it becomes true.
+- **Scope**: `lib/ai-office/orchestrator/**` (planning: role selection,
+  task-plan creation, quality gates) and `lib/ai-office/runner/**`
+  (dispatch: the poll loop, claim/lease logic, crash-recovery sweep) —
+  see [03-system-architecture.md](./03-system-architecture.md) §9 for
+  the full design both of these implement.
 - **Prerequisites**: Phase 4.
-- **Implementation tasks**: Implement the role-selection rule table
-  ([05-orchestration-workflow.md](./05-orchestration-workflow.md) §2);
-  implement the dispatch loop (§4); implement quality gates (§5); wire
-  the "Start New Project" flow (Server Action → Orchestrator) into the
-  dashboard shell from Phase 2.
+- **Implementation tasks**:
+  1. **Orchestrator (planning)**: role-selection rule table
+     ([05-orchestration-workflow.md](./05-orchestration-workflow.md)
+     §2); quality gates (§5); wire the "Start New Project" flow (Server
+     Action → Orchestrator, plan-and-return, no inline execution) into
+     the dashboard shell from Phase 2.
+  2. **Durable Runner (dispatch)**: implement `runOneCycle()` — read
+     `OfficeStatus`, find eligible tasks (dependencies met, project
+     `IN_PROGRESS`, no live lease), call the Phase 3
+     `claimEligibleTask()` repository method, invoke
+     `AgentRunner.execute()`, persist results, enqueue the next eligible
+     task — per
+     [03-system-architecture.md](./03-system-architecture.md) §9.2–9.6.
+  3. Implement the startup crash-recovery sweep (§9.6 of that document).
+  4. Choose and implement the process shape — Option A (in-process
+     singleton via `instrumentation.ts`, verified against
+     `node_modules/next/dist/docs/` first) or Option B (standalone
+     companion script) — per
+     [03-system-architecture.md](./03-system-architecture.md) §9.7;
+     document the choice made with the same reason/alternatives writeup
+     used for other implementer decisions in this package.
+  5. Wrap `runOneCycle()` in the chosen timer/process shell, with the
+     poll interval and per-attempt timeout both configurable, sane
+     defaults per §9.5–9.6 of that document.
 - **Expected files affected**: `lib/ai-office/orchestrator/**` (new),
-  `app/office/actions/project.ts` (new), `app/office/projects/**` (new
-  pages: list, new, detail).
-- **Tests**: Re-run the Phase 4 workflow test, now via the real
-  Orchestrator instead of manually seeded tasks (same acceptance
-  criteria as Phase 4, proving the Orchestrator reproduces the same
-  behavior); role-selection unit tests per §2.1.
+  `lib/ai-office/runner/**` (new), `app/office/actions/project.ts`
+  (new), `app/office/projects/**` (new pages: list, new, detail), and
+  either `instrumentation.ts` (Option A) or a new `npm run office:runner`
+  script entry in `package.json` (Option B).
+- **Tests**: Re-run the Phase 4 workflow test twice — once via the real
+  Orchestrator + direct `AgentRunner.execute()` calls (proving planning
+  is correct), once via repeated `runOneCycle()` calls (proving dispatch
+  is correct) — per
+  [10-testing-strategy.md](./10-testing-strategy.md) §2.3; role-selection
+  unit tests per §2.1; the full durable-runner/crash-recovery suite per
+  §2.14, including the lease-claim-atomicity test.
 - **Acceptance criteria**: Submitting an idea through the actual UI
-  reaches `READY_FOR_REVIEW` unattended in simulated mode.
-- **Definition of Done**: End-to-end manual run through the real UI,
-  plus automated tests, both green.
-- **Risks**: Role-selection rules too rigid for real idea phrasing.
-  Mitigation: rules are a small, isolated table (§2 of
-  [05-orchestration-workflow.md](./05-orchestration-workflow.md)) —
-  designed to be tuned without touching the state machine.
-- **Rollback**: Remove `lib/ai-office/orchestrator/**`; Phase 4's
-  manually-triggered flow still works as a fallback demo.
+  reaches `READY_FOR_REVIEW` unattended in simulated mode, **and**
+  continues to do so after the owner closes the browser tab mid-run and
+  the runner's process is later restarted (manual test: start a project,
+  close the tab, stop and restart the dev/runner process, confirm the
+  project still reaches `READY_FOR_REVIEW` without any further browser
+  interaction).
+- **Definition of Done**: End-to-end manual run through the real UI with
+  the browser closed mid-workflow, plus all automated tests (§2.3, §2.1,
+  §2.14), green.
+- **Risks**: Role-selection rules too rigid for real idea phrasing —
+  mitigated as before (small, isolated, tunable table). Dev-mode
+  hot-reload accidentally starting a second concurrent poll loop (Option
+  A) — mitigated by the module-level singleton guard called out in
+  [03-system-architecture.md](./03-system-architecture.md) §9.7, and
+  testable by asserting a task is claimed exactly once even under a
+  simulated double-start.
+- **Rollback**: Remove `lib/ai-office/orchestrator/**` and
+  `lib/ai-office/runner/**`; Phase 4's manually-triggered flow still
+  works as a fallback demo, with the caveat that browser-independent
+  continuation (this phase's core deliverable) would no longer exist —
+  acceptable only as a transient rollback state, not a shipped one.
 - **Effort**: Large.
 
 ---
@@ -223,10 +324,13 @@ Definition of Done implicitly.
   Approvals queue — all enforced in code, not just displayed.
 - **Scope**: `lib/ai-office/domain/budget-service.ts`, office/project
   control Server Actions, `/office/approvals`, `/office/budget`.
-- **Prerequisites**: Phase 5.
+- **Prerequisites**: Phase 5 (Orchestrator + Durable Runner both exist).
 - **Implementation tasks**: Implement `BudgetService.authorize()` per
   [09-budget-and-cost-controls.md](./09-budget-and-cost-controls.md) §2;
-  wire it into `AgentRunner`'s existing no-op hook from Phase 4; build
+  wire it into `AgentRunner`'s existing no-op hook from Phase 4 (called
+  the same way regardless of whether `AgentRunner` was invoked by a test
+  harness, Phase 5's `runOneCycle()`, or, later, Phase 7's live runs —
+  one call site, per [09](./09-budget-and-cost-controls.md) §2); build
   Office/Project control Server Actions per
   [05-orchestration-workflow.md](./05-orchestration-workflow.md) §8;
   build Approvals queue UI and decision Server Action; build budget
@@ -257,31 +361,44 @@ Definition of Done implicitly.
 ## Phase 7 — Claude API integration
 
 - **Objective**: Add the first real `AIProviderAdapter` implementation,
-  behind the existing interface, with no changes to Orchestrator/
-  AgentRunner.
+  behind the existing interface, with no changes to Orchestrator,
+  AgentRunner, or the Durable Runner — and no new entry point that could
+  let a live call bypass either.
 - **Scope**: `lib/ai-office/providers/claude-adapter.ts`, pricing table,
   provider selection UI (simulated vs. live toggle, per project).
 - **Prerequisites**: Phase 6 (budget gate must exist *before* any live
-  spend is possible).
+  spend is possible) — and Phase 5's Durable Runner, since LIVE tasks are
+  claimed and executed the same way SIMULATED ones already are.
 - **Implementation tasks**: Implement `ClaudeAdapter` against the
   `AIProviderAdapter` interface; implement `estimateCost()` using real
   Claude pricing (kept in `pricing.ts`, see
   [09-budget-and-cost-controls.md](./09-budget-and-cost-controls.md)
   §8); add `ANTHROPIC_API_KEY` to `.env.example` (documented, not
   committed with a value); add the simulated/live mode toggle to project
-  settings UI.
+  settings UI. `ClaudeAdapter` is imported **only** inside
+  `lib/ai-office/agents/agent-runner.ts`, exactly like `SimulatedAdapter`
+  — no Server Action, Route Handler, or UI code ever imports a provider
+  adapter directly. This is not a new rule for this phase; it's the
+  Phase 4/§2-of-09 rule holding under the first real provider, verified
+  explicitly here.
 - **Expected files affected**: `lib/ai-office/providers/claude-adapter.ts`
   (new), `lib/ai-office/providers/pricing.ts` (new), `.env.example`,
   `app/office/projects/[id]/**` (mode toggle).
 - **Tests**: Adapter unit tests against a mocked Claude client (no real
   API calls in automated tests, per
-  [10-testing-strategy.md](./10-testing-strategy.md) §3); a small number
-  of manual, owner-triggered smoke calls against real budget.
-- **Acceptance criteria**: A single manual LIVE task run completes,
-  produces a real `ai_usage` row with accurate cost, and the budget gate
-  correctly reflects the spend afterward.
+  [10-testing-strategy.md](./10-testing-strategy.md) §3); the existing
+  import-graph test from §2.5 re-run to confirm it still passes with
+  `claude-adapter.ts` present (proving the single-entry-point rule holds,
+  not just asserted in prose); a small number of manual, owner-triggered
+  smoke calls against real budget.
+- **Acceptance criteria**: A single manual LIVE task run — claimed and
+  executed by the same Durable Runner + `AgentRunner` + `BudgetService`
+  path as every simulated run before it — completes, produces a real
+  `ai_usage` row with accurate cost, and the budget gate correctly
+  reflects the spend afterward.
 - **Definition of Done**: One successful manual LIVE run, budget numbers
-  verified against the Anthropic Console's actual usage for that key.
+  verified against the Anthropic Console's actual usage for that key,
+  import-graph test confirming no bypass path exists.
 - **Risks**: Pricing table drift (provider changes prices). Mitigation:
   flagged in [13-risk-register.md](./13-risk-register.md) as an ongoing
   maintenance item, not a one-time task.
@@ -379,8 +496,18 @@ Definition of Done implicitly.
 
 - Phases 0–6 require **zero** paid AI spend and **zero** new external
   accounts — this is intentional; a huge amount of the system can be
-  built and proven before Phase 7's first real cost is incurred.
+  built and proven before Phase 7's first real cost is incurred. This
+  includes the Durable Runner (Phase 5) — it only ever invokes
+  `SimulatedAdapter` until Phase 7 exists, so its introduction does not
+  move the "first real cost" line.
 - Phase order is mostly strict (each depends on the previous), with one
-  flexibility: Phase 1 and Phase 2 could be built in either order or
-  together, since Phase 1 has no technical dependency on Phase 2 (only a
-  logical/UX one — the "Enter AI Office" button needs somewhere to go).
+  required exception: **Phase 1 and Phase 2's minimal login-shell task
+  ship together as one release checkpoint**, not strictly sequentially —
+  see the note at the top of Phase 1. Phase 2's remaining scope (the
+  populated dashboard) and every phase after it remain strictly
+  sequential.
+- Browser-independent execution (the brief's core durability requirement)
+  becomes true starting in **Phase 5**, not Phase 0 or "eventually" —
+  before Phase 5, task creation and execution are still coupled to a
+  single request, which is an accepted, deliberate limitation of Phases
+  0–4's scaffolding, not the shipped end state.

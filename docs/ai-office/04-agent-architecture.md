@@ -113,13 +113,31 @@ app" true rather than aspirational.
 
 ## 5. AgentRunner responsibilities
 
-- Pulls the next eligible `Task` per the Orchestrator's dependency graph.
+`AgentRunner` executes exactly one already-claimed task per invocation —
+it does not itself decide *when* or *which* task to run. That dispatch
+decision belongs to the **Durable Local Execution Runner**
+([03-system-architecture.md](./03-system-architecture.md) §9), which
+claims a task (via the SQLite lease mechanism, §9.3–9.4 of that
+document) and then calls `AgentRunner.execute(claimedTask)`. This split
+exists so that task execution keeps advancing whether or not the owner's
+browser is connected — see
+[03-system-architecture.md](./03-system-architecture.md) §9.1 for why.
+
+Given a claimed task, `AgentRunner`:
+
 - Builds the scoped `AgentTaskInput` from project memory (§ above).
 - Checks `OfficeStatus` (must be `OPEN`) and, for LIVE mode, checks the
   Budget Service gate (see
   [09-budget-and-cost-controls.md](./09-budget-and-cost-controls.md))
-  **before** invoking the adapter.
-- Invokes the current `AIProviderAdapter` for the role.
+  **before** invoking the adapter. This check happens again here, not
+  only in the Durable Runner's poll-cycle check, because a task could in
+  principle sit claimed for a moment before execution starts — the gate
+  must hold at the moment of actual spend, not just at claim time.
+- Invokes the current `AIProviderAdapter` for the role, bounded by the
+  per-attempt timeout the claiming lease encodes (see
+  [03-system-architecture.md](./03-system-architecture.md) §9.6) — a
+  call that doesn't return before its lease expires is treated as a
+  timeout failure, never an unbounded wait.
 - Validates the result shape against the role's `allowedOutputs`.
 - Writes `AgentRun`, `TaskAttempt`, `Artifact`/`TestResult`/`Decision`,
   `AIUsage`, and `Event` rows.

@@ -1,7 +1,9 @@
 # Teja's AI Office — Master Plan
 
 Status: **Planning only. Nothing in this package has been implemented.**
-Branch: `feature/teja-ai-office` (created from a clean `master`, not pushed).
+Branch: `feature/teja-ai-office` (created from a clean `master`; pushed
+to `origin` — planning commit `2e837f2f1ebaede28565fcd7ca69bdb189f5d75c`
+— not merged into `master`).
 
 ## 1. What this is
 
@@ -57,6 +59,7 @@ build order.
 | Auth | Single-owner credential + signed session cookie, `proxy.ts` optimistic check + DAL enforcement | No auth vendor needed for one user; matches Next 16's documented pattern | [08](./08-security-plan.md) |
 | Database | SQLite (file-based, local) | Zero-cost, zero-ops, matches "local-first" | [06](./06-data-model.md) |
 | Orchestration | Deterministic state machine + rule engine, not an LLM call, for role/complexity decisions in early phases | Keeps Phase 0–6 fully free to test | [05](./05-orchestration-workflow.md) |
+| Execution durability | A lightweight local poll loop (the "Durable Runner") claims/executes tasks via an atomic SQLite lease, independent of any open browser session — no Redis, no hosted queue | Work must keep advancing after the owner closes `/office`, survive process restarts, and never duplicate-execute a task — all achievable with SQLite's existing single-writer guarantees | [03](./03-system-architecture.md) §9 |
 | AI provider | Adapter interface; Claude adapter first, Simulated adapter always available | Testability + no vendor lock-in | [04](./04-agent-architecture.md) |
 | Budget enforcement | Software gate before every LIVE (non-simulated) agent run | "$30/month" must be a real ceiling, not a hope | [09](./09-budget-and-cost-controls.md) |
 
@@ -69,7 +72,20 @@ scheme, or an agent contract — those are all decided here. Anything
 genuinely undecided is listed in
 [14-open-questions.md](./14-open-questions.md), not silently assumed.
 
-## 6. Non-goals (explicitly out of scope for this whole effort, not just this task)
+## 6. This package is internal planning material
+
+Every document in `docs/ai-office/**`, including this one, is internal —
+written at an implementation level of detail the public `/ai-office`
+page must never expose (security mechanics, budget enforcement
+internals, the data model, retry/escalation logic, operational workflow
+internals). See
+[08-security-plan.md](./08-security-plan.md) §12 for the full boundary
+and the still-open question (tracked in
+[14-open-questions.md](./14-open-questions.md) §1) of how this package
+is kept out of any future public production branch/artifact without
+rewriting git history.
+
+## 7. Non-goals (explicitly out of scope for this whole effort, not just this task)
 
 - Multi-tenant / multi-user support.
 - Enterprise RBAC, SSO, or org-level permissions.

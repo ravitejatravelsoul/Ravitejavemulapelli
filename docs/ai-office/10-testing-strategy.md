@@ -54,6 +54,16 @@ branch — using `SimulatedAdapter` end to end, asserting:
 - The project reaches `APPROVED` only after an explicit simulated
   "owner approves" step, never automatically.
 
+In Phase 4 (before the Durable Runner exists), this test drives task
+execution via direct, manual calls to `AgentRunner.execute()` per task —
+proving the state machine and `SimulatedAdapter` contract are correct in
+isolation. From Phase 5 onward, the *same* test is re-run driving
+execution via repeated `runOneCycle()` calls instead (see §2.14) — proving
+the Durable Runner reproduces identical behavior once it becomes the real
+dispatch mechanism. Both versions must pass; the second is not a
+replacement for the first, it's confirmation nothing changed when the
+dispatch mechanism did.
+
 ### 2.4 Authentication tests
 - Login: correct credentials → session cookie set, redirect to
   `/office`; incorrect credentials → generic failure, no user
@@ -93,14 +103,47 @@ Covered primarily in §2.1/§2.2; additionally:
   succeeds a retry, `maxRetries` exhausts it).
 
 ### 2.8 Office pause/resume
-- `CLOSE OFFICE` while a project has pending tasks → no new `agent_runs`
-  are created for any project, confirmed by asserting zero calls to
-  `AgentRunner.run()` after closure in a test that tries to trigger one.
+Exercised by calling the Durable Runner's `runOneCycle()`
+(see §2.14) directly, not by waiting on a real poll interval:
+- `CLOSE OFFICE` while a project has pending tasks → `runOneCycle()`
+  claims nothing office-wide, confirmed by asserting zero calls to
+  `AgentRunner.execute()` after closure.
 - `PAUSE PROJECT` → other projects continue dispatching; the paused
   project's tasks are skipped, not cancelled (still `PENDING` after
-  resume).
+  resume, lease untouched).
 - `RESUME`/`OPEN` → dispatch continues from exactly where it left off
-  (assert no task is re-run, no task is skipped).
+  on the next `runOneCycle()` call (assert no task is re-run, no task is
+  skipped).
+
+### 2.14 Durable runner / crash recovery
+- **Lease claim atomicity**: two concurrent `runOneCycle()` calls (or
+  two simulated runner instances) racing to claim the same eligible
+  task → exactly one succeeds, the other finds zero rows affected and
+  moves on; assert `AgentRunner.execute()` is called exactly once for
+  that task.
+- **Stale lease reclaim**: a task with an expired `leaseExpiresAt` (but
+  no completed attempt recorded) is eligible for claim again on the next
+  `runOneCycle()` call.
+- **Startup crash-recovery sweep**: seed a task with an unexpired-looking
+  lease from a "previous process" and an already-incremented
+  `attemptCount`, simulate a fresh process start → the sweep resets it
+  to `PENDING`, clears the lease, and a `task.recovered_after_crash`
+  event is recorded; a second sweep run is a no-op (idempotency).
+- **Per-attempt timeout**: an adapter call that doesn't resolve before
+  its lease's `leaseExpiresAt` is treated as a `FAILED` (timeout)
+  attempt and follows the normal retry/escalation path — not left
+  hanging.
+- **Retry ceiling still holds across crash-recovered attempts**: a task
+  that crashes/reclaims repeatedly still escalates once
+  `attemptCount > role.maxRetries`, exactly as an ordinary failure would
+  — proving crash recovery cannot become an unbounded retry loop.
+- **Testability pattern**: every test above calls the pure
+  `runOneCycle()` function directly, in a loop where needed, instead of
+  sleeping through real wall-clock poll intervals — this is what keeps
+  the whole suite fast, matching
+  [03-system-architecture.md](./03-system-architecture.md) §9.7's design
+  note that the timer wrapper around `runOneCycle()` is a thin,
+  separately-untested shell.
 
 ### 2.9 Agent simulation
 - Each `SimulatedAdapter` fixture (one per role, at minimum a success and
