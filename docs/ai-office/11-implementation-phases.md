@@ -34,6 +34,59 @@ Definition of Done implicitly.
 
 ## Phase 1 — Portfolio integration and public AI Office entrance
 
+> **Implemented** (combined with Phase 2 task 1, per the checkpoint below)
+> on `feature/teja-ai-office`. Built: `/ai-office` (hero with an animated
+> constellation visual and "Enter AI Office" CTA, "What It Is," a 10-role
+> gallery, an 8-step workflow visualization, a conceptual architecture
+> overview, and the ownership disclosure banner — all per
+> [07-ui-ux-spec.md](./07-ui-ux-spec.md) §2); a distinct "AI Office"
+> nav entry (desktop pill + mobile sheet link) in
+> `components/layout/navbar.tsx`; `app/robots.ts` disallows `/office/`;
+> `app/sitemap.ts` includes `/ai-office`.
+>
+> **Deviations from this document, recorded for the next phase's
+> implementer:**
+> - Two new dependencies were required to implement the *real* session
+>   auth this checkpoint calls for (not a placeholder): `jose` (session
+>   JWT signing/verification — exactly as specified in
+>   [08-security-plan.md](./08-security-plan.md) §2) and `server-only`
+>   (build-time guard on credential/session modules, matching that same
+>   section's guidance for provider-adapter modules, applied here too).
+>   Both documented inline in this note per the dependency policy in
+>   [00-master-plan.md](./00-master-plan.md); neither was anticipated by
+>   name in the original planning pass.
+> - The owner credential is seeded via `.env.local`
+>   (`OFFICE_OWNER_EMAIL` + `OFFICE_OWNER_PASSWORD_HASH`, a `salt:hash`
+>   pair produced by the new `scripts/ai-office-hash-password.mjs` dev
+>   tool) rather than a database row — there is no `users` table yet
+>   (Phase 3 hasn't run). This is the "env-driven seed script" option
+>   [08-security-plan.md](./08-security-plan.md) §1 explicitly names, not
+>   an improvised shortcut; moving it into SQLite in Phase 3 only touches
+>   `lib/ai-office/auth/credentials.ts`'s internals, not its call sites.
+> - The private route tree uses a `(protected)` route group —
+>   `app/office/login/page.tsx` (public) sits alongside
+>   `app/office/(protected)/layout.tsx` (calls `verifySession()`, redirects
+>   to `/office/login` if absent) and `app/office/(protected)/page.tsx`
+>   — instead of the single flat `app/office/layout.tsx` sketched in
+>   [03-system-architecture.md](./03-system-architecture.md) §1. A single
+>   layout enforcing auth for everything under `/office/**` would also
+>   gate `/office/login` itself, which can't require a session to reach
+>   the page that creates one. This is the standard Next.js App Router
+>   shape for "most of a segment is protected, one sibling isn't" and
+>   doesn't change any documented security property — `verifySession()`
+>   is still the real boundary, `proxy.ts` is still optimistic-only.
+> - The public site's existing `Navbar`/`Footer` (from the root
+>   `app/layout.tsx`) still render around `/office/login` and the signed-in
+>   placeholder, rather than a fully separate distraction-free shell —
+>   root layout was deliberately left untouched to keep this checkpoint's
+>   blast radius minimal. A chrome-free private shell (if wanted) is
+>   reasonable scope for Phase 2's *remaining* work (the populated
+>   dashboard), not required for this checkpoint.
+> - `app/office/(protected)/page.tsx` is an intentionally bare "signed
+>   in" placeholder with explicit synthetic-content labeling, per the
+>   brief's private-data rule — no project/task/budget data, fake or
+>   otherwise, is rendered anywhere in this checkpoint.
+
 > **Combined release checkpoint with Phase 2's login shell.** The public
 > "Enter AI Office" button must never ship pointing at a 404 or an
 > unbuilt route. Phase 1 and the *minimal* portion of Phase 2 (§ below —
@@ -95,6 +148,14 @@ Definition of Done implicitly.
 
 ## Phase 2 — Private authentication and owner dashboard shell
 
+> **Task 1 (minimal login shell) implemented** together with Phase 1 —
+> see that phase's implementation note for exactly what shipped and the
+> recorded deviations (route-group structure, `jose`/`server-only`
+> dependencies, env-seeded credential). **Task 2 (the full, populated
+> dashboard) is explicitly NOT implemented** — `app/office/(protected)/page.tsx`
+> is a bare placeholder, not a dashboard, per this checkpoint's scope.
+> Phase 3 onward remains not started.
+>
 > See the Phase 1 checkpoint note above — task 1 below ships together
 > with Phase 1 as a combined release; tasks 2+ (the populated dashboard)
 > can follow immediately after without any further change to the public
