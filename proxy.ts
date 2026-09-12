@@ -17,8 +17,24 @@ import { verifySessionToken } from "@/lib/ai-office/auth/token";
  */
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  const token = request.cookies.get(OFFICE_SESSION_COOKIE)?.value;
-  const session = token ? await verifySessionToken(token) : null;
+
+  // The preview route accepts EITHER the session cookie OR a short-lived,
+  // project-scoped `?token=` query param (lib/ai-office/auth/preview-token.ts)
+  // — required because its content is loaded inside a sandboxed
+  // `allow-scripts`-only iframe, whose opaque origin never sends cookies
+  // for any of its own requests (top-level frame nav or subresource
+  // fetches alike), even though the session cookie exists in the browser.
+  // This proxy only ever knows about cookies, so it cannot evaluate that
+  // token itself — deferring entirely to the route handler's own
+  // `verifySession() || verifyPreviewToken()` check (which correctly
+  // returns a 401 JSON on failure, not a login-page redirect that would
+  // be nonsensical as the body of a <script>/<link> subresource anyway).
+  if (pathname.startsWith("/office/preview/")) {
+    return NextResponse.next();
+  }
+
+  const sessionToken = request.cookies.get(OFFICE_SESSION_COOKIE)?.value;
+  const session = sessionToken ? await verifySessionToken(sessionToken) : null;
 
   if (pathname === "/office/login") {
     // Already signed in — no reason to show the login form again.

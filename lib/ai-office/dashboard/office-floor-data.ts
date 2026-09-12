@@ -237,9 +237,18 @@ export function getAgentDetail(db: DatabaseSync, roleId: string, selectedProject
     if (latest) latestArtifactPreview = truncate(latest.content, 320);
 
     if (task) {
-      filesChanged = listWorkspaceFileRecords(db, project.id).filter((f) => f.lastModifiedByTaskId === task.id);
+      // Rebuilt as plain object literals — `node:sqlite`'s `.get()`/`.all()`
+      // rows are null-prototype objects, which React refuses to serialize
+      // across the Server->Client Component boundary ("Only plain
+      // objects... can be passed to Client Components"). Every other
+      // field on this view is already built this way; these two were the
+      // one place a raw DB row leaked straight through.
+      filesChanged = listWorkspaceFileRecords(db, project.id)
+        .filter((f) => f.lastModifiedByTaskId === task.id)
+        .map((f) => ({ ...f }));
       const testResults = listTestResultsForTask(db, task.id);
-      latestTestResult = testResults[testResults.length - 1] ?? null;
+      const latest = testResults[testResults.length - 1];
+      latestTestResult = latest ? { ...latest } : null;
     }
 
     recentActivity = listEventsForProject(db, project.id)

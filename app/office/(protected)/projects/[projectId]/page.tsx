@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { getAppDatabase } from "@/lib/ai-office/db/client";
 import { getProjectDetail } from "@/lib/ai-office/dashboard/project-detail-data";
 import { getPreviewStatusLabel } from "@/lib/ai-office/dashboard/delivery-status";
+import { signPreviewToken } from "@/lib/ai-office/auth/preview-token";
 import { readFile } from "@/lib/ai-office/workspace/workspace-service";
 import { highlightFileContent } from "@/lib/ai-office/workspace/code-highlight";
 import { GlassCard } from "@/components/common/glass-card";
@@ -52,6 +53,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
 
   const hasIndexHtml = workspace.files.some((f) => f.path === "index.html");
   const previewStatus = getPreviewStatusLabel(workspace.hasWorkspace, workspace.deliveryState, hasIndexHtml);
+  const previewToken = previewStatus === "PREVIEW READY" ? await signPreviewToken(project.id) : null;
   const fileEntries: WorkspaceFileEntry[] = workspace.hasWorkspace
     ? await Promise.all(
         workspace.files.map(async (file) => {
@@ -133,7 +135,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
               <FileBrowser files={fileEntries} />
             </TabsContent>
             <TabsContent value="preview">
-              <PreviewPanel projectId={project.id} status={previewStatus} />
+              <PreviewPanel projectId={project.id} status={previewStatus} previewToken={previewToken} />
             </TabsContent>
           </Tabs>
         </GlassCard>

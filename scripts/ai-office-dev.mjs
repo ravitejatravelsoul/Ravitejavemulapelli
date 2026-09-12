@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 
 /**
  * `npm run ai-office:dev` — starts the Next.js dev server and the
@@ -8,16 +10,30 @@ import { spawn } from "node:child_process";
  * exits for any reason (normal exit, Ctrl+C, or the parent being
  * killed). This directly targets a real failure mode already hit once
  * this session: an orphaned standalone-runner process left holding the
- * SQLite file open long after its parent terminal was gone. A plain
- * `node` script with explicit signal handling, not a shell one-liner —
- * shell background jobs (`cmd1 & cmd2`) are exactly the fragile pattern
- * that produces orphans on Windows.
+ * SQLite file open long after its parent terminal was gone.
+ *
+ * Both children are launched by invoking `process.execPath` (node.exe
+ * itself) directly against a resolved script path — never through `npm
+ * run` or a shell. This matters specifically on Windows: `npm` itself is
+ * `npm.cmd`, a batch-file shim `child_process.spawn` cannot invoke
+ * without `shell: true` — and spawning *through* a shell wrapper means
+ * `child.kill()` only terminates the shell process, not the real node
+ * process underneath it, which is exactly how an earlier version of this
+ * script (using `shell: true` to work around the `.cmd` issue) leaked
+ * orphaned runner processes during this phase's own testing. Resolving
+ * real script paths and invoking node directly avoids both problems at
+ * once: no shell, no `.cmd`, no wrapper layer for a kill signal to get
+ * lost in.
  */
+
+const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+const nextBin = join(repoRoot, "node_modules", "next", "dist", "bin", "next");
+const runnerScript = join(repoRoot, "lib", "ai-office", "runner", "start.ts");
 
 const children = [];
 
-function spawnChild(label, command, args) {
-  const child = spawn(command, args, { stdio: "inherit", shell: false });
+function spawnChild(label, args) {
+  const child = spawn(process.execPath, args, { stdio: "inherit", shell: false, cwd: repoRoot });
   children.push({ label, child });
   child.on("exit", (code, signal) => {
     console.log(`[ai-office-dev] ${label} exited (code=${code ?? "null"} signal=${signal ?? "null"})`);
@@ -38,9 +54,8 @@ function shutdown() {
   }
 }
 
-const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
-spawnChild("next dev", npmCmd, ["run", "dev"]);
-spawnChild("ai-office runner", npmCmd, ["run", "ai-office:runner"]);
+spawnChild("next dev", [nextBin, "dev"]);
+spawnChild("ai-office runner", ["--conditions=react-server", runnerScript]);
 
 process.on("SIGINT", () => {
   shutdown();
