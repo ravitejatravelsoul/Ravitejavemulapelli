@@ -24,14 +24,20 @@ describe("clean DB creation + migrations from zero", () => {
     const db = openDatabase(join(dir, "fresh.db"));
 
     const result = runMigrations(db);
-    assert.equal(result.version, 4);
-    assert.deepEqual(result.applied, ["001-init.sql", "002-budget-and-approval-scope.sql", "003-add-project-provider.sql", "004-add-real-workspace.sql"]);
-    assert.equal(getSchemaVersion(db), 4);
+    assert.equal(result.version, 5);
+    assert.deepEqual(result.applied, [
+      "001-init.sql",
+      "002-budget-and-approval-scope.sql",
+      "003-add-project-provider.sql",
+      "004-add-real-workspace.sql",
+      "005-add-model-routing.sql",
+    ]);
+    assert.equal(getSchemaVersion(db), 5);
 
     const tableCount = db
       .prepare("SELECT COUNT(*) as count FROM sqlite_master WHERE type = 'table' AND name != 'sqlite_sequence'")
       .get() as { count: number };
-    assert.ok(tableCount.count >= 19, `expected at least 19 tables, got ${tableCount.count}`);
+    assert.ok(tableCount.count >= 21, `expected at least 21 tables, got ${tableCount.count}`);
 
     db.close();
     rmSync(dir, { recursive: true, force: true });
@@ -43,11 +49,11 @@ describe("migrations are idempotent / safe to run repeatedly", () => {
     const t = createTestDb({ seed: false });
     const first = runMigrations(t.db); // no-op, createTestDb already migrated
     assert.deepEqual(first.applied, []);
-    assert.equal(first.version, 4);
+    assert.equal(first.version, 5);
 
     const second = runMigrations(t.db);
     assert.deepEqual(second.applied, []);
-    assert.equal(second.version, 4);
+    assert.equal(second.version, 5);
     t.close();
   });
 });
@@ -66,12 +72,13 @@ describe("schema version is inspectable", () => {
       { version: 2, name: "002-budget-and-approval-scope.sql" },
       { version: 3, name: "003-add-project-provider.sql" },
       { version: 4, name: "004-add-real-workspace.sql" },
+      { version: 5, name: "005-add-model-routing.sql" },
     ]);
     t.close();
   });
 });
 
-describe("migrations 002+003+004 apply cleanly on top of an existing v1 database", () => {
+describe("migrations 002+003+004+005 apply cleanly on top of an existing v1 database", () => {
   test("Phase 1-5 data survives the upgrade, and the new columns/table/provider column work afterward", () => {
     const dir = mkdtempSync(join(tmpdir(), "ai-office-v1-"));
     const db = openDatabase(join(dir, "v1.db"));
@@ -102,8 +109,13 @@ describe("migrations 002+003+004 apply cleanly on top of an existing v1 database
     ).run(now, now);
 
     const result = runMigrations(db);
-    assert.deepEqual(result.applied, ["002-budget-and-approval-scope.sql", "003-add-project-provider.sql", "004-add-real-workspace.sql"]);
-    assert.equal(getSchemaVersion(db), 4);
+    assert.deepEqual(result.applied, [
+      "002-budget-and-approval-scope.sql",
+      "003-add-project-provider.sql",
+      "004-add-real-workspace.sql",
+      "005-add-model-routing.sql",
+    ]);
+    assert.equal(getSchemaVersion(db), 5);
 
     // The pre-existing rows survive, unmodified except for the new
     // columns now existing (and being NULL, since this data predates
@@ -141,6 +153,27 @@ describe("migrations 002+003+004 apply cleanly on top of an existing v1 database
     const testResultCols = (db.prepare("PRAGMA table_info(test_results)").all() as Array<{ name: string }>).map((c) => c.name);
     assert.ok(testResultCols.includes("durationMs"));
     assert.ok(testResultCols.includes("targetUrl"));
+
+    // Migration 005's new columns/tables are fully usable afterward too.
+    const projectCols = (db.prepare("PRAGMA table_info(projects)").all() as Array<{ name: string }>).map((c) => c.name);
+    assert.ok(projectCols.includes("modelPolicyMode"));
+    assert.ok(projectCols.includes("singleModelOverride"));
+    assert.ok(projectCols.includes("customRoleModelMapping"));
+    const preExistingProject = db.prepare("SELECT modelPolicyMode FROM projects WHERE id = 'p1'").get() as { modelPolicyMode: string };
+    assert.equal(preExistingProject.modelPolicyMode, "AUTO", "pre-existing rows get backfilled with the NOT NULL DEFAULT");
+
+    const agentRunCols = (db.prepare("PRAGMA table_info(agent_runs)").all() as Array<{ name: string }>).map((c) => c.name);
+    assert.ok(agentRunCols.includes("model"));
+
+    db.prepare(
+      "INSERT INTO benchmark_results (id, model, scenarioId, roleId, status, score, latencyMs, createdAt) VALUES ('b1','gemma4:latest','product-owner-basic','product-owner','PASS',90,1000,?)",
+    ).run(now);
+    assert.ok(db.prepare("SELECT * FROM benchmark_results WHERE id = 'b1'").get());
+
+    db.prepare(
+      "INSERT INTO recommended_model_routing (capability, model, reason, generatedAt) VALUES ('CODING','gemma4:latest','best coding score',?)",
+    ).run(now);
+    assert.ok(db.prepare("SELECT * FROM recommended_model_routing WHERE capability = 'CODING'").get());
 
     db.close();
     rmSync(dir, { recursive: true, force: true });
@@ -293,7 +326,7 @@ describe("DB survives reopen/reconnect", () => {
     t.db.close();
 
     const reopened = reopenTestDb(dir);
-    assert.equal(getSchemaVersion(reopened), 4);
+    assert.equal(getSchemaVersion(reopened), 5);
     const roles = reopened.prepare("SELECT COUNT(*) as count FROM agent_roles").get() as { count: number };
     assert.equal(roles.count, AGENT_ROLE_CATALOG.length);
     reopened.close();
