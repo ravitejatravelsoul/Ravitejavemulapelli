@@ -97,6 +97,35 @@ const EXPECTED_ARTIFACT_TYPE: Partial<Record<string, (typeof ARTIFACT_TYPES)[num
   "release-agent": "release-summary",
 };
 
+/**
+ * Renders the "this is a patch, not a redesign" section for a
+ * corrective attempt — see RemediationContext's docblock
+ * (providers/types.ts) for why this exists. Deliberately generic: every
+ * sentence here is fixed guidance text, never anything specific to what
+ * this particular project builds.
+ */
+function buildCorrectiveAttemptSection(remediation: NonNullable<AgentTaskInput["task"]["remediationContext"]>): string[] {
+  const failingChecksList = remediation.failingChecks.map((reason) => `- ${reason}`).join("\n") || "(none recorded)";
+  const currentFilesText =
+    remediation.currentFiles.map((f) => `--- ${f.path} ---\n${f.content}`).join("\n\n") || "(no files exist in the workspace yet)";
+
+  return [
+    "===== CORRECTIVE ATTEMPT — READ BEFORE DOING ANYTHING =====",
+    `Attempt: ${remediation.attemptNumber}`,
+    "THIS IS A CORRECTIVE ATTEMPT. You are NOT redesigning the application. The authoritative user request above remains unchanged and is still the only definition of what to build.",
+    "",
+    `Reason this task was reopened: ${remediation.failureReason ?? "(no specific reason recorded)"}`,
+    "All currently unresolved issues on this task:",
+    failingChecksList,
+    "",
+    remediation.preserveRequirements,
+    "",
+    "Current real files in the project workspace — this is what actually exists right now. Preserve everything here that the failure reason above does not implicate:",
+    currentFilesText,
+    "",
+  ];
+}
+
 function buildPrompt(input: AgentTaskInput): string {
   const { task } = input;
   const artifacts = task.relevantArtifacts.map((a) => `- [${a.type}] ${a.content.slice(0, 600)}`).join("\n") || "(none)";
@@ -112,6 +141,7 @@ function buildPrompt(input: AgentTaskInput): string {
     "This is the ONLY source of truth for what to build. Everything below this section is organizational metadata, not a specification — never infer what to build from a title, provider name, or model name, even if it happens to mention a technology or tool by name.",
     task.authoritativeUserRequest || "(no idea text was recorded for this project — rely only on the artifacts below)",
     "",
+    ...(task.remediationContext ? buildCorrectiveAttemptSection(task.remediationContext) : []),
     "===== PROJECT METADATA (labels only — not requirements) =====",
     `Project title (an organizational label chosen by the owner, not a product spec): "${task.projectTitle}"`,
     `Your current task's tracking label: "${task.taskTitle}"`,
@@ -124,7 +154,13 @@ function buildPrompt(input: AgentTaskInput): string {
     "Relevant prior decisions:",
     decisions,
     "",
-    ...(relevantFiles.length > 0 ? ["Real files currently in the project workspace (for reference/review, not to be echoed back verbatim):", files, ""] : []),
+    // The corrective-attempt section above already includes the full,
+    // real current file contents — repeating the generic (and, for a
+    // developer role, normally-empty) relevantFiles block here would
+    // just be duplicated context for no benefit.
+    ...(relevantFiles.length > 0 && !task.remediationContext
+      ? ["Real files currently in the project workspace (for reference/review, not to be echoed back verbatim):", files, ""]
+      : []),
     "Respond with ONLY a single JSON object (no prose, no markdown fences) matching exactly this shape:",
     `{"summary": string, "artifacts": [{"kind":"artifact","artifactType": string,"content": string}], "decisions": [{"kind":"decision","type":"decision"|"assumption","summary": string}], "testResults": [], "events": [], "fileOperations": [], "recommendedNextActions": [string]}`,
     expectedArtifactType

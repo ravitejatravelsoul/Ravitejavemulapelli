@@ -70,6 +70,87 @@ const DEFAULT_TASK_TIMEOUT_MS = 5 * 60 * 1000;
 class AdapterTimeoutError extends Error {}
 
 /**
+ * Provider/execution failure vs. task/deliverable failure (follow-up
+ * brief Part 17) — a real acceptance run showed a malformed-JSON
+ * provider response and a 120s provider timeout each consume one of a
+ * developer's real (small, 3-attempt) retry budget exactly like a
+ * genuine bad implementation would, even though neither says anything
+ * about whether the code itself was right. This function is the single
+ * shared classifier: every reason string this codebase itself generates
+ * for a pure infrastructure/protocol failure (never a role's own
+ * reported failure, which is always semantic) matches one of these
+ * patterns. Matched against *known, controlled* message prefixes this
+ * codebase produces itself (OllamaConnectionError/OllamaTimeoutError/
+ * AdapterTimeoutError/malformedResult's exact wording) — not a guess
+ * against arbitrary free text, so this stays a precise, low-risk
+ * classification rather than fragile string-sniffing.
+ */
+function isOperationalFailureReason(reason: string): boolean {
+  return (
+    /^Ollama request timed out/.test(reason) ||
+    /^Could not reach Ollama/.test(reason) ||
+    /^Ollama responded with HTTP/.test(reason) ||
+    /Ollama's (HTTP response body|model output) was not valid JSON/.test(reason) ||
+    /did not match the expected structured shape/.test(reason) ||
+    /^Execution timed out after/.test(reason) ||
+    /^Operational:/.test(reason)
+  );
+}
+
+/**
+ * A single adapter call, never throwing — synthesizes the same FAILED
+ * result the old inline try/catch in `executeTask` used to, just
+ * factored out so it can be wrapped with bounded in-process retries
+ * below.
+ */
+async function runAdapterOnce(
+  adapter: AIProviderAdapter,
+  input: Parameters<AIProviderAdapter["runAgentTask"]>[0],
+  timeoutMs: number,
+): Promise<import("../providers/types.ts").AgentTaskResult> {
+  try {
+    return await callAdapterWithTimeout(adapter, input, timeoutMs);
+  } catch (error) {
+    const timedOut = error instanceof AdapterTimeoutError;
+    const reason = error instanceof Error ? error.message : String(error);
+    return {
+      status: "FAILED",
+      output: { summary: "", artifacts: [], decisions: [], testResults: [], events: [], fileOperations: [], recommendedNextActions: [], failure: { reason } },
+      usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+      raw: { timedOut, threw: !timedOut },
+    };
+  }
+}
+
+/** Small and bounded on purpose — not a second retry ceiling, just enough to absorb one transient blip before it ever consumes a real, counted task attempt. */
+const MAX_OPERATIONAL_RETRIES = 2;
+
+/**
+ * Wraps a single logical task execution with bounded, immediate,
+ * in-process retries for operational failures only — a real semantic
+ * result (SUCCEEDED, or FAILED for a reason that isn't operational)
+ * returns immediately on the first attempt that produces one. Still
+ * bounded: if the adapter is persistently broken, this eventually gives
+ * up and returns the last operational failure, which then flows through
+ * the normal retry/escalation path exactly like before — never an
+ * infinite loop, just no longer wasting a real retry on the first
+ * transient hiccup.
+ */
+async function runAdapterWithOperationalRetries(
+  adapter: AIProviderAdapter,
+  input: Parameters<AIProviderAdapter["runAgentTask"]>[0],
+  timeoutMs: number,
+): Promise<import("../providers/types.ts").AgentTaskResult> {
+  let result = await runAdapterOnce(adapter, input, timeoutMs);
+  let retries = 0;
+  while (result.status === "FAILED" && isOperationalFailureReason(result.output.failure?.reason ?? "") && retries < MAX_OPERATIONAL_RETRIES) {
+    retries += 1;
+    result = await runAdapterOnce(adapter, input, timeoutMs);
+  }
+  return result;
+}
+
+/**
  * Release Agent's real (non-fixture) pre-flight gate (Phase 8 Part K) —
  * must not say "Ready" merely because preceding task statuses are DONE.
  * A project with no `workspaces` row at all is a legacy/pure-text
@@ -98,7 +179,7 @@ function checkReleaseReadiness(db: DatabaseSync, projectId: string): { ready: tr
 }
 
 /**
- * Intent-consistency gate, checkpoint 1 of 2 (Phase 8 follow-up — see
+ * Intent-consistency gate, checkpoint 1 of 3 (Phase 8 follow-up — see
  * lib/ai-office/agents/intent-consistency.ts's docblock for the
  * incident this closes). Before a development role starts real work,
  * for an `ollama` project, compares the planning artifacts it's about
@@ -108,6 +189,13 @@ function checkReleaseReadiness(db: DatabaseSync, projectId: string): { ready: tr
  * compare for a SIMULATED project, and running this against Ollama
  * regardless of project provider would be a silent cross-provider
  * dependency this codebase explicitly forbids.
+ *
+ * Deliberately tolerant of "unavailable" (the check itself failing to
+ * run) — this is a pre-development advisory pass, not the final claim
+ * of correctness; the real deliverable still has to pass real QA
+ * (checkpoint 2) before anything is called VERIFIED, and *that* gate
+ * does not tolerate "unavailable" the same way (see the QA block below).
+ * Only a real "inconsistent" verdict blocks development here.
  */
 async function checkPlanConsistencyBeforeDevelopment(
   authoritativeUserRequest: string,
@@ -117,7 +205,45 @@ async function checkPlanConsistencyBeforeDevelopment(
   if (planningArtifacts.length === 0) return { consistent: true };
   const candidate = planningArtifacts.map((a) => `[${a.type}]\n${a.content}`).join("\n\n");
   const check = await checkIntentConsistency({ authoritativeUserRequest, candidate, checkpointLabel: "planned architecture/UX", fetchImpl });
-  return check.consistent ? { consistent: true } : { consistent: false, reason: check.reason };
+  return check.outcome === "inconsistent" ? { consistent: false, reason: check.reason } : { consistent: true };
+}
+
+/**
+ * Intent-consistency gate, checkpoint 3 of 3 — see its call site's
+ * comment in `executeTask` for the full "why." `currentFiles` is the
+ * real, current workspace state (the same data the corrective-attempt
+ * prompt itself was built from); `proposedOperations` is what the model
+ * just asked to write. Deliberately tolerant of "unavailable" for the
+ * same reason checkpoint 1 is — see that function's docblock.
+ */
+async function checkRetryDriftBeforeMaterialization(
+  authoritativeUserRequest: string,
+  currentFiles: Array<{ path: string; content: string }>,
+  proposedOperations: import("../providers/types.ts").FileOperationPayload[],
+  fetchImpl?: typeof fetch,
+): Promise<{ consistent: true } | { consistent: false; reason: string }> {
+  // Nothing "previous" to drift away from yet — a first real attempt at
+  // this task, not a correction of one, so there's no drift risk to
+  // check.
+  if (currentFiles.length === 0) return { consistent: true };
+  const writeOps = proposedOperations.filter((op) => op.action === "write");
+  if (writeOps.length === 0) return { consistent: true };
+
+  const standard = [
+    authoritativeUserRequest,
+    "",
+    "This must also still be served by the previously-working deliverable below — a corrective attempt must preserve it except where fixing the reported failure genuinely requires a change:",
+    ...currentFiles.map((f) => `--- ${f.path} ---\n${f.content}`),
+  ].join("\n");
+  const candidate = writeOps.map((op) => `--- ${op.path} ---\n${op.content ?? ""}`).join("\n\n");
+
+  const check = await checkIntentConsistency({
+    authoritativeUserRequest: standard,
+    candidate,
+    checkpointLabel: "corrective attempt output",
+    fetchImpl,
+  });
+  return check.outcome === "inconsistent" ? { consistent: false, reason: check.reason } : { consistent: true };
 }
 
 /**
@@ -300,42 +426,36 @@ export async function executeTask(
       raw: { intentConsistencyBlocked: true },
     };
   } else {
-    try {
-      result = await callAdapterWithTimeout(
-        adapter,
-        // Deliberately role-generic, not task.title — task.title is a
-        // display/tracking label built by concatenating the project's own
-        // title (e.g. "Implement backend — Ollama Hello World Build"),
-        // and echoing it here as "instructions" led a real model to treat
-        // the project title as part of the spec (see
-        // TaskContext.authoritativeUserRequest's docblock for the full
-        // incident writeup). The actual work to do lives in
-        // context.authoritativeUserRequest plus the role's own scoped
-        // artifacts, both already part of `context`.
-        { role: role.id, task: context, instructions: `Perform your assigned "${role.name}" responsibilities for this task.` },
-        options.timeoutMs ?? DEFAULT_TASK_TIMEOUT_MS,
-      );
-    } catch (error) {
-      // Every provider-side failure — a timeout, a thrown exception, a
-      // rejected promise, a malformed adapter — is a normal, expected
-      // *operational* failure, not a reason to let an exception escape
-      // executeTask(). All three collapse to the same synthesized FAILED
-      // result so they flow through the exact same retry/escalation path
-      // as a fixture-driven failure, with no separate "timeout" or
-      // "adapter threw" code path to keep in sync. This is the boundary
-      // that matters: nothing past this point in executeTask() may throw
-      // for a provider-caused reason — only a genuine internal/persistence
-      // error (below) may still propagate, and the Runner treats that
-      // differently (see runner.ts's crash-recovery note).
-      const timedOut = error instanceof AdapterTimeoutError;
-      const reason = error instanceof Error ? error.message : String(error);
-      result = {
-        status: "FAILED",
-        output: { summary: "", artifacts: [], decisions: [], testResults: [], events: [], fileOperations: [], recommendedNextActions: [], failure: { reason } },
-        usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
-        raw: { timedOut, threw: !timedOut },
-      };
-    }
+    // Every provider-side failure — a timeout, a thrown exception, a
+    // rejected promise, a malformed adapter — is a normal, expected
+    // failure, never a reason to let an exception escape executeTask().
+    // All three collapse to the same synthesized FAILED result so they
+    // flow through the exact same retry/escalation path as a
+    // fixture-driven failure, with no separate "timeout" or "adapter
+    // threw" code path to keep in sync. This is the boundary that
+    // matters: nothing past this point in executeTask() may throw for a
+    // provider-caused reason — only a genuine internal/persistence error
+    // (below) may still propagate, and the Runner treats that
+    // differently (see runner.ts's crash-recovery note).
+    //
+    // Bounded in-process retries absorb a purely operational hiccup
+    // (timeout, malformed JSON, connection error) before it ever
+    // consumes one of this task's real, counted attempts — see
+    // `runAdapterWithOperationalRetries`'s docblock.
+    result = await runAdapterWithOperationalRetries(
+      adapter,
+      // Deliberately role-generic, not task.title — task.title is a
+      // display/tracking label built by concatenating the project's own
+      // title (e.g. "Implement backend — Ollama Hello World Build"),
+      // and echoing it here as "instructions" led a real model to treat
+      // the project title as part of the spec (see
+      // TaskContext.authoritativeUserRequest's docblock for the full
+      // incident writeup). The actual work to do lives in
+      // context.authoritativeUserRequest plus the role's own scoped
+      // artifacts, both already part of `context`.
+      { role: role.id, task: context, instructions: `Perform your assigned "${role.name}" responsibilities for this task.` },
+      options.timeoutMs ?? DEFAULT_TASK_TIMEOUT_MS,
+    );
   }
 
   recordAiUsage(db, {
@@ -346,6 +466,47 @@ export async function executeTask(
     outputTokens: result.usage.outputTokens,
     costUsd: result.usage.costUsd,
   });
+
+  // Intent-consistency gate, checkpoint 3 of 3: on a corrective attempt
+  // (attemptNumber > 1) for a development role, a *proposed* write can
+  // still drift the product's identity while claiming to fix an
+  // unrelated bug — a real acceptance run showed exactly this (a real
+  // "Hello World" page's second retry attempt rewrote it into an
+  // unrelated "System Health Check" page while trying to fix a broken
+  // button). Checked *before* any write is applied, against the same
+  // real, current files the corrective-attempt prompt itself showed the
+  // model (context.remediationContext.currentFiles) — so a drifted
+  // proposal never overwrites working content. Tolerant of "unavailable"
+  // like checkpoint 1 (a pre-write safety net, not the final claim of
+  // correctness — real QA, checkpoint 2, remains the authoritative
+  // gate); only a real "inconsistent" verdict rejects.
+  const retryDrift =
+    result.status === "SUCCEEDED" && isDevelopmentRole(role) && project.provider === "ollama" && (attempt.attemptNumber ?? 1) > 1
+      ? await checkRetryDriftBeforeMaterialization(
+          context.authoritativeUserRequest,
+          context.remediationContext?.currentFiles ?? [],
+          result.output.fileOperations,
+          options.intentCheckFetch,
+        )
+      : { consistent: true as const };
+
+  if (!retryDrift.consistent) {
+    result = {
+      status: "FAILED",
+      output: {
+        summary: "",
+        artifacts: [],
+        decisions: [],
+        testResults: [],
+        events: [],
+        fileOperations: [],
+        recommendedNextActions: [],
+        failure: { reason: `Corrective attempt rejected before applying — it would have changed the product's identity: ${retryDrift.reason}` },
+      },
+      usage: result.usage,
+      raw: { retryDriftBlocked: true },
+    };
+  }
 
   // A reported success that also requested real file changes gets those
   // applied *before* finishSuccess ever commits anything. An invalid
@@ -401,11 +562,17 @@ export async function executeTask(
     let finalStatus = verification.status;
     let finalSummary = verification.summary;
 
-    // Intent-consistency gate, checkpoint 2 of 2: a structurally-passing
+    // Intent-consistency gate, checkpoint 2 of 3 — the FINAL gate before
+    // a deliverable is ever called VERIFIED, so unlike checkpoints 1 and
+    // 3 this one does NOT tolerate "unavailable." A structurally-passing
     // page (real heading/description/button, real interactivity, no
     // console errors) can still be the wrong product — e.g. a real
-    // working page about something other than what was asked for. Real
-    // providers only, same reasoning as the pre-development checkpoint.
+    // working page about something other than what was asked for — but
+    // if the check itself can't produce a real verdict (Ollama down,
+    // malformed response), silently defaulting to "must be fine" would
+    // let a real outage rubber-stamp an unverified deliverable as
+    // VERIFIED. Real providers only, same reasoning as checkpoint 1.
+    let deliverableCheckUnavailable = false;
     if (verification.status === "PASS" && project.provider === "ollama") {
       const builtDescription = [verification.details.headingText, verification.details.bodyTextAfter]
         .filter((v): v is string => typeof v === "string" && v.length > 0)
@@ -416,9 +583,17 @@ export async function executeTask(
         checkpointLabel: "built deliverable",
         fetchImpl: options.intentCheckFetch,
       });
-      if (!deliverableCheck.consistent) {
+      if (deliverableCheck.outcome === "inconsistent") {
         finalStatus = "FAIL";
         finalSummary = `The page loaded and worked, but does not match the requested product: ${deliverableCheck.reason}`;
+      } else if (deliverableCheck.outcome === "unavailable") {
+        deliverableCheckUnavailable = true;
+        finalStatus = "FAIL";
+        // "Operational:" prefix — isOperationalFailureReason() classifies
+        // this as infrastructure, not a real QA/deliverable rejection, so
+        // it never reopens the developer and never consumes real retry
+        // budget the way an actual mismatch would.
+        finalSummary = `Operational: deliverable-consistency verification could not run (${deliverableCheck.reason}) — not marking this deliverable VERIFIED.`;
       }
     }
 
@@ -441,7 +616,11 @@ export async function executeTask(
       usage: result.usage,
       raw: { realQaVerification: true },
     };
-    setDeliveryState(db, project.id, finalStatus === "PASS" ? "VERIFIED" : "FAILED");
+    // "VERIFYING" (not "FAILED") when the deliverable-check itself
+    // couldn't run — the build isn't known to be broken, verification is
+    // just incomplete; a future QA rerun (bounded by the normal retry
+    // ceiling) will try again for a real verdict.
+    setDeliveryState(db, project.id, finalStatus === "PASS" ? "VERIFIED" : deliverableCheckUnavailable ? "VERIFYING" : "FAILED");
   }
 
   if (result.status === "SUCCEEDED") {
@@ -597,7 +776,16 @@ function finishFailure(
     // actually need a code change — however many review hops away that
     // is, not just the direct dependency. Every other role retries
     // itself.
-    const isReview = isReviewRole(role);
+    //
+    // An *operational* failure (isOperationalFailureReason) never
+    // triggers this walk-back, regardless of role — an infrastructure
+    // hiccup during, say, qa-agent's own deliverable-consistency check
+    // is not the developer's fault, and blaming/reopening the developer
+    // for it would be exactly the kind of misdirected remediation this
+    // mechanism exists to prevent for real failures. An operational
+    // failure always just retries its own task.
+    const isOperational = isOperationalFailureReason(failureReason);
+    const isReview = !isOperational && isReviewRole(role);
     const remediationTargets = isReview ? findRemediationTargets(db, task.id) : [task];
 
     for (const target of remediationTargets) {

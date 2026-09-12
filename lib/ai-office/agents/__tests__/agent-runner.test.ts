@@ -1073,10 +1073,22 @@ describe("intent-consistency gates — real-provider only, never triggered by Si
       // override this project's own "ollama" provider — the mechanism
       // under test here is Gate 2 (qa-agent's deliverable-consistency
       // check), not file generation itself.
+      // Both seeding calls explicitly mock intentCheckFetch — attempt 2
+      // (attemptNumber > 1) is exactly the shape Gate 3 (retry-drift)
+      // now inspects, and this suite must never depend on a real,
+      // non-deterministic local Ollama server actually being reachable.
       const { SimulatedAdapter } = await import("../../providers/simulated/simulated-adapter.ts");
-      await executeTask(t.db, devTask.id, { provider: new SimulatedAdapter(), scenario: "success" });
+      await executeTask(t.db, devTask.id, {
+        provider: new SimulatedAdapter(),
+        scenario: "success",
+        intentCheckFetch: fetchReturning(true, "consistent with the request"),
+      });
       updateTaskStatus(t.db, devTask.id, "PENDING");
-      await executeTask(t.db, devTask.id, { provider: new SimulatedAdapter(), scenario: "retry-success" });
+      await executeTask(t.db, devTask.id, {
+        provider: new SimulatedAdapter(),
+        scenario: "retry-success",
+        intentCheckFetch: fetchReturning(true, "the fix preserves the existing page"),
+      });
       assert.equal(getTask(t.db, devTask.id)?.status, "DONE");
 
       const { task: qaTask } = createTaskWithDependencies(t.db, {
@@ -1130,6 +1142,357 @@ describe("intent-consistency gates — real-provider only, never triggered by Si
 
       assert.equal(intentCheckCalled, false, "a SIMULATED project must never invoke the deliverable-consistency Ollama call");
       assert.equal(result.outcome, "succeeded", "a real structural PASS for a SIMULATED project is unaffected");
+
+      t.close();
+    });
+  });
+});
+
+describe("retry drift prevention (Phase 8 second follow-up)", () => {
+  function setupOllamaProject(t: ReturnType<typeof createTestDb>, rawIdeaText: string) {
+    const owner = getOwner(t.db)!;
+    const { project } = createProjectWithIdea(t.db, { title: "Simple Web Page Acceptance", rawIdeaText, ownerId: owner.id, provider: "ollama" });
+    return project;
+  }
+
+  function fetchReturning(consistent: boolean, reason: string): typeof fetch {
+    return (async () =>
+      ({ ok: true, status: 200, json: async () => ({ response: JSON.stringify({ consistent, reason }) }) }) as unknown as Response) as unknown as typeof fetch;
+  }
+
+  function fetchThrowing(message: string): typeof fetch {
+    return (async () => {
+      throw new Error(message);
+    }) as unknown as typeof fetch;
+  }
+
+  function writingAdapter(paths: Record<string, string>) {
+    return {
+      name: "ollama",
+      async runAgentTask() {
+        return {
+          status: "SUCCEEDED" as const,
+          output: {
+            summary: "ok",
+            artifacts: [],
+            decisions: [],
+            testResults: [],
+            events: [],
+            fileOperations: Object.entries(paths).map(([path, content]) => ({ kind: "file-operation" as const, action: "write" as const, path, content })),
+            recommendedNextActions: [],
+          },
+          usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+        };
+      },
+      estimateCost() {
+        return { estimatedInputTokens: 0, estimatedOutputTokens: 0, estimatedCostUsd: 0 };
+      },
+    };
+  }
+
+  describe("RemediationContext population (context-builder.ts)", () => {
+    async function captureContext(t: ReturnType<typeof createTestDb>, taskId: string, extraOptions: Record<string, unknown> = {}) {
+      let captured: import("../../providers/types.ts").TaskContext | undefined;
+      const spyAdapter = {
+        name: "ollama",
+        async runAgentTask(input: import("../../providers/types.ts").AgentTaskInput) {
+          captured = input.task;
+          return {
+            status: "SUCCEEDED" as const,
+            output: { summary: "ok", artifacts: [], decisions: [], testResults: [], events: [], fileOperations: [], recommendedNextActions: [] },
+            usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+          };
+        },
+        estimateCost() {
+          return { estimatedInputTokens: 0, estimatedOutputTokens: 0, estimatedCostUsd: 0 };
+        },
+      };
+      await executeTask(t.db, taskId, { provider: spyAdapter, intentCheckFetch: fetchReturning(true, "ok"), ...extraOptions });
+      return captured;
+    }
+
+    test("a first attempt (attemptNumber 1) never carries remediationContext", async () => {
+      const t = createTestDb();
+      const project = setupOllamaProject(t, "Create a webpage.");
+      const devTask = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+      const context = await captureContext(t, devTask.id);
+      assert.equal(context?.remediationContext, undefined);
+      t.close();
+    });
+
+    test("a genuine retry (attemptNumber > 1) for a development role carries the exact failure reason, all unresolved failing checks, and the real current files", async () => {
+      await withWorkspace(async () => {
+        const t = createTestDb();
+        const project = setupOllamaProject(t, "Create a webpage.");
+        const devTask = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+        // Attempt 1: write a real file, then fail it for real via a
+        // downstream QA-shaped failure so a real Failure row exists
+        // against devTask (exactly how a real retry gets triggered).
+        await executeTask(t.db, devTask.id, {
+          provider: writingAdapter({ "index.html": "<h1>Hello</h1>" }),
+          intentCheckFetch: fetchReturning(true, "ok"),
+        });
+        const { recordFailure } = await import("../../domain/project-outputs.ts");
+        recordFailure(t.db, { projectId: project.id, taskId: devTask.id, reason: "Clicking the button did not change any visible text on the page." });
+        updateTaskStatus(t.db, devTask.id, "PENDING");
+
+        const context = await captureContext(t, devTask.id);
+        assert.ok(context?.remediationContext);
+        assert.equal(context!.remediationContext!.attemptNumber, 2);
+        assert.equal(context!.remediationContext!.failureReason, "Clicking the button did not change any visible text on the page.");
+        assert.deepEqual(context!.remediationContext!.failingChecks, ["Clicking the button did not change any visible text on the page."]);
+        assert.ok(context!.remediationContext!.currentFiles.some((f) => f.path === "index.html" && f.content === "<h1>Hello</h1>"));
+        assert.match(context!.remediationContext!.preserveRequirements, /not a redesign/i);
+
+        t.close();
+      });
+    });
+
+    test("a retry for a NON-development role (e.g. qa-agent) never carries remediationContext — the mechanism is development-role-specific", async () => {
+      const t = createTestDb();
+      const project = setupOllamaProject(t, "Create a webpage.");
+      const qaTask = createTask(t.db, { projectId: project.id, roleId: "qa-agent", title: "Test" });
+
+      let captured: import("../../providers/types.ts").TaskContext | undefined;
+      const spyAdapter = {
+        name: "ollama",
+        async runAgentTask(input: import("../../providers/types.ts").AgentTaskInput) {
+          captured = input.task;
+          return { status: "FAILED" as const, output: { summary: "", artifacts: [], decisions: [], testResults: [], events: [], fileOperations: [], recommendedNextActions: [], failure: { reason: "x" } }, usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 } };
+        },
+        estimateCost() {
+          return { estimatedInputTokens: 0, estimatedOutputTokens: 0, estimatedCostUsd: 0 };
+        },
+      };
+      await executeTask(t.db, qaTask.id, { provider: spyAdapter });
+      updateTaskStatus(t.db, qaTask.id, "PENDING");
+      await executeTask(t.db, qaTask.id, { provider: spyAdapter });
+      assert.equal(captured?.remediationContext, undefined);
+
+      t.close();
+    });
+  });
+
+  describe("OllamaAdapter renders the corrective-attempt section", () => {
+    test("the prompt includes the attempt number, exact failure reason, preserve guidance, and current file contents", async () => {
+      const { OllamaAdapter } = await import("../../providers/ollama/ollama-adapter.ts");
+      let capturedPrompt = "";
+      const fetchImpl = async (_url: string, init: RequestInit) => {
+        capturedPrompt = (JSON.parse(init.body as string) as { prompt: string }).prompt;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ response: JSON.stringify({ summary: "ok", artifacts: [], decisions: [], testResults: [], events: [], fileOperations: [], recommendedNextActions: [] }) }),
+        } as unknown as Response;
+      };
+      const adapter = new OllamaAdapter({ fetchImpl: fetchImpl as unknown as typeof fetch });
+      await adapter.runAgentTask({
+        role: "frontend-developer",
+        instructions: "x",
+        task: {
+          projectId: "p1",
+          taskId: "t1",
+          roleId: "frontend-developer",
+          taskTitle: "Implement frontend",
+          projectSummary: "",
+          authoritativeUserRequest: "Create a Hello World webpage with a button.",
+          projectTitle: "Simple Web Page Acceptance",
+          relevantArtifacts: [],
+          relevantDecisions: [],
+          remediationContext: {
+            attemptNumber: 2,
+            failureReason: "Clicking the button did not change any visible text on the page.",
+            failingChecks: ["Clicking the button did not change any visible text on the page."],
+            currentFiles: [{ path: "index.html", content: "<h1>Hello, World!</h1>" }],
+            preserveRequirements: "This is a corrective attempt, not a redesign.",
+          },
+        },
+      });
+
+      assert.match(capturedPrompt, /CORRECTIVE ATTEMPT/);
+      assert.match(capturedPrompt, /Attempt: 2/);
+      assert.match(capturedPrompt, /Clicking the button did not change any visible text on the page\./);
+      assert.match(capturedPrompt, /This is a corrective attempt, not a redesign\./);
+      assert.match(capturedPrompt, /<h1>Hello, World!<\/h1>/, "the real current file content must be shown, not just its path");
+    });
+  });
+
+  describe("Gate 3: a proposed corrective write is checked before it's ever applied", () => {
+    test("a drifted corrective candidate is rejected before materialization — no file is written, the task retries for real", async () => {
+      await withWorkspace(async () => {
+        const t = createTestDb();
+        const project = setupOllamaProject(t, "Create a Hello World webpage with a button.");
+        const devTask = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+        await executeTask(t.db, devTask.id, {
+          provider: writingAdapter({ "index.html": "<h1>Hello, World!</h1><button>Say hello</button>" }),
+          intentCheckFetch: fetchReturning(true, "ok"),
+        });
+        const { recordFailure } = await import("../../domain/project-outputs.ts");
+        recordFailure(t.db, { projectId: project.id, taskId: devTask.id, reason: "Clicking the button did not change any visible text." });
+        updateTaskStatus(t.db, devTask.id, "PENDING");
+
+        const result = await executeTask(t.db, devTask.id, {
+          provider: writingAdapter({ "index.html": "<h1>System Health Check</h1><p>Edge Layer (CDN) verification complete.</p>" }),
+          intentCheckFetch: fetchReturning(false, "The proposed page is an unrelated System Health Check dashboard, not the requested Hello World page."),
+        });
+
+        assert.equal(result.outcome, "retried", "a real drift is a genuine implementation problem — it consumes real retry budget, same as any other bad fix");
+        assert.match(result.reason ?? "", /would have changed the product's identity/);
+        assert.equal(await readFile(project.id, "index.html"), "<h1>Hello, World!</h1><button>Say hello</button>", "the drifted content must never have been written");
+
+        t.close();
+      });
+    });
+
+    test("a valid, minimal, non-drifting corrective fix is accepted and applied normally", async () => {
+      await withWorkspace(async () => {
+        const t = createTestDb();
+        const project = setupOllamaProject(t, "Create a Hello World webpage with a button.");
+        const devTask = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+        await executeTask(t.db, devTask.id, {
+          provider: writingAdapter({ "index.html": "<h1>Hello, World!</h1><button onclick=\"bad()\">Say hello</button>" }),
+          intentCheckFetch: fetchReturning(true, "ok"),
+        });
+        const { recordFailure } = await import("../../domain/project-outputs.ts");
+        recordFailure(t.db, { projectId: project.id, taskId: devTask.id, reason: "Clicking the button did not change any visible text." });
+        updateTaskStatus(t.db, devTask.id, "PENDING");
+
+        const result = await executeTask(t.db, devTask.id, {
+          provider: writingAdapter({ "index.html": "<h1>Hello, World!</h1><button onclick=\"greet()\">Say hello</button>" }),
+          intentCheckFetch: fetchReturning(true, "The fix preserves the Hello World heading and button, only correcting the click handler."),
+        });
+
+        assert.equal(result.outcome, "succeeded");
+        assert.equal(await readFile(project.id, "index.html"), "<h1>Hello, World!</h1><button onclick=\"greet()\">Say hello</button>");
+
+        t.close();
+      });
+    });
+
+    test("Gate 3 does not apply to a first attempt — nothing 'previous' to drift away from yet", async () => {
+      await withWorkspace(async () => {
+        const t = createTestDb();
+        const project = setupOllamaProject(t, "Create any webpage.");
+        const devTask = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+        let intentCheckCalled = false;
+        const result = await executeTask(t.db, devTask.id, {
+          provider: writingAdapter({ "index.html": "<h1>Anything</h1>" }),
+          intentCheckFetch: (async () => {
+            intentCheckCalled = true;
+            return { ok: true, status: 200, json: async () => ({ response: JSON.stringify({ consistent: true, reason: "x" }) }) } as unknown as Response;
+          }) as unknown as typeof fetch,
+        });
+
+        assert.equal(result.outcome, "succeeded");
+        assert.equal(intentCheckCalled, false, "no intent check should run at all on a first attempt with no prior planning artifacts and no prior files");
+
+        t.close();
+      });
+    });
+  });
+
+  describe("Gate 2 is fail-CLOSED on 'unavailable' — the final VERIFIED gate never silently passes when it cannot actually verify", () => {
+    test("when the deliverable-consistency check cannot run at all, the deliverable is NOT marked VERIFIED, and the developer is NOT reopened", async () => {
+      await withWorkspace(async () => {
+        const t = createTestDb();
+        const project = setupOllamaProject(t, "Create a very small Hello World webpage.");
+        const devTask = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+        const { SimulatedAdapter } = await import("../../providers/simulated/simulated-adapter.ts");
+        await executeTask(t.db, devTask.id, { provider: new SimulatedAdapter(), scenario: "success", intentCheckFetch: fetchReturning(true, "ok") });
+        updateTaskStatus(t.db, devTask.id, "PENDING");
+        await executeTask(t.db, devTask.id, { provider: new SimulatedAdapter(), scenario: "retry-success", intentCheckFetch: fetchReturning(true, "ok") });
+
+        const { task: qaTask } = createTaskWithDependencies(t.db, {
+          projectId: project.id,
+          roleId: "qa-agent",
+          title: "Test",
+          dependsOnTaskIds: [devTask.id],
+        });
+
+        const result = await executeTask(t.db, qaTask.id, {
+          provider: new SimulatedAdapter(),
+          intentCheckFetch: fetchThrowing("connect ECONNREFUSED"),
+        });
+
+        assert.equal(result.outcome, "retried", "an operational check failure is a normal retryable failure — never a silent success");
+        assert.match(result.reason ?? "", /Operational:.*could not run/);
+        assert.equal(getWorkspace(t.db, project.id)?.deliveryState, "VERIFYING", "never VERIFIED, and never a false FAILED claim about the build itself");
+        assert.equal(getTask(t.db, devTask.id)?.status, "DONE", "an operational check failure must never blame/reopen the developer");
+
+        t.close();
+      });
+    });
+  });
+
+  describe("operational vs semantic retry budget", () => {
+    test("a transient operational failure (one malformed-JSON response, then a real success) never consumes the task's real retry budget", async () => {
+      const t = createTestDb();
+      const project = setupOllamaProject(t, "Create a webpage.");
+      const task = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "Requirements" });
+
+      let calls = 0;
+      const flakyAdapter = {
+        name: "ollama",
+        async runAgentTask() {
+          calls += 1;
+          if (calls === 1) {
+            // Mirrors OllamaAdapter's own malformedResult() reason text exactly.
+            return {
+              status: "FAILED" as const,
+              output: { summary: "", artifacts: [], decisions: [], testResults: [], events: [], fileOperations: [], recommendedNextActions: [], failure: { reason: "Ollama's model output was not valid JSON." } },
+              usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+            };
+          }
+          return {
+            status: "SUCCEEDED" as const,
+            output: { summary: "ok", artifacts: [{ kind: "artifact" as const, artifactType: "requirements", content: "# Requirements" }], decisions: [], testResults: [], events: [], fileOperations: [], recommendedNextActions: [] },
+            usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+          };
+        },
+        estimateCost() {
+          return { estimatedInputTokens: 0, estimatedOutputTokens: 0, estimatedCostUsd: 0 };
+        },
+      };
+
+      const result = await executeTask(t.db, task.id, { provider: flakyAdapter });
+      assert.equal(result.outcome, "succeeded");
+      assert.equal(calls, 2, "the malformed-JSON response was retried in-process, within this single logical execution");
+      assert.equal(listTaskAttempts(t.db, task.id).length, 1, "only ONE real TaskAttempt was ever created — the transient blip cost nothing");
+
+      t.close();
+    });
+
+    test("a persistent operational failure is bounded (not infinite) and eventually consumes exactly one real attempt, flowing through the normal retry path", async () => {
+      const t = createTestDb();
+      const project = setupOllamaProject(t, "Create a webpage.");
+      const task = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "Requirements" });
+
+      let calls = 0;
+      const alwaysFlakyAdapter = {
+        name: "ollama",
+        async runAgentTask() {
+          calls += 1;
+          return {
+            status: "FAILED" as const,
+            output: { summary: "", artifacts: [], decisions: [], testResults: [], events: [], fileOperations: [], recommendedNextActions: [], failure: { reason: "Ollama's model output was not valid JSON." } },
+            usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+          };
+        },
+        estimateCost() {
+          return { estimatedInputTokens: 0, estimatedOutputTokens: 0, estimatedCostUsd: 0 };
+        },
+      };
+
+      const result = await executeTask(t.db, task.id, { provider: alwaysFlakyAdapter });
+      assert.equal(result.outcome, "retried", "still bounded — this eventually gives up and flows through the normal failure path");
+      assert.equal(calls, 3, "1 initial call + 2 bounded operational retries, never unbounded");
+      assert.equal(listTaskAttempts(t.db, task.id).length, 1, "all 3 real HTTP calls happened within ONE logical TaskAttempt");
+      assert.equal(getTask(t.db, task.id)?.attemptCount, 1, "a persistent operational failure still only consumes one unit of the real retry ceiling per real execution, exactly like any other failure");
 
       t.close();
     });

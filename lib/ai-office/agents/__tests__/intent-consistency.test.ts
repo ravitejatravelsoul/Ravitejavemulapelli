@@ -7,7 +7,7 @@ function jsonResponse(body: unknown, init: { ok?: boolean; status?: number } = {
 }
 
 describe("checkIntentConsistency", () => {
-  test("returns consistent:true and the model's reason when the model reports consistent:true", async () => {
+  test('returns outcome "consistent" and the model\'s reason when the model reports consistent:true', async () => {
     const fetchImpl = async () => jsonResponse({ response: JSON.stringify({ consistent: true, reason: "The plan builds a webpage as requested." }) });
     const result = await checkIntentConsistency({
       authoritativeUserRequest: "Build a simple webpage with a heading and a button.",
@@ -15,11 +15,11 @@ describe("checkIntentConsistency", () => {
       checkpointLabel: "planned architecture",
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
-    assert.equal(result.consistent, true);
+    assert.equal(result.outcome, "consistent");
     assert.equal(result.reason, "The plan builds a webpage as requested.");
   });
 
-  test("returns consistent:false and the model's reason when the model reports a real mismatch", async () => {
+  test('returns outcome "inconsistent" and the model\'s reason when the model reports a real mismatch', async () => {
     const fetchImpl = async () =>
       jsonResponse({ response: JSON.stringify({ consistent: false, reason: "The plan describes a Python API client, not a webpage." }) });
     const result = await checkIntentConsistency({
@@ -28,30 +28,32 @@ describe("checkIntentConsistency", () => {
       checkpointLabel: "planned architecture",
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
-    assert.equal(result.consistent, false);
+    assert.equal(result.outcome, "inconsistent");
     assert.match(result.reason, /Python API client/);
   });
 
   test("is generic — not hardcoded to any specific title/idea pair (three unrelated cases)", async () => {
     const cases = [
-      { request: "Create a simple webpage with a heading, description and button.", candidate: "A CLI tool that talks to a local LLM server.", expected: false },
-      { request: "Create a static HTML landing page.", candidate: "A Flask backend with a REST API and a database.", expected: false },
-      { request: "Create a calculator webpage.", candidate: "A calculator webpage with add/subtract buttons and a display.", expected: true },
-    ];
+      { request: "Create a simple webpage with a heading, description and button.", candidate: "A CLI tool that talks to a local LLM server.", expected: "inconsistent" },
+      { request: "Create a static HTML landing page.", candidate: "A Flask backend with a REST API and a database.", expected: "inconsistent" },
+      { request: "Create a calculator webpage.", candidate: "A calculator webpage with add/subtract buttons and a display.", expected: "consistent" },
+    ] as const;
     for (const c of cases) {
-      const fetchImpl = async () => jsonResponse({ response: JSON.stringify({ consistent: c.expected, reason: "model judgment" }) });
+      const fetchImpl = async () => jsonResponse({ response: JSON.stringify({ consistent: c.expected === "consistent", reason: "model judgment" }) });
       const result = await checkIntentConsistency({
         authoritativeUserRequest: c.request,
         candidate: c.candidate,
         checkpointLabel: "test",
         fetchImpl: fetchImpl as unknown as typeof fetch,
       });
-      assert.equal(result.consistent, c.expected);
+      assert.equal(result.outcome, c.expected);
     }
   });
 
-  test("fails open (consistent:true) when Ollama is unreachable — never blocks the pipeline on its own reliability", async () => {
+  test('returns outcome "unavailable" (never a silent "consistent") when Ollama is unreachable, after exhausting internal retries', async () => {
+    let callCount = 0;
     const fetchImpl = async () => {
+      callCount += 1;
       throw new Error("connect ECONNREFUSED");
     };
     const result = await checkIntentConsistency({
@@ -60,11 +62,12 @@ describe("checkIntentConsistency", () => {
       checkpointLabel: "planned architecture",
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
-    assert.equal(result.consistent, true);
+    assert.equal(result.outcome, "unavailable");
     assert.match(result.reason, /could not run/);
+    assert.equal(callCount, 3, "1 initial attempt + 2 internal retries, all failing, before giving up");
   });
 
-  test("fails open when the model's response is not valid JSON", async () => {
+  test('returns outcome "unavailable" when the model\'s response is not valid JSON', async () => {
     const fetchImpl = async () => jsonResponse({ response: "sure, it looks consistent to me" });
     const result = await checkIntentConsistency({
       authoritativeUserRequest: "Build a webpage.",
@@ -72,10 +75,10 @@ describe("checkIntentConsistency", () => {
       checkpointLabel: "planned architecture",
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
-    assert.equal(result.consistent, true);
+    assert.equal(result.outcome, "unavailable");
   });
 
-  test("fails open when the HTTP response is not ok", async () => {
+  test('returns outcome "unavailable" when the HTTP response is not ok', async () => {
     const fetchImpl = async () => jsonResponse({}, { ok: false, status: 500 });
     const result = await checkIntentConsistency({
       authoritativeUserRequest: "Build a webpage.",
@@ -83,10 +86,28 @@ describe("checkIntentConsistency", () => {
       checkpointLabel: "planned architecture",
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
-    assert.equal(result.consistent, true);
+    assert.equal(result.outcome, "unavailable");
   });
 
-  test("skips the check (consistent:true) when either input is empty — nothing meaningful to compare yet", async () => {
+  test("recovers from a transient failure — a real verdict on the 2nd internal attempt is returned, not 'unavailable'", async () => {
+    let callCount = 0;
+    const fetchImpl = async () => {
+      callCount += 1;
+      if (callCount === 1) throw new Error("connect ECONNREFUSED");
+      return jsonResponse({ response: JSON.stringify({ consistent: true, reason: "recovered" }) });
+    };
+    const result = await checkIntentConsistency({
+      authoritativeUserRequest: "Build a webpage.",
+      candidate: "A webpage.",
+      checkpointLabel: "planned architecture",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    assert.equal(result.outcome, "consistent");
+    assert.equal(result.reason, "recovered");
+    assert.equal(callCount, 2);
+  });
+
+  test('outcome "consistent" (skips the check entirely) when either input is empty — nothing meaningful to compare yet', async () => {
     let called = false;
     const fetchImpl = async () => {
       called = true;
@@ -98,7 +119,7 @@ describe("checkIntentConsistency", () => {
       checkpointLabel: "test",
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
-    assert.equal(result.consistent, true);
+    assert.equal(result.outcome, "consistent");
     assert.equal(called, false, "must not call Ollama when there's nothing to compare");
   });
 });

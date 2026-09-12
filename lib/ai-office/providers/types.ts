@@ -57,6 +57,32 @@ export interface TaskContext {
    * Real providers (Phase 7+) ignore this field entirely.
    */
   scenario?: string;
+  /**
+   * Present only when this execution is a corrective attempt (attempt
+   * number > 1 for a development role) — built from the SAME
+   * Failure/TaskAttempt/workspace data every other remediation path
+   * already persists, never a new retry-tracking mechanism. Real
+   * acceptance evidence showed that a bare "you failed, try again"
+   * signal caused a real model to redesign the whole product while
+   * "fixing" an unrelated bug (see intent-consistency.ts's docblock for
+   * the fuller incident writeup) — this exists so a retry can instead be
+   * told exactly what's broken, what already exists and must be kept,
+   * and that this is a patch, not a redesign.
+   */
+  remediationContext?: RemediationContext;
+}
+
+export interface RemediationContext {
+  /** This role's own attempt count for this task — 2 on the first retry, etc. Always > 1 whenever this field is present. */
+  attemptNumber: number;
+  /** The most recent unresolved failure reason for this exact task, if any — verbatim, so the model sees precisely what was reported, not a paraphrase. */
+  failureReason: string | null;
+  /** Every unresolved failure reason currently on record for this task, oldest first — usually one entry, but a task can accumulate more than one before it's next attempted. */
+  failingChecks: string[];
+  /** The real, current content of every file already in the project's workspace — not just this role's own prior files — so a corrective attempt can see exactly what exists and preserve whatever isn't the reported problem, rather than reinventing it from scratch. */
+  currentFiles: Array<{ path: string; content: string }>;
+  /** Fixed, idea-independent guidance — never mentions this project's specific product, on purpose. */
+  preserveRequirements: string;
 }
 
 export interface AgentTaskInput {

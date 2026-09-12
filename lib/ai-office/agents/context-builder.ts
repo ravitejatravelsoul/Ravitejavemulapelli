@@ -3,11 +3,56 @@ import type { DatabaseSync } from "node:sqlite";
 // Relative + extension-explicit — see lib/ai-office/db/client.ts's comment.
 import type { AgentRoleRow } from "../domain/agent-roles.ts";
 import type { TaskRow } from "../domain/tasks.ts";
-import { listArtifactsForProject, listDecisionsForProject } from "../domain/project-outputs.ts";
+import { listArtifactsForProject, listDecisionsForProject, listUnresolvedFailures } from "../domain/project-outputs.ts";
 import { getProjectMemory } from "../domain/project-memory.ts";
 import { getProject, getProjectIdea } from "../domain/projects.ts";
-import type { TaskContext } from "../providers/types.ts";
+import type { TaskContext, RemediationContext } from "../providers/types.ts";
 import { workspaceExists, listFiles, readFile } from "../workspace/workspace-service.ts";
+import { isDevelopmentRole } from "./remediation.ts";
+
+/** Fixed, idea-independent — never redescribes what this specific project builds. */
+const PRESERVE_REQUIREMENTS_GUIDANCE =
+  "This is a corrective attempt, not a redesign. The authoritative user request has not changed. Preserve all existing content and behavior that the failure reason does not mention — do not rename, retheme, or reinterpret the product, and do not replace working UI/content unless the failure genuinely requires it. Prefer changing only the file(s) most directly related to the reported failure (e.g. if the failure describes broken interactive behavior, prefer editing the script over rewriting the markup/styles) — but you may rewrite whichever file(s) are actually necessary to fix it.";
+
+/** All current real workspace files, unabridged by role — a corrective attempt needs to see exactly what already exists to preserve it, not just the subset its own allowedInputs would normally scope it to. */
+async function buildCurrentFiles(projectId: string): Promise<Array<{ path: string; content: string }>> {
+  if (!workspaceExists(projectId)) return [];
+  const paths = await listFiles(projectId);
+  const files: Array<{ path: string; content: string }> = [];
+  for (const path of paths) {
+    files.push({ path, content: await readFile(projectId, path) });
+  }
+  return files;
+}
+
+/**
+ * Built only when this execution is a genuine corrective attempt for a
+ * development role — reuses exactly the Failure/workspace data every
+ * other remediation path already persists (`listUnresolvedFailures`,
+ * `workspace-service.ts`'s real file reads), never a new tracking
+ * mechanism. See `RemediationContext`'s docblock in providers/types.ts
+ * for why this exists.
+ */
+async function buildRemediationContext(
+  db: DatabaseSync,
+  task: TaskRow,
+  role: AgentRoleRow,
+  attemptNumber: number,
+): Promise<RemediationContext | undefined> {
+  if (attemptNumber <= 1 || !isDevelopmentRole(role)) return undefined;
+
+  const failingChecks = listUnresolvedFailures(db, task.projectId)
+    .filter((f) => f.taskId === task.id)
+    .map((f) => f.reason);
+
+  return {
+    attemptNumber,
+    failureReason: failingChecks[failingChecks.length - 1] ?? null,
+    failingChecks,
+    currentFiles: await buildCurrentFiles(task.projectId),
+    preserveRequirements: PRESERVE_REQUIREMENTS_GUIDANCE,
+  };
+}
 
 /** A scoped sample, not the whole workspace — Phase 8 Part J's "file list, relevant changed files, selected content... never the whole workspace blindly." */
 const MAX_RELEVANT_FILES = 8;
@@ -88,6 +133,7 @@ export async function buildTaskContext(
   // scoped away. See TaskContext.authoritativeUserRequest's docblock.
   const idea = getProjectIdea(db, task.projectId);
   const project = getProject(db, task.projectId);
+  const remediationContext = await buildRemediationContext(db, task, role, options.attemptNumber ?? 1);
 
   return {
     projectId: task.projectId,
@@ -97,6 +143,7 @@ export async function buildTaskContext(
     projectSummary: memory?.summary ?? "",
     authoritativeUserRequest: idea?.rawText ?? "",
     projectTitle: project?.title ?? "",
+    remediationContext,
     relevantArtifacts,
     relevantDecisions,
     relevantFiles,
