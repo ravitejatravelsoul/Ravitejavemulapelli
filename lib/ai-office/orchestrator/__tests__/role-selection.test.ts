@@ -98,6 +98,15 @@ describe("selectRoles — capability-driven backend selection (Phase 8 follow-up
     const devRoles = roles.filter((r) => r === "frontend-developer" || r === "backend-developer");
     assert.equal(devRoles.length, 1, "every project needs at least one development role");
   });
+
+  test('"webpage" (one word, no space) is recognized as a UI signal — a real acceptance run surfaced this exact wording incorrectly falling through to the backend default', () => {
+    const { roles } = selectRoles(
+      "Create a small modern Hello World webpage with a heading, a short description, and a button. Clicking the button should change visible text.",
+    );
+    assert.ok(roles.includes("frontend-developer"), "expected frontend-developer");
+    assert.ok(roles.includes("ui-ux-agent"), "expected ui-ux-agent");
+    assert.ok(!roles.includes("backend-developer"), "a static Hello World webpage needs no backend");
+  });
 });
 
 describe("requiresOwnerApproval — synthetic approval signal", () => {

@@ -16,7 +16,7 @@ export interface RoleSelection {
   rationale: string[];
 }
 
-const UI_SIGNALS = ["web app", "web application", "app", "website", "ui", "screen", "interface", "dashboard", "mobile app", "frontend", "form", "page"];
+const UI_SIGNALS = ["web app", "web application", "webpage", "web page", "app", "website", "ui", "screen", "interface", "dashboard", "mobile app", "frontend", "form", "page"];
 /**
  * Signals that the idea genuinely needs server-side behavior — API,
  * database, auth, server-side persistence/logic, background processing,
