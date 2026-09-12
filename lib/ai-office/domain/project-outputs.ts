@@ -64,6 +64,8 @@ export interface TestResultRow {
   status: TestResultStatus;
   summary: string;
   details: string | null;
+  durationMs: number | null;
+  targetUrl: string | null;
   createdAt: number;
 }
 
@@ -142,14 +144,32 @@ export function listArtifactsForProject(db: DatabaseSync, projectId: string): Ar
 
 export function recordTestResult(
   db: DatabaseSync,
-  input: { projectId: string; taskId: string; status: TestResultStatus; summary: string; details?: Record<string, unknown> },
+  input: {
+    projectId: string;
+    taskId: string;
+    status: TestResultStatus;
+    summary: string;
+    details?: Record<string, unknown>;
+    durationMs?: number;
+    targetUrl?: string;
+  },
 ): TestResultRow {
   const id = randomUUID();
   const now = Date.now();
   db.prepare(
-    `INSERT INTO test_results (id, projectId, taskId, status, summary, details, createdAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, input.projectId, input.taskId, input.status, input.summary, input.details ? JSON.stringify(input.details) : null, now);
+    `INSERT INTO test_results (id, projectId, taskId, status, summary, details, durationMs, targetUrl, createdAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    input.projectId,
+    input.taskId,
+    input.status,
+    input.summary,
+    input.details ? JSON.stringify(input.details) : null,
+    input.durationMs ?? null,
+    input.targetUrl ?? null,
+    now,
+  );
   return db.prepare("SELECT * FROM test_results WHERE id = ?").get(id) as unknown as TestResultRow;
 }
 

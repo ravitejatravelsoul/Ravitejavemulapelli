@@ -13,6 +13,7 @@ import {
   deleteFile,
   createDirectory,
   getWorkspaceMetadata,
+  getContentType,
   WorkspacePathError,
   WorkspaceLimitError,
   MAX_FILE_SIZE_BYTES,
@@ -188,5 +189,18 @@ describe("size limits", () => {
     await assert.doesNotReject(() => writeFile(PROJECT_A, "a.txt", "y".repeat(1000)));
     const meta = await getWorkspaceMetadata(PROJECT_A);
     assert.equal(meta.totalSizeBytes, 1000);
+  });
+});
+
+describe("getContentType", () => {
+  test("maps known extensions to their real content type", () => {
+    assert.equal(getContentType("index.html"), "text/html; charset=utf-8");
+    assert.equal(getContentType("styles.css"), "text/css; charset=utf-8");
+    assert.equal(getContentType("script.js"), "text/javascript; charset=utf-8");
+    assert.equal(getContentType("data.json"), "application/json; charset=utf-8");
+  });
+
+  test("falls back to a safe, non-executable default for an unknown extension", () => {
+    assert.equal(getContentType("weird.xyz"), "application/octet-stream");
   });
 });

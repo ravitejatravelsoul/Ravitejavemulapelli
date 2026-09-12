@@ -263,3 +263,23 @@ export async function getWorkspaceMetadata(projectId: string): Promise<Workspace
   const totalSizeBytes = await getWorkspaceTotalSize(projectId);
   return { exists: true, fileCount: files.length, totalSizeBytes };
 }
+
+const CONTENT_TYPES_BY_EXTENSION: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".ico": "image/x-icon",
+  ".txt": "text/plain; charset=utf-8",
+};
+
+/** Shared by both the owner-facing preview route and QA's ephemeral verification server, so file-type handling never diverges between the two. Unknown extensions fall back to a safe, non-executable default. */
+export function getContentType(relativePath: string): string {
+  return CONTENT_TYPES_BY_EXTENSION[path.extname(relativePath).toLowerCase()] ?? "application/octet-stream";
+}
