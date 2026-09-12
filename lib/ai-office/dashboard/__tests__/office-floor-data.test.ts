@@ -61,11 +61,15 @@ describe("getOfficeFloorView — fresh plan, nothing executed yet", () => {
 
 describe("getOfficeFloorView — task status mapping", () => {
   test("IN_PROGRESS on a development role reads WORKING", () => {
+    // WEB_APP_IDEA has a clear UI signal and no server-side signal, so
+    // (Phase 8's capability-driven role selection) it selects
+    // frontend-developer, not backend-developer — either is a
+    // development role, this test just needs one that's actually planned.
     const { t, project, tasks } = setup();
-    const backend = findTask(tasks, "backend-developer");
-    updateTaskStatus(t.db, backend.id, "IN_PROGRESS");
+    const frontend = findTask(tasks, "frontend-developer");
+    updateTaskStatus(t.db, frontend.id, "IN_PROGRESS");
     const view = getOfficeFloorView(t.db, project.id);
-    assert.equal(view.agents.find((a) => a.roleId === "backend-developer")!.status, "WORKING");
+    assert.equal(view.agents.find((a) => a.roleId === "frontend-developer")!.status, "WORKING");
   });
 
   test("IN_PROGRESS on an analysis/design role (product-owner) reads THINKING", () => {

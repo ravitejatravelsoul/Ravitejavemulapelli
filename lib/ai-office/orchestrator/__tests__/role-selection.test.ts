@@ -55,11 +55,48 @@ describe("selectRoles — deterministic keyword classifier", () => {
     assert.deepEqual(first, second);
   });
 
-  test("always includes the universal roles regardless of idea content", () => {
+  test("always includes the truly universal roles regardless of idea content", () => {
     const { roles } = selectRoles("x");
-    for (const universal of ["product-owner", "solution-architect", "backend-developer", "qa-agent", "code-reviewer", "release-agent"]) {
+    for (const universal of ["product-owner", "solution-architect", "qa-agent", "code-reviewer", "release-agent"]) {
       assert.ok(roles.includes(universal), `expected ${universal} to always be included`);
     }
+  });
+
+  test("an idea with no UI signal and no backend signal still gets a development role (fallback default: backend-developer)", () => {
+    const { roles } = selectRoles("x");
+    assert.ok(roles.includes("backend-developer"));
+    assert.ok(!roles.includes("frontend-developer"));
+  });
+});
+
+describe("selectRoles — capability-driven backend selection (Phase 8 follow-up)", () => {
+  test('"Create a static landing page with a heading and button." — frontend yes, backend no', () => {
+    const { roles } = selectRoles("Create a static landing page with a heading and button.");
+    assert.ok(roles.includes("frontend-developer"), "expected frontend-developer");
+    assert.ok(!roles.includes("backend-developer"), "a static landing page needs no backend");
+  });
+
+  test('"Build a todo page using browser localStorage." — frontend yes, backend no', () => {
+    const { roles } = selectRoles("Build a todo page using browser localStorage.");
+    assert.ok(roles.includes("frontend-developer"), "expected frontend-developer");
+    assert.ok(!roles.includes("backend-developer"), "client-side-only storage needs no backend");
+  });
+
+  test('"Build a todo app with server persistence and REST API." — frontend yes, backend yes', () => {
+    const { roles } = selectRoles("Build a todo app with server persistence and REST API.");
+    assert.ok(roles.includes("frontend-developer"), "expected frontend-developer");
+    assert.ok(roles.includes("backend-developer"), "server persistence and a REST API are explicit backend signals");
+  });
+
+  test('"Build an authenticated dashboard backed by a database." — backend yes', () => {
+    const { roles } = selectRoles("Build an authenticated dashboard backed by a database.");
+    assert.ok(roles.includes("backend-developer"), "a database is an explicit backend signal");
+  });
+
+  test("a generic implementation-logic idea with neither signal still gets exactly one development role, not zero", () => {
+    const { roles } = selectRoles("Build a small tool.");
+    const devRoles = roles.filter((r) => r === "frontend-developer" || r === "backend-developer");
+    assert.equal(devRoles.length, 1, "every project needs at least one development role");
   });
 });
 

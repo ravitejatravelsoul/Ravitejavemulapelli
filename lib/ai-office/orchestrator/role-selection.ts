@@ -16,7 +16,40 @@ export interface RoleSelection {
   rationale: string[];
 }
 
-const UI_SIGNALS = ["web app", "web application", "website", "ui", "screen", "interface", "dashboard", "mobile app", "frontend", "form", "page"];
+const UI_SIGNALS = ["web app", "web application", "app", "website", "ui", "screen", "interface", "dashboard", "mobile app", "frontend", "form", "page"];
+/**
+ * Signals that the idea genuinely needs server-side behavior — API,
+ * database, auth, server-side persistence/logic, background processing,
+ * or an external backend service/integration. Deliberately does NOT
+ * include generic words like "store"/"save"/"persist" on their own,
+ * since those are just as often client-side (e.g. "store to browser
+ * localStorage") — every signal here is either an unambiguous noun
+ * (database, API) or a specific server-side phrase, not a word that
+ * could plausibly describe purely client-side behavior.
+ */
+const BACKEND_SIGNALS = [
+  "database",
+  "rest api",
+  "api endpoint",
+  "api",
+  "backend",
+  "server-side",
+  "server persistence",
+  "backend service",
+  "authentication",
+  "user account",
+  "user accounts",
+  "background job",
+  "background processing",
+  "cron job",
+  "scheduled job",
+  "scheduled task",
+  "webhook",
+  "microservice",
+  "external service",
+  "third-party service",
+  "external backend",
+];
 const SECURITY_SIGNALS = ["auth", "login", "password", "payment", "credit card", "pii", "personal data", "external api", "third-party", "integration", "network"];
 const RESEARCH_SIGNALS = ["explore", "research", "investigate", "unfamiliar", "not sure", "prior art", "feasibility"];
 const APPROVAL_SIGNALS = ["paid service", "purchase", "subscription", "buy a", "external account"];
@@ -57,15 +90,36 @@ export function selectRoles(ideaText: string): RoleSelection {
   ];
 
   const uiHits = includesAny(text, UI_SIGNALS);
-  if (uiHits.length > 0) {
+  const needsFrontend = uiHits.length > 0;
+  if (needsFrontend) {
     roles.push("ui-ux-agent", "frontend-developer");
     rationale.push(`ui-ux-agent, frontend-developer included: idea mentions UI/screen signal(s) [${uiHits.join(", ")}].`);
   }
 
-  // Always include a development role — every idea this system builds
-  // involves some implementation logic, UI or not.
-  roles.push("backend-developer");
-  rationale.push("backend-developer included: every project involves implementation logic.");
+  // Capability-driven, not unconditional: backend-developer is only
+  // selected when the idea genuinely implies server-side behavior (API,
+  // database, auth, server-side persistence/logic, background
+  // processing, or an external backend service) — see BACKEND_SIGNALS.
+  // A UI-only idea (a static/client-side page, e.g. "a landing page" or
+  // "a todo page using browser localStorage") never needed a backend
+  // just because it happened to also need a frontend. The one fallback:
+  // an idea with NEITHER a UI signal NOR a backend signal still needs
+  // *some* implementation role, and defaults to backend-developer as the
+  // more general-purpose "server/logic" role in this catalog — matching
+  // every existing generic idea like "Build a small tool." that isn't
+  // asserting anything about frontend/backend specifically.
+  const backendHits = includesAny(text, BACKEND_SIGNALS);
+  const needsBackend = backendHits.length > 0 || !needsFrontend;
+  if (needsBackend) {
+    roles.push("backend-developer");
+    rationale.push(
+      backendHits.length > 0
+        ? `backend-developer included: idea signals server-side behavior [${backendHits.join(", ")}].`
+        : "backend-developer included: idea has no explicit UI or backend signal — defaulting to a general implementation role.",
+    );
+  } else {
+    rationale.push("backend-developer excluded: idea describes client-side-only behavior with no server-side signal.");
+  }
 
   const researchHits = includesAny(text, RESEARCH_SIGNALS);
   const isVeryShort = ideaText.trim().split(/\s+/).filter(Boolean).length < 8;

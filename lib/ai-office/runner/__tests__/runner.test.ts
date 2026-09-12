@@ -561,7 +561,10 @@ describe("autonomous acceptance scenario — idea in, READY_FOR_REVIEW out, no m
 
     const qaTask = tasks.find((task) => task.roleId === "qa-agent")!;
     assert.equal(qaTask.attemptCount, 2, "QA must have failed once, then rerun and passed");
-    const devTask = tasks.find((task) => task.roleId === "backend-developer")!;
+    // This idea has a clear UI signal and no server-side signal, so
+    // (Phase 8's capability-driven role selection) it plans
+    // frontend-developer, not backend-developer.
+    const devTask = tasks.find((task) => task.roleId === "frontend-developer")!;
     assert.ok(devTask.attemptCount >= 1);
 
     const events = listEventsForProject(t.db, project.id);
