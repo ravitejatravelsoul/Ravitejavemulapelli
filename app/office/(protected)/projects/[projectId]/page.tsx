@@ -14,7 +14,11 @@ import { TaskFlow } from "@/components/ai-office/dashboard/task-flow";
 import { AutoRefresh } from "@/components/ai-office/auto-refresh";
 import { FileBrowser, type WorkspaceFileEntry } from "@/components/ai-office/workspace/file-browser";
 import { PreviewPanel } from "@/components/ai-office/workspace/preview-panel";
+import { ModelPolicyPanel } from "@/components/ai-office/workspace/model-policy-panel";
 import { pauseProjectAction, resumeProjectAction } from "@/app/office/actions/projects";
+import { checkOllamaHealth } from "@/lib/ai-office/providers/ollama/health";
+import { getProjectModelPolicy } from "@/lib/ai-office/domain/model-routing";
+import { AGENT_ROLE_CATALOG } from "@/lib/ai-office/domain/agent-role-catalog";
 
 export const metadata: Metadata = { title: "Project" };
 
@@ -50,6 +54,10 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
   const canResume = project.status === "PAUSED";
 
   const isActive = project.status === "IN_PROGRESS";
+
+  const modelPolicy = project.provider === "ollama" ? getProjectModelPolicy(db, project.id) : null;
+  const ollamaHealth = project.provider === "ollama" ? await checkOllamaHealth() : null;
+  const routableRoles = AGENT_ROLE_CATALOG.filter((r) => r.id !== "orchestrator").map((r) => ({ id: r.id, name: r.name }));
 
   const hasIndexHtml = workspace.files.some((f) => f.path === "index.html");
   const previewStatus = getPreviewStatusLabel(workspace.hasWorkspace, workspace.deliveryState, hasIndexHtml);
@@ -122,6 +130,27 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
           <TaskFlow tasks={tasks} />
         </div>
       </GlassCard>
+
+      {project.provider === "ollama" && modelPolicy && (
+        <GlassCard>
+          <h2 className="text-sm font-semibold tracking-tight">Local Model Routing</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {ollamaHealth?.online
+              ? `Ollama online · ${ollamaHealth.models.length} model${ollamaHealth.models.length === 1 ? "" : "s"} installed.`
+              : "Ollama appears offline — routing will fail honestly until it's reachable."}
+          </p>
+          <div className="mt-4 max-w-md">
+            <ModelPolicyPanel
+              projectId={project.id}
+              availableModels={ollamaHealth?.models ?? []}
+              initialMode={modelPolicy.mode}
+              initialSingleModel={modelPolicy.singleModel}
+              initialCustomMapping={modelPolicy.customMapping}
+              roles={routableRoles}
+            />
+          </div>
+        </GlassCard>
+      )}
 
       {workspace.hasWorkspace && (
         <GlassCard>
