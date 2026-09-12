@@ -1,0 +1,73 @@
+"use client";
+
+import { useRouter, usePathname } from "next/navigation";
+import type { OfficeFloorView } from "@/lib/ai-office/dashboard/office-floor-data";
+
+/**
+ * The current-project readout, integrated directly into the office canvas
+ * rather than as a separate huge card — title, progress, current work, and
+ * (when more than one project exists) a plain `<select>` that switches
+ * which project's real state the floor visualizes, via a `?project=`
+ * query param (no client data-fetching layer needed — the page itself is
+ * a Server Component that re-renders with the new selection).
+ */
+export function OfficeProjectStrip({ floor }: { floor: OfficeFloorView }) {
+  const router = useRouter();
+  const pathname = usePathname();
+
+  if (!floor.selectedProject) {
+    return (
+      <div className="glass flex items-center justify-between gap-3 rounded-2xl px-4 py-3">
+        <p className="text-sm text-muted-foreground">Office ready — start with an idea.</p>
+      </div>
+    );
+  }
+
+  const { title, progress, provider, status } = floor.selectedProject;
+  const percent = progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0;
+  const workingAgent = floor.agents.find((a) => a.status === "WORKING" || a.status === "THINKING" || a.status === "REVIEWING");
+  const waitingCount = floor.agents.filter((a) => a.status === "WAITING").length;
+
+  return (
+    <div className="glass flex flex-col gap-2 rounded-2xl px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="truncate text-sm font-semibold tracking-tight">{title}</p>
+          <span className="font-mono text-[0.6rem] tracking-widest text-muted-foreground uppercase">{status.replace(/_/g, " ")}</span>
+          <span className="rounded-full bg-muted px-1.5 py-0.5 font-mono text-[0.6rem] tracking-widest text-muted-foreground uppercase">{provider}</span>
+        </div>
+        <div className="mt-1.5 flex items-center gap-2">
+          <div className="h-1.5 w-32 overflow-hidden rounded-full bg-muted">
+            <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${percent}%` }} />
+          </div>
+          <span className="text-[0.65rem] text-muted-foreground">
+            {progress.completed}/{progress.total} tasks
+          </span>
+        </div>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {workingAgent ? `${workingAgent.roleName} is on it` : waitingCount > 0 ? "Waiting on the runner" : "Nothing currently running"}
+          {workingAgent?.currentTaskTitle ? ` — ${workingAgent.currentTaskTitle}` : ""}
+        </p>
+      </div>
+
+      {floor.projects.length > 1 && (
+        <select
+          aria-label="Select project to visualize"
+          className="w-full shrink-0 rounded-md border border-border bg-background px-2 py-1.5 text-xs sm:w-auto"
+          value={floor.selectedProject.id}
+          onChange={(e) => {
+            const params = new URLSearchParams();
+            params.set("project", e.target.value);
+            router.push(`${pathname}?${params.toString()}`);
+          }}
+        >
+          {floor.projects.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.title}
+            </option>
+          ))}
+        </select>
+      )}
+    </div>
+  );
+}

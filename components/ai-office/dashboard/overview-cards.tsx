@@ -13,7 +13,7 @@ function StatCard({ label, value, tone }: { label: string; value: React.ReactNod
 
 export function OverviewCards({ overview }: { overview: OfficeOverview }) {
   return (
-    <div className="grid grid-cols-2 gap-3 lg:grid-cols-5 lg:gap-4">
+    <div className="grid grid-cols-2 gap-3">
       <StatCard label="Active Projects" value={overview.activeProjects} />
       <StatCard label="Paused" value={overview.pausedProjects} />
       <StatCard label="Blocked" value={overview.blockedProjects} tone={overview.blockedProjects > 0 ? "warn" : "default"} />
