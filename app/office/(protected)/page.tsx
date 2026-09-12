@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { getAppDatabase } from "@/lib/ai-office/db/client";
 import {
   getOfficeOverview,
@@ -67,8 +68,13 @@ export default async function OfficeHomePage({ searchParams }: { searchParams: P
     budget: <BudgetPanel budget={budget} />,
     settings: (
       <GlassCard className="p-4 text-sm text-muted-foreground">
-        Office-wide settings (AI provider selection, budget cap) live here. Nothing configurable yet beyond what Open/Close and the
-        budget panel already control.
+        <p>
+          Office-wide settings (AI provider selection, budget cap) live here. Nothing configurable yet beyond what Open/Close and the
+          budget panel already control.
+        </p>
+        <Link href="/office/local-models" className="mt-3 inline-block text-sm font-medium text-primary underline-offset-4 hover:underline">
+          Local Models — benchmark and route installed Ollama models →
+        </Link>
       </GlassCard>
     ),
   };
