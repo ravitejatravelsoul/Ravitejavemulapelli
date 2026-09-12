@@ -1,6 +1,6 @@
 import "server-only";
 import type { DatabaseSync } from "node:sqlite";
-import { getProjectModelPolicy, getAppliedRouting, type ProjectModelPolicy } from "../domain/model-routing.ts";
+import { getProjectModelPolicy, getAppliedRouting, getModelCapabilityEvidence, type ProjectModelPolicy } from "../domain/model-routing.ts";
 
 /**
  * Local multi-model routing (Phase 8 "local multi-model routing" follow-up,
@@ -104,6 +104,42 @@ function pickFromChain(chain: readonly string[], available: ReadonlySet<string>,
   return notAvoided[0] ?? installed[installed.length - 1];
 }
 
+/**
+ * Escalation-specific pick (deliverable integrity gate follow-up, Part
+ * 9) — a real run escalated a semantic failure from gemma4 straight to
+ * qwen3.6, a model with real, recorded, unqualified benchmark evidence
+ * for CODING (and a known-broken response/thinking-field
+ * incompatibility besides). "NO QUALIFIED LOCAL MODEL" must not mean
+ * "eventually try every installed model including known-broken ones" —
+ * a model may be an escalation target if it has *qualifying* evidence
+ * for this capability, or *no* evidence yet (untested, still covered by
+ * the chain being the owner's own configured fallback policy); a model
+ * with explicit unqualified/FAILED evidence is never treated as
+ * automatically "stronger" just because it's further down the chain.
+ * If nothing else in the chain clears that bar, escalation is a no-op —
+ * staying on the model that just failed is more honest than swapping to
+ * an equally- or more-known-bad one; the existing retry ceiling still
+ * bounds how many times that can happen.
+ */
+function pickEscalationTarget(
+  db: DatabaseSync,
+  chain: readonly string[],
+  available: ReadonlySet<string>,
+  avoid: ReadonlySet<string>,
+  capability: ModelCapability,
+  previousModel: string | null | undefined,
+): string | undefined {
+  const installed = chain.filter((m) => available.has(m));
+  if (installed.length === 0) return undefined;
+
+  const eligible = installed.filter((m) => getModelCapabilityEvidence(db, m, capability) !== "unqualified");
+  const notAvoided = eligible.filter((m) => !avoid.has(m));
+  if (notAvoided.length > 0) return notAvoided[0];
+
+  if (previousModel && installed.includes(previousModel)) return previousModel;
+  return installed[0];
+}
+
 export class LocalModelRouter {
   private readonly db: DatabaseSync;
 
@@ -149,11 +185,17 @@ export class LocalModelRouter {
       };
     }
 
-    const chainPick = pickFromChain(DEFAULT_CAPABILITY_CHAIN[capability], available, avoid);
+    const chainPick = isSemanticEscalation
+      ? pickEscalationTarget(this.db, DEFAULT_CAPABILITY_CHAIN[capability], available, avoid, capability, input.failureContext?.previousModel)
+      : pickFromChain(DEFAULT_CAPABILITY_CHAIN[capability], available, avoid);
     if (chainPick) {
-      const escalationNote = isSemanticEscalation
+      const escalated = isSemanticEscalation && chainPick !== input.failureContext?.previousModel;
+      const noEligibleAlternative = isSemanticEscalation && chainPick === input.failureContext?.previousModel;
+      const escalationNote = escalated
         ? ` Escalated from "${input.failureContext?.previousModel}" after a semantic (non-operational) failure.`
-        : "";
+        : noEligibleAlternative
+          ? ` No other installed ${capability} model has qualifying (or untested) benchmark evidence, so escalation did not switch models.`
+          : "";
       return {
         model: chainPick,
         reason: `Default local ${capability} preference chain (pre-benchmark).${escalationNote}`,

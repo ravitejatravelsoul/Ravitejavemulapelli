@@ -164,6 +164,56 @@ export function listBenchmarkedModels(db: DatabaseSync): string[] {
   ).map((r) => r.model);
 }
 
+// ---- capability evidence (shared by the benchmark recommendation engine
+// and LocalModelRouter's own escalation eligibility check) -----------------
+//
+// Lives here, the lowest persistence-only layer both `benchmark/
+// routing-recommendation.ts` and `agents/model-router.ts` already
+// depend on, specifically so there is exactly one definition of "which
+// scenarios speak to which capability" and "what counts as qualifying
+// evidence" — model-router.ts importing this from
+// routing-recommendation.ts (or vice versa) would be circular, since
+// routing-recommendation.ts needs `ModelCapability` from
+// agents/model-router.ts. Capability is a plain string here, matching
+// this file's existing untyped `RecommendedRoutingRow.capability` —
+// the stricter `ModelCapability` union lives in agents/model-router.ts
+// and both callers narrow to it at their own boundary.
+
+/** Which benchmark scenarios speak to which capability — FAST has no dedicated scenario yet, so it never has qualifying evidence either way. */
+export const CAPABILITY_SCENARIOS: Record<string, readonly string[]> = {
+  GENERAL: ["product-owner-basic"],
+  REASONING: ["architect-static-page"],
+  CODING: ["frontend-build", "frontend-bug-fix"],
+  REVIEW: ["code-review", "qa-interpretation"],
+  FAST: [],
+};
+
+/** A model below this success rate for a capability's scenarios has not demonstrated real capability for that work — see routing-recommendation.ts's docblock for the full rationale. */
+export const MIN_QUALIFYING_SUCCESS_RATE = 0.5;
+
+/** Sentinel "model" name for a capability where no tested model met the minimum threshold — never matches a real installed model name. */
+export const NO_QUALIFIED_MODEL = "NO QUALIFIED LOCAL MODEL";
+
+export type ModelCapabilityEvidence = "qualified" | "unqualified" | "no-evidence";
+
+/**
+ * What the stored benchmark evidence says about one model's fitness for
+ * one capability — "no-evidence" (never benchmarked on this capability's
+ * scenarios) is deliberately distinct from "unqualified" (benchmarked
+ * and found wanting): a brand-new, never-tested model is not the same
+ * claim as a model with a real, recorded track record of failing.
+ */
+export function getModelCapabilityEvidence(db: DatabaseSync, model: string, capability: string): ModelCapabilityEvidence {
+  const scenarioIds = CAPABILITY_SCENARIOS[capability] ?? [];
+  if (scenarioIds.length === 0) return "no-evidence";
+
+  const rows = scenarioIds.flatMap((scenarioId) => listBenchmarkResults(db, { model, scenarioId }));
+  if (rows.length === 0) return "no-evidence";
+
+  const passCount = rows.filter((r) => r.status === "PASS").length;
+  return passCount / rows.length >= MIN_QUALIFYING_SUCCESS_RATE ? "qualified" : "unqualified";
+}
+
 // ---- recommended_model_routing ---------------------------------------------
 
 export interface RecommendedRoutingRow {

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createTestDb } from "../../db/test-helpers.ts";
 import { getOwner } from "../../domain/users.ts";
 import { createProjectWithIdea } from "../../domain/projects.ts";
-import { setProjectModelPolicy, upsertRecommendedRouting, applyRecommendedRouting } from "../../domain/model-routing.ts";
+import { setProjectModelPolicy, upsertRecommendedRouting, applyRecommendedRouting, recordBenchmarkResult } from "../../domain/model-routing.ts";
 import { LocalModelRouter, ModelUnavailableError, capabilityForRole } from "../model-router.ts";
 import { NO_QUALIFIED_MODEL } from "../../benchmark/routing-recommendation.ts";
 
@@ -266,5 +266,83 @@ describe("LocalModelRouter — semantic retry model escalation (Part M)", () => 
     });
     assert.equal(result.model, "gemma4:latest", "SINGLE_MODEL is an explicit owner choice — escalation must never override it");
     t.close();
+  });
+});
+
+describe("LocalModelRouter — escalation eligibility (deliverable integrity gate follow-up, Part 9)", () => {
+  function seedUnqualifiedCodingEvidence(t: ReturnType<typeof createTestDb>, model: string) {
+    recordBenchmarkResult(t.db, { model, scenarioId: "frontend-build", roleId: "frontend-developer", status: "FAIL", score: 10, latencyMs: 1000 });
+    recordBenchmarkResult(t.db, { model, scenarioId: "frontend-bug-fix", roleId: "frontend-developer", status: "FAIL", score: 10, latencyMs: 1000 });
+  }
+
+  test("a real acceptance run's exact bug: two known-unqualified CODING models must never escalate into each other — the router stays on the current model instead", () => {
+    const t = createTestDb();
+    const project = setupProject(t);
+    // Matches real observed evidence: both gemma4 and qwen3.6 failed
+    // both CODING scenarios every time.
+    seedUnqualifiedCodingEvidence(t, "gemma4:latest");
+    seedUnqualifiedCodingEvidence(t, "qwen3.6:latest");
+
+    const router = new LocalModelRouter(t.db);
+    const result = router.selectModel({
+      role: "frontend-developer",
+      project,
+      attemptNumber: 2,
+      availableModels: BOTH_INSTALLED,
+      failureContext: { isSemanticFailure: true, previousModel: "gemma4:latest" },
+    });
+
+    assert.equal(result.model, "gemma4:latest", "must never promote qwen3.6 just because it's next in the chain — it has explicit unqualified evidence too");
+    assert.match(result.reason, /did not switch models/i);
+  });
+
+  test("a model with NO benchmark evidence yet remains a valid escalation target", () => {
+    const t = createTestDb();
+    const project = setupProject(t);
+    seedUnqualifiedCodingEvidence(t, "gemma4:latest");
+    // qwen3.6 has never been benchmarked for CODING at all — untested,
+    // not "known bad," so it's still an eligible escalation target.
+
+    const router = new LocalModelRouter(t.db);
+    const result = router.selectModel({
+      role: "frontend-developer",
+      project,
+      attemptNumber: 2,
+      availableModels: BOTH_INSTALLED,
+      failureContext: { isSemanticFailure: true, previousModel: "gemma4:latest" },
+    });
+
+    assert.equal(result.model, "qwen3.6:latest", "an untested model is a legitimate escalation target, unlike one with real FAILED evidence");
+    assert.match(result.reason, /Escalated from "gemma4:latest"/);
+  });
+
+  test("a model with real QUALIFYING evidence is a valid escalation target", () => {
+    const t = createTestDb();
+    const project = setupProject(t);
+    seedUnqualifiedCodingEvidence(t, "gemma4:latest");
+    recordBenchmarkResult(t.db, { model: "qwen3.6:latest", scenarioId: "frontend-build", roleId: "frontend-developer", status: "PASS", score: 90, latencyMs: 1000 });
+    recordBenchmarkResult(t.db, { model: "qwen3.6:latest", scenarioId: "frontend-bug-fix", roleId: "frontend-developer", status: "PASS", score: 90, latencyMs: 1000 });
+
+    const router = new LocalModelRouter(t.db);
+    const result = router.selectModel({
+      role: "frontend-developer",
+      project,
+      attemptNumber: 2,
+      availableModels: BOTH_INSTALLED,
+      failureContext: { isSemanticFailure: true, previousModel: "gemma4:latest" },
+    });
+
+    assert.equal(result.model, "qwen3.6:latest");
+  });
+
+  test("this eligibility rule only applies during semantic escalation — a plain first attempt still uses the default chain order regardless of evidence", () => {
+    const t = createTestDb();
+    const project = setupProject(t);
+    seedUnqualifiedCodingEvidence(t, "gemma4:latest");
+    seedUnqualifiedCodingEvidence(t, "qwen3.6:latest");
+
+    const router = new LocalModelRouter(t.db);
+    const result = router.selectModel({ role: "frontend-developer", project, attemptNumber: 1, availableModels: BOTH_INSTALLED });
+    assert.equal(result.model, "gemma4:latest", "a first attempt is not an escalation — it still follows the normal default chain order");
   });
 });
