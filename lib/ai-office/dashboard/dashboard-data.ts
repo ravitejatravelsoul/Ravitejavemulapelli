@@ -194,6 +194,8 @@ const EVENT_DESCRIPTIONS: Record<string, (payload: Record<string, unknown>) => s
   "budget.overage_detected": () => "A completed paid AI call's actual cost pushed the monthly budget over its cap — new paid calls are refused until the owner raises it.",
   "task.claude_routing_blocked": (p) =>
     `Paid AI (Claude) routing for ${String(p.roleId ?? "a role")} is blocked — ${String(p.reason ?? "not yet actionable")}.`,
+  "claude.context_budget_warning": (p) =>
+    `CONTEXT BUDGET WARNING — ${String(p.roleId ?? "a role")}'s call used ${String(p.estimatedInputTokens ?? "?")} tokens, above its ${String(p.targetEstimatedInputTokens ?? "?")}-token target but within its ${String(p.burstEstimatedInputTokens ?? "?")}-token burst allowance.`,
 };
 
 /** Turns a raw event row into a human-readable sentence — never raw JSON. Unknown event types fall back to a readable version of the type string, so a future event type never renders as literally nothing. */

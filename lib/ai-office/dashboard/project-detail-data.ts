@@ -118,6 +118,10 @@ export interface ClaudeCallView {
   contextEstimatedInputTokens: number | null;
   contextFilesSelected: number | null;
   contextFilesExcluded: number | null;
+  /** Token-gate hardening — true when this call proceeded above its capability's target only because it fell within the explicit burst allowance (never above burst — that BLOCKS outright, so no row here is ever a call that exceeded burst). */
+  contextBurstWarning: boolean;
+  contextTargetEstimatedInputTokens: number | null;
+  contextBurstEstimatedInputTokens: number | null;
   createdAt: number;
 }
 
@@ -132,6 +136,8 @@ export interface ClaudeCostSummary {
   averageCallCostUsd: number;
   /** Total Claude cost divided by the number of DISTINCT tasks (among those with at least one Claude call) that ultimately reached DONE — 0 if none have. */
   costPerCompletedPaidTask: number;
+  /** How many calls needed their capability's burst allowance — a real, owner-visible signal that context is running hotter than the normal target, even though none of them were blocked. */
+  callsUsingBurstAllowance: number;
 }
 
 function buildClaudeCostSummary(db: DatabaseSync, projectId: string): ClaudeCostSummary {
@@ -145,6 +151,9 @@ function buildClaudeCostSummary(db: DatabaseSync, projectId: string): ClaudeCost
           estimatedInputTokens?: number;
           filesSelected?: string[];
           filesExcluded?: string[];
+          burstWarning?: boolean;
+          targetEstimatedInputTokens?: number;
+          burstEstimatedInputTokens?: number;
         };
       } catch {
         return {};
@@ -178,6 +187,9 @@ function buildClaudeCostSummary(db: DatabaseSync, projectId: string): ClaudeCost
       contextEstimatedInputTokens: contextEvent?.estimatedInputTokens ?? null,
       contextFilesSelected: contextEvent?.filesSelected?.length ?? null,
       contextFilesExcluded: contextEvent?.filesExcluded?.length ?? null,
+      contextBurstWarning: contextEvent?.burstWarning ?? false,
+      contextTargetEstimatedInputTokens: contextEvent?.targetEstimatedInputTokens ?? null,
+      contextBurstEstimatedInputTokens: contextEvent?.burstEstimatedInputTokens ?? null,
       createdAt: usage.createdAt,
     };
   });
@@ -201,6 +213,7 @@ function buildClaudeCostSummary(db: DatabaseSync, projectId: string): ClaudeCost
     largestOutputTokens: calls.reduce((max, c) => Math.max(max, c.outputTokens), 0),
     averageCallCostUsd: calls.length > 0 ? totalCostUsd / calls.length : 0,
     costPerCompletedPaidTask: completedTaskIds.size > 0 ? totalCostUsd / completedTaskIds.size : 0,
+    callsUsingBurstAllowance: calls.filter((c) => c.contextBurstWarning).length,
   };
 }
 

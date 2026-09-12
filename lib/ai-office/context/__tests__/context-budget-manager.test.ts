@@ -169,9 +169,9 @@ describe("optimizeContextForPaidCall", () => {
       const context = await buildTaskContext(t.db, task, role, { attemptNumber: 1 });
       const result = await optimizeContextForPaidCall({ db: t.db, capability: "CODING", role, task, context });
 
-      assert.ok(result.ok, "shrinking should bring it under budget rather than blocking");
+      assert.ok(result.ok, "shrinking should bring it under budget (or at worst within burst) rather than blocking");
       if (!result.ok) return;
-      assert.ok(result.telemetry.estimatedInputTokens <= getCapabilityContextBudget("CODING").maxEstimatedInputTokens * 1.05);
+      assert.ok(result.telemetry.estimatedInputTokens <= getCapabilityContextBudget("CODING").burstEstimatedInputTokens);
       t.close();
     });
   });
@@ -215,6 +215,154 @@ describe("optimizeContextForPaidCall", () => {
       t.close();
     } finally {
       if (priorKey !== undefined) process.env.ANTHROPIC_API_KEY = priorKey;
+    }
+  });
+});
+
+describe("optimizeContextForPaidCall — token-gate hardening: target/burst/global three-tier decision", () => {
+  const cleanupEnv = () => {
+    delete process.env.AI_OFFICE_CONTEXT_BUDGET_OVERRIDES;
+    delete process.env.AI_OFFICE_CONTEXT_GLOBAL_ABSOLUTE_MAX_TOKENS;
+  };
+
+  async function measureBaseline(t: ReturnType<typeof createTestDb>, project: { id: string }): Promise<number> {
+    const task = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "Write requirements" });
+    const role = getAgentRole(t.db, "product-owner")!;
+    const context = await buildTaskContext(t.db, task, role, { attemptNumber: 1 });
+    // Generous, real defaults — nothing shrinks or blocks — so the
+    // returned `estimatedInputTokens` is this fixed context's true,
+    // unmodified size, used below to calibrate exact target/burst
+    // overrides deterministically rather than guessing token counts.
+    const result = await optimizeContextForPaidCall({ db: t.db, capability: "GENERAL", role, task, context });
+    assert.ok(result.ok, "baseline measurement must not itself be blocked");
+    return result.ok ? result.telemetry.estimatedInputTokens : 0;
+  }
+
+  test("under target: proceeds cleanly, no burst warning", async () => {
+    cleanupEnv();
+    try {
+      const t = createTestDb();
+      const { project } = setupProject(t);
+      const baseline = await measureBaseline(t, project);
+      process.env.AI_OFFICE_CONTEXT_BUDGET_OVERRIDES = JSON.stringify({ GENERAL: { targetEstimatedInputTokens: baseline + 1000, burstEstimatedInputTokens: baseline + 2000 } });
+
+      const task = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "Write requirements 2" });
+      const role = getAgentRole(t.db, "product-owner")!;
+      const context = await buildTaskContext(t.db, task, role, { attemptNumber: 1 });
+      const result = await optimizeContextForPaidCall({ db: t.db, capability: "GENERAL", role, task, context });
+
+      assert.ok(result.ok);
+      if (!result.ok) return;
+      assert.equal(result.telemetry.burstWarning, false);
+      assert.equal(result.telemetry.blocked, false);
+      t.close();
+    } finally {
+      cleanupEnv();
+    }
+  });
+
+  test("target exceeded but within burst: proceeds with a CONTEXT BUDGET WARNING recorded in telemetry, never silent", async () => {
+    cleanupEnv();
+    try {
+      const t = createTestDb();
+      const { project } = setupProject(t);
+      const baseline = await measureBaseline(t, project);
+      // target just under the real size, burst comfortably above it —
+      // shrinking (GENERAL has no files/large artifacts to shrink here)
+      // cannot bring it back under target, so this must land in the
+      // explicit burst-allowance zone.
+      process.env.AI_OFFICE_CONTEXT_BUDGET_OVERRIDES = JSON.stringify({
+        GENERAL: { targetEstimatedInputTokens: Math.max(1, baseline - 10), burstEstimatedInputTokens: baseline + 500 },
+      });
+
+      const task = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "Write requirements 2" });
+      const role = getAgentRole(t.db, "product-owner")!;
+      const context = await buildTaskContext(t.db, task, role, { attemptNumber: 1 });
+      const result = await optimizeContextForPaidCall({ db: t.db, capability: "GENERAL", role, task, context });
+
+      assert.ok(result.ok, "burst allowance must let the call proceed, never block");
+      if (!result.ok) return;
+      assert.equal(result.telemetry.blocked, false);
+      assert.equal(result.telemetry.burstWarning, true);
+      assert.match(result.telemetry.burstWarningReason ?? "", /CONTEXT BUDGET WARNING/);
+      assert.ok(result.telemetry.burstWarningReason?.includes(String(result.telemetry.targetEstimatedInputTokens)));
+      assert.ok(result.telemetry.burstWarningReason?.includes(String(result.telemetry.burstEstimatedInputTokens)));
+      t.close();
+    } finally {
+      cleanupEnv();
+    }
+  });
+
+  test("above burst: BLOCKS the paid call outright, never sends context above the configured burst ceiling", async () => {
+    cleanupEnv();
+    try {
+      const t = createTestDb();
+      const { project } = setupProject(t);
+      const baseline = await measureBaseline(t, project);
+      process.env.AI_OFFICE_CONTEXT_BUDGET_OVERRIDES = JSON.stringify({
+        GENERAL: { targetEstimatedInputTokens: Math.max(1, baseline - 20), burstEstimatedInputTokens: Math.max(1, baseline - 10) },
+      });
+
+      const task = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "Write requirements 2" });
+      const role = getAgentRole(t.db, "product-owner")!;
+      const context = await buildTaskContext(t.db, task, role, { attemptNumber: 1 });
+      const result = await optimizeContextForPaidCall({ db: t.db, capability: "GENERAL", role, task, context });
+
+      assert.equal(result.ok, false);
+      assert.equal(result.telemetry.blocked, true);
+      assert.match(result.telemetry.blockReason ?? "", /burst ceiling/);
+      t.close();
+    } finally {
+      cleanupEnv();
+    }
+  });
+
+  test("global absolute ceiling blocks even when a capability's own (overridden) burst is set above it", async () => {
+    cleanupEnv();
+    try {
+      const t = createTestDb();
+      const { project } = setupProject(t);
+      const baseline = await measureBaseline(t, project);
+      // A deliberately misconfigured capability override — burst set far
+      // above the real context size AND above the global ceiling — must
+      // still be caught by the global absolute safety net.
+      process.env.AI_OFFICE_CONTEXT_GLOBAL_ABSOLUTE_MAX_TOKENS = String(Math.max(1, baseline - 10));
+      process.env.AI_OFFICE_CONTEXT_BUDGET_OVERRIDES = JSON.stringify({ GENERAL: { targetEstimatedInputTokens: 1, burstEstimatedInputTokens: 1_000_000 } });
+
+      const task = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "Write requirements 2" });
+      const role = getAgentRole(t.db, "product-owner")!;
+      const context = await buildTaskContext(t.db, task, role, { attemptNumber: 1 });
+      const result = await optimizeContextForPaidCall({ db: t.db, capability: "GENERAL", role, task, context });
+
+      assert.equal(result.ok, false);
+      assert.equal(result.telemetry.blocked, true);
+      assert.match(result.telemetry.blockReason ?? "", /global absolute ceiling/);
+      t.close();
+    } finally {
+      cleanupEnv();
+    }
+  });
+
+  test("capability-specific limits: CODING and GENERAL are evaluated independently against their own target/burst", async () => {
+    cleanupEnv();
+    try {
+      const t = createTestDb();
+      const { project } = setupProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "Write requirements" });
+      const role = getAgentRole(t.db, "product-owner")!;
+      const context = await buildTaskContext(t.db, task, role, { attemptNumber: 1 });
+
+      const general = await optimizeContextForPaidCall({ db: t.db, capability: "GENERAL", role, task, context });
+      const coding = await optimizeContextForPaidCall({ db: t.db, capability: "CODING", role, task, context });
+      assert.ok(general.ok && coding.ok);
+      if (!general.ok || !coding.ok) return;
+      assert.equal(general.telemetry.targetEstimatedInputTokens, 6_000);
+      assert.equal(coding.telemetry.targetEstimatedInputTokens, 18_000);
+      assert.equal(general.telemetry.burstEstimatedInputTokens, 8_000);
+      assert.equal(coding.telemetry.burstEstimatedInputTokens, 24_000);
+      t.close();
+    } finally {
+      cleanupEnv();
     }
   });
 });

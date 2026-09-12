@@ -631,6 +631,28 @@ async function prepareClaudeCall(
   if (runaway.warning) {
     recordEvent(db, { projectId: project.id, type: "claude.runaway_warning", payload: { taskId: task.id, roleId: role.id, reason: runaway.reason }, actor: "system" });
   }
+  // Token-gate hardening, Part 2 — a call proceeding under the explicit
+  // burst allowance is never silent: a dedicated, distinctly-typed
+  // CONTEXT BUDGET WARNING event, separate from the generic
+  // `claude.context_prepared` telemetry (which already carries the same
+  // fields), so the owner activity feed and dashboard have a clean,
+  // directly-queryable signal for "this call needed its burst tolerance."
+  if (optimized.telemetry.burstWarning) {
+    recordEvent(db, {
+      projectId: project.id,
+      type: "claude.context_budget_warning",
+      payload: {
+        taskId: task.id,
+        roleId: role.id,
+        capability,
+        estimatedInputTokens: optimized.telemetry.estimatedInputTokens,
+        targetEstimatedInputTokens: optimized.telemetry.targetEstimatedInputTokens,
+        burstEstimatedInputTokens: optimized.telemetry.burstEstimatedInputTokens,
+        reason: optimized.telemetry.burstWarningReason,
+      },
+      actor: "system",
+    });
+  }
 
   if (!optimized.ok) {
     return { outcome: "blocked", reason: optimized.telemetry.blockReason ?? "Context exceeded the hard token limit and could not be safely shrunk." };

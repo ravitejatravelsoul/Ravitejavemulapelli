@@ -172,6 +172,11 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
             <span>Cost/completed task: ${claudeCosts.costPerCompletedPaidTask.toFixed(4)}</span>
             <span>Largest prompt: {claudeCosts.largestPromptTokens.toLocaleString()} tok</span>
             <span>Largest output: {claudeCosts.largestOutputTokens.toLocaleString()} tok</span>
+            {claudeCosts.callsUsingBurstAllowance > 0 && (
+              <Badge variant="destructive" className="font-mono text-[0.6rem] uppercase">
+                {claudeCosts.callsUsingBurstAllowance} call{claudeCosts.callsUsingBurstAllowance === 1 ? "" : "s"} used burst allowance
+              </Badge>
+            )}
           </div>
           <div className="mt-3 overflow-x-auto">
             <table className="w-full min-w-[640px] text-left text-xs">
@@ -184,6 +189,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
                   <th className="pb-1 pr-3 font-normal">Output</th>
                   <th className="pb-1 pr-3 font-normal">Cache R/W</th>
                   <th className="pb-1 pr-3 font-normal">Files</th>
+                  <th className="pb-1 pr-3 font-normal">Budget</th>
                   <th className="pb-1 font-normal">Cost</th>
                 </tr>
               </thead>
@@ -204,6 +210,15 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
                     </td>
                     <td className="py-1 pr-3">
                       {call.contextFilesSelected != null ? `${call.contextFilesSelected} sel · ${call.contextFilesExcluded ?? 0} excl` : "—"}
+                    </td>
+                    <td className="py-1 pr-3">
+                      {call.contextBurstWarning ? (
+                        <Badge variant="destructive" className="font-mono text-[0.6rem] uppercase" title={`estimated ${call.contextEstimatedInputTokens} / target ${call.contextTargetEstimatedInputTokens} / burst ${call.contextBurstEstimatedInputTokens}`}>
+                          burst
+                        </Badge>
+                      ) : (
+                        <span className="text-muted-foreground">ok</span>
+                      )}
                     </td>
                     <td className="py-1">${call.costUsd.toFixed(4)}</td>
                   </tr>
