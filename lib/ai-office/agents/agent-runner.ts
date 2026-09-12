@@ -14,6 +14,8 @@ import {
   createAgentRunForAttempt,
   updateAgentRunStatus,
   listTasksForProject,
+  listTaskAttempts,
+  getAgentRun,
   type TaskRow,
   type TaskAttemptRow,
   type AgentRunRow,
@@ -38,7 +40,9 @@ import { isReviewRole, isDevelopmentRole, findRemediationTargets, findStaleDowns
 import { checkIntentConsistency } from "./intent-consistency.ts";
 import { SimulatedAdapter } from "../providers/simulated/simulated-adapter.ts";
 import { OllamaAdapter } from "../providers/ollama/ollama-adapter.ts";
+import { listInstalledOllamaModels } from "../providers/ollama/ollama-inventory.ts";
 import type { AIProviderAdapter } from "../providers/types.ts";
+import { LocalModelRouter, type ModelFailureContext } from "./model-router.ts";
 import { applyFileOperations } from "../workspace/apply-file-operations.ts";
 import { workspaceExists } from "../workspace/workspace-service.ts";
 import { runQABrowserVerification } from "../workspace/qa-browser-verification.ts";
@@ -95,6 +99,37 @@ function isOperationalFailureReason(reason: string): boolean {
     /^Execution timed out after/.test(reason) ||
     /^Operational:/.test(reason)
   );
+}
+
+/** The real model the immediately preceding attempt for this task actually used, if any — how LocalModelRouter knows what to escalate past on a semantic retry (Part M). */
+function getPreviousAttemptModel(db: DatabaseSync, taskId: string, currentAttemptNumber: number): string | null {
+  if (currentAttemptNumber <= 1) return null;
+  const previous = listTaskAttempts(db, taskId).find((a) => a.attemptNumber === currentAttemptNumber - 1);
+  if (!previous?.agentRunId) return null;
+  return getAgentRun(db, previous.agentRunId)?.model ?? null;
+}
+
+/**
+ * Whether this attempt's model choice should escalate past whatever the
+ * previous attempt used — role-agnostic (unlike RemediationContext, which
+ * is development-role-only prompt content): a real *task/deliverable*
+ * failure (QA rejection, bad implementation, review rejection) may
+ * escalate; a purely operational hiccup (timeout, malformed JSON,
+ * connection error) must not (Part M) — the SAME
+ * `isOperationalFailureReason` classifier used for retry-budget
+ * accounting decides which one this was, so the two concerns can never
+ * silently disagree.
+ */
+function buildModelFailureContext(db: DatabaseSync, task: TaskRow, attemptNumber: number): ModelFailureContext | undefined {
+  if (attemptNumber <= 1) return undefined;
+  const lastFailureReason = listUnresolvedFailures(db, task.projectId)
+    .filter((f) => f.taskId === task.id)
+    .map((f) => f.reason)
+    .pop();
+  return {
+    isSemanticFailure: lastFailureReason ? !isOperationalFailureReason(lastFailureReason) : true,
+    previousModel: getPreviousAttemptModel(db, task.id, attemptNumber),
+  };
 }
 
 /**
@@ -333,6 +368,10 @@ export interface ExecuteTaskOptions {
   timeoutMs?: number;
   /** Test-injection point for the intent-consistency gates' own Ollama call (separate from `provider`, which only covers the main adapter call) — lets a test prove the gates' plumbing deterministically, without a real Ollama server. Real (non-test) runner operation never sets this. */
   intentCheckFetch?: typeof fetch;
+  /** Test-injection point for local-model detection (Part A) — bypasses the real `listInstalledOllamaModels()` call. Real (non-test) runner operation never sets this; ignored when `options.provider` is already given. */
+  availableModelsOverride?: string[];
+  /** Test-injection point for the real OllamaAdapter's own HTTP call when executeTask constructs it internally via LocalModelRouter (separate from `intentCheckFetch`, which only covers the intent-consistency gates' own call). Real (non-test) runner operation never sets this; ignored when `options.provider` is already given. */
+  ollamaFetchImpl?: typeof fetch;
 }
 
 export async function executeTask(
@@ -371,24 +410,76 @@ export async function executeTask(
   updateTaskStatus(db, task.id, "IN_PROGRESS");
   const attempt = createTaskAttempt(db, task.id);
   const context = await buildTaskContext(db, task, role, { scenario: options.scenario, attemptNumber: attempt.attemptNumber });
-  const adapter: AIProviderAdapter = options.provider ?? (project.provider === "ollama" ? new OllamaAdapter() : new SimulatedAdapter());
+
+  // Local multi-model routing: for a real Ollama project (and only when
+  // the caller hasn't already injected a specific adapter, e.g. a test
+  // double), LocalModelRouter — never this function directly, never a UI,
+  // never the model itself — decides which installed model this
+  // role/attempt uses. A detection failure or an owner-misconfigured
+  // policy (SINGLE_MODEL/CUSTOM naming an uninstalled model) is a real,
+  // honest failure of this attempt; it is never papered over with a
+  // silent fallback to a different model, and never to Claude/LIVE.
+  let adapter: AIProviderAdapter | null = null;
+  let modelForRun: string | null = null;
+  let modelSelectionFailureReason: string | null = null;
+  if (options.provider) {
+    adapter = options.provider;
+    modelForRun = options.provider.model ?? null;
+  } else if (project.provider === "ollama") {
+    try {
+      const availableModels = options.availableModelsOverride ?? (await listInstalledOllamaModels());
+      const selection = new LocalModelRouter(db).selectModel({
+        role: role.id,
+        project: { id: project.id },
+        attemptNumber: attempt.attemptNumber,
+        failureContext: buildModelFailureContext(db, task, attempt.attemptNumber),
+        availableModels,
+      });
+      adapter = new OllamaAdapter({ model: selection.model, fetchImpl: options.ollamaFetchImpl });
+      modelForRun = selection.model;
+    } catch (error) {
+      modelSelectionFailureReason = error instanceof Error ? error.message : `Could not select a local model: ${String(error)}`;
+    }
+  } else {
+    adapter = new SimulatedAdapter();
+  }
 
   let agentRun = createAgentRunForAttempt(db, {
     taskAttemptId: attempt.id,
     roleId: role.id,
-    provider: adapter.name,
-    model: adapter.model ?? null,
+    provider: adapter?.name ?? project.provider,
+    model: modelForRun,
   });
   agentRun = updateAgentRunStatus(db, agentRun.id, "RUNNING");
 
-  const releaseReadiness = role.id === "release-agent" ? checkReleaseReadiness(db, project.id) : { ready: true as const };
+  const releaseReadiness =
+    !modelSelectionFailureReason && role.id === "release-agent" ? checkReleaseReadiness(db, project.id) : { ready: true as const };
   const planConsistency =
-    releaseReadiness.ready && isDevelopmentRole(role) && project.provider === "ollama"
+    !modelSelectionFailureReason && releaseReadiness.ready && isDevelopmentRole(role) && project.provider === "ollama"
       ? await checkPlanConsistencyBeforeDevelopment(context.authoritativeUserRequest, context.relevantArtifacts, options.intentCheckFetch)
       : { consistent: true as const };
 
   let result: import("../providers/types.ts").AgentTaskResult;
-  if (!releaseReadiness.ready) {
+  if (modelSelectionFailureReason) {
+    // Never even reaches the adapter — there's no adapter to reach: model
+    // selection itself is what failed. Flows through the exact same
+    // failure/retry/escalation path as any other real failure.
+    result = {
+      status: "FAILED",
+      output: {
+        summary: "",
+        artifacts: [],
+        decisions: [],
+        testResults: [],
+        events: [],
+        fileOperations: [],
+        recommendedNextActions: [],
+        failure: { reason: modelSelectionFailureReason },
+      },
+      usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+      raw: { modelSelectionBlocked: true },
+    };
+  } else if (!releaseReadiness.ready) {
     // Never even calls the adapter — a project whose real deliverable
     // isn't verified yet must not be allowed to "succeed" its way to a
     // release summary regardless of what the adapter might say.
@@ -448,7 +539,9 @@ export async function executeTask(
     // consumes one of this task's real, counted attempts — see
     // `runAdapterWithOperationalRetries`'s docblock.
     result = await runAdapterWithOperationalRetries(
-      adapter,
+      // Non-null: reachable only when modelSelectionFailureReason is
+      // null, which is only ever set once `adapter` has been assigned.
+      adapter!,
       // Deliberately role-generic, not task.title — task.title is a
       // display/tracking label built by concatenating the project's own
       // title (e.g. "Implement backend — Ollama Hello World Build"),
@@ -466,7 +559,7 @@ export async function executeTask(
   recordAiUsage(db, {
     agentRunId: agentRun.id,
     projectId: project.id,
-    provider: adapter.name,
+    provider: adapter?.name ?? project.provider,
     inputTokens: result.usage.inputTokens,
     outputTokens: result.usage.outputTokens,
     costUsd: result.usage.costUsd,

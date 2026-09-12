@@ -1611,3 +1611,154 @@ describe("model identity persistence (local multi-model routing follow-up)", () 
     t.close();
   });
 });
+
+describe("local model routing integration — real routing path (no options.provider)", () => {
+  const fastFetch = (async () =>
+    ({ ok: true, status: 200, json: async () => ({ response: JSON.stringify({ consistent: true, reason: "ok" }) }) }) as unknown as Response) as unknown as typeof fetch;
+
+  function semanticFailureFetch(reason: string): typeof fetch {
+    return (async () =>
+      ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          response: JSON.stringify({
+            summary: "",
+            artifacts: [],
+            decisions: [],
+            testResults: [],
+            events: [],
+            fileOperations: [],
+            recommendedNextActions: [],
+            failure: { reason },
+          }),
+        }),
+      }) as unknown as Response) as unknown as typeof fetch;
+  }
+
+  function malformedJsonFetch(): typeof fetch {
+    return (async () => ({ ok: true, status: 200, json: async () => ({ response: "not valid json" }) }) as unknown as Response) as unknown as typeof fetch;
+  }
+
+  test("executeTask's own real routing (LocalModelRouter, no injected adapter) picks a model from the detected available models and persists it", async () => {
+    const t = createTestDb();
+    const owner = getOwner(t.db)!;
+    const { project } = createProjectWithIdea(t.db, { title: "Routing integration", rawIdeaText: "Build a small tool.", ownerId: owner.id, provider: "ollama" });
+    const task = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "Requirements" });
+
+    const result = await executeTask(t.db, task.id, {
+      availableModelsOverride: ["gemma4:latest", "qwen3.6:latest"],
+      ollamaFetchImpl: fakeOllamaGenerateFetch(),
+      intentCheckFetch: fastFetch,
+    });
+    assert.equal(result.outcome, "succeeded");
+    assert.equal(result.agentRun!.model, "gemma4:latest", "the default GENERAL chain prefers gemma4:latest pre-benchmark");
+
+    t.close();
+  });
+
+  test("a real semantic failure on attempt 1 causes real routing to escalate the model on attempt 2 — same task, same authoritative request", async () => {
+    const t = createTestDb();
+    const owner = getOwner(t.db)!;
+    const { project } = createProjectWithIdea(t.db, {
+      title: "Escalation integration",
+      rawIdeaText: "Build a small tool that does exactly one thing well.",
+      ownerId: owner.id,
+      provider: "ollama",
+    });
+    const task = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "Requirements" });
+
+    const first = await executeTask(t.db, task.id, {
+      availableModelsOverride: ["gemma4:latest", "qwen3.6:latest"],
+      ollamaFetchImpl: semanticFailureFetch("The requirements did not match the requested product."),
+      intentCheckFetch: fastFetch,
+    });
+    assert.equal(first.outcome, "retried");
+    assert.equal(first.agentRun!.model, "gemma4:latest");
+
+    const second = await executeTask(t.db, task.id, {
+      availableModelsOverride: ["gemma4:latest", "qwen3.6:latest"],
+      ollamaFetchImpl: fakeOllamaGenerateFetch(),
+      intentCheckFetch: fastFetch,
+    });
+    assert.equal(second.outcome, "succeeded");
+    assert.equal(second.agentRun!.model, "qwen3.6:latest", "a real semantic failure must escalate past the model that just failed");
+
+    t.close();
+  });
+
+  test("a real operational failure (malformed JSON, exhausting bounded in-process retries) does NOT escalate — attempt 2 real routing picks the same model again", async () => {
+    const t = createTestDb();
+    const owner = getOwner(t.db)!;
+    const { project } = createProjectWithIdea(t.db, {
+      title: "No-escalation-on-operational integration",
+      rawIdeaText: "Build a small tool.",
+      ownerId: owner.id,
+      provider: "ollama",
+    });
+    const task = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "Requirements" });
+
+    const first = await executeTask(t.db, task.id, {
+      availableModelsOverride: ["gemma4:latest", "qwen3.6:latest"],
+      ollamaFetchImpl: malformedJsonFetch(),
+      intentCheckFetch: fastFetch,
+    });
+    assert.equal(first.outcome, "retried");
+    assert.equal(first.agentRun!.model, "gemma4:latest");
+
+    const second = await executeTask(t.db, task.id, {
+      availableModelsOverride: ["gemma4:latest", "qwen3.6:latest"],
+      ollamaFetchImpl: fakeOllamaGenerateFetch(),
+      intentCheckFetch: fastFetch,
+    });
+    assert.equal(second.outcome, "succeeded");
+    assert.equal(second.agentRun!.model, "gemma4:latest", "a purely operational failure must never trigger model escalation");
+
+    t.close();
+  });
+
+  test("switching models across attempts never changes the authoritative user request the developer/product-owner sees", async () => {
+    const t = createTestDb();
+    const owner = getOwner(t.db)!;
+    const rawIdeaText = "Build a small tool that tracks reading progress across books.";
+    const { project } = createProjectWithIdea(t.db, { title: "Authoritative request stability", rawIdeaText, ownerId: owner.id, provider: "ollama" });
+    const task = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "Requirements" });
+
+    const capturedRequests: string[] = [];
+    const capturingFailureFetch = (async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as { prompt: string };
+      capturedRequests.push(body.prompt);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          response: JSON.stringify({
+            summary: "",
+            artifacts: [],
+            decisions: [],
+            testResults: [],
+            events: [],
+            fileOperations: [],
+            recommendedNextActions: [],
+            failure: { reason: "Deliberate semantic failure to force a second, model-escalated attempt." },
+          }),
+        }),
+      } as unknown as Response;
+    }) as unknown as typeof fetch;
+    const capturingSuccessFetch = (async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as { prompt: string };
+      capturedRequests.push(body.prompt);
+      return { ok: true, status: 200, json: async () => ({ response: JSON.stringify({ summary: "Done.", artifacts: [], decisions: [], testResults: [], events: [], fileOperations: [], recommendedNextActions: [] }) }) } as unknown as Response;
+    }) as unknown as typeof fetch;
+
+    await executeTask(t.db, task.id, { availableModelsOverride: ["gemma4:latest", "qwen3.6:latest"], ollamaFetchImpl: capturingFailureFetch, intentCheckFetch: fastFetch });
+    await executeTask(t.db, task.id, { availableModelsOverride: ["gemma4:latest", "qwen3.6:latest"], ollamaFetchImpl: capturingSuccessFetch, intentCheckFetch: fastFetch });
+
+    assert.equal(capturedRequests.length, 2);
+    for (const prompt of capturedRequests) {
+      assert.ok(prompt.includes(rawIdeaText), "every routed model must receive the identical authoritative user request, regardless of which model was selected");
+    }
+
+    t.close();
+  });
+});
