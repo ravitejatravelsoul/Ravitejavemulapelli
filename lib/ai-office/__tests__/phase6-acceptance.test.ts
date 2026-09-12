@@ -192,12 +192,17 @@ describe("Phase 6 acceptance — approval workflow (§26)", () => {
     }
 
     // "Runner cannot execute blocked action" — drive every OTHER task to
-    // completion; the release task alone must never become eligible.
+    // completion; the release task alone must never become eligible. No
+    // forced scenario here: this idea selects frontend-developer, whose
+    // real SimulatedAdapter fixture writes a deliberately-buggy first
+    // attempt (Phase 8) for real QA to genuinely catch — forcing
+    // "success" on every cycle would repeat the same bug forever instead
+    // of letting the natural attempt-based retry-success fix apply.
     await runUntilSettled(
       t.db,
       "approval-acceptance-runner",
       () => planned.tasks.filter((task) => task.roleId !== "release-agent").every((task) => taskStatus(task.id) === "DONE"),
-      { execution: { scenario: "success" } },
+      {},
       50,
     );
     assert.equal(taskStatus(releaseTask.id), "PENDING", "the release task must still be blocked, everything else done");
@@ -207,9 +212,7 @@ describe("Phase 6 acceptance — approval workflow (§26)", () => {
     const approveResult = approveApproval(t.db, { approvalId: approval.id, decidedByUserId: owner.id });
     assert.equal(approveResult.ok, true);
 
-    await runUntilSettled(t.db, "approval-acceptance-runner", () => getProject(t.db, project.id)!.status === "READY_FOR_REVIEW", {
-      execution: { scenario: "success" },
-    });
+    await runUntilSettled(t.db, "approval-acceptance-runner", () => getProject(t.db, project.id)!.status === "READY_FOR_REVIEW", {});
     assert.equal(getProject(t.db, project.id)?.status, "READY_FOR_REVIEW");
 
     // "audit trail records approval"

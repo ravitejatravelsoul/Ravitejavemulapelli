@@ -6,6 +6,22 @@ import type { TaskRow } from "../domain/tasks.ts";
 import { listArtifactsForProject, listDecisionsForProject } from "../domain/project-outputs.ts";
 import { getProjectMemory } from "../domain/project-memory.ts";
 import type { TaskContext } from "../providers/types.ts";
+import { workspaceExists, listFiles, readFile } from "../workspace/workspace-service.ts";
+
+/** A scoped sample, not the whole workspace — Phase 8 Part J's "file list, relevant changed files, selected content... never the whole workspace blindly." */
+const MAX_RELEVANT_FILES = 8;
+const MAX_RELEVANT_FILE_CONTENT_CHARS = 4000;
+
+async function buildRelevantFiles(projectId: string): Promise<Array<{ path: string; content: string }>> {
+  if (!workspaceExists(projectId)) return [];
+  const paths = (await listFiles(projectId)).slice(0, MAX_RELEVANT_FILES);
+  const files: Array<{ path: string; content: string }> = [];
+  for (const path of paths) {
+    const content = await readFile(projectId, path);
+    files.push({ path, content: content.slice(0, MAX_RELEVANT_FILE_CONTENT_CHARS) });
+  }
+  return files;
+}
 
 /**
  * `SimulatedAdapter`'s fixture scenario ("success"/"failure"/
@@ -39,12 +55,12 @@ function defaultScenarioForAttempt(attemptNumber: number | undefined): string | 
  * credentials could ever end up in a role's context, regardless of
  * what's in `allowedInputs`.
  */
-export function buildTaskContext(
+export async function buildTaskContext(
   db: DatabaseSync,
   task: TaskRow,
   role: AgentRoleRow,
   options: { scenario?: string; attemptNumber?: number } = {},
-): TaskContext {
+): Promise<TaskContext> {
   const allowedInputs: string[] = JSON.parse(role.allowedInputs);
   const allArtifacts = listArtifactsForProject(db, task.projectId);
 
@@ -63,6 +79,7 @@ export function buildTaskContext(
     : [];
 
   const memory = allowedInputs.includes("project-memory") ? getProjectMemory(db, task.projectId) : undefined;
+  const relevantFiles = allowedInputs.includes("code") ? await buildRelevantFiles(task.projectId) : [];
 
   return {
     projectId: task.projectId,
@@ -72,6 +89,7 @@ export function buildTaskContext(
     projectSummary: memory?.summary ?? "",
     relevantArtifacts,
     relevantDecisions,
+    relevantFiles,
     scenario: options.scenario ?? defaultScenarioForAttempt(options.attemptNumber),
   };
 }

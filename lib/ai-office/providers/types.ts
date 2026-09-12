@@ -29,6 +29,14 @@ export interface TaskContext {
   relevantArtifacts: Array<{ type: string; content: string }>;
   relevantDecisions: Array<{ type: string; summary: string }>;
   /**
+   * A capped, scoped subset of the project's real workspace files —
+   * populated only for a role whose `allowedInputs` includes "code"
+   * (security-reviewer, code-reviewer, qa-agent) when a real workspace
+   * exists, never the whole workspace blindly (Phase 8 Part J). Empty for
+   * every other role and for legacy/pure-text projects with no workspace.
+   */
+  relevantFiles?: Array<{ path: string; content: string }>;
+  /**
    * Explicit, deterministic scenario selector for `SimulatedAdapter` —
    * never random. Omitted (or "success") is the default happy path.
    * Real providers (Phase 7+) ignore this field entirely.
@@ -55,6 +63,9 @@ export interface TestResultPayload {
   status: "PASS" | "FAIL";
   summary: string;
   details?: Record<string, unknown>;
+  /** Populated only by a real (non-fixture) verification — e.g. agent-runner.ts's real Playwright QA override (Phase 8 Part H). Absent for ordinary fixture/model-reported test results. */
+  durationMs?: number;
+  targetUrl?: string;
 }
 
 export interface DecisionPayload {

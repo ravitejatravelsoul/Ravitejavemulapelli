@@ -101,6 +101,8 @@ function buildPrompt(input: AgentTaskInput): string {
   const { task } = input;
   const artifacts = task.relevantArtifacts.map((a) => `- [${a.type}] ${a.content.slice(0, 600)}`).join("\n") || "(none)";
   const decisions = task.relevantDecisions.map((d) => `- [${d.type}] ${d.summary}`).join("\n") || "(none)";
+  const relevantFiles = task.relevantFiles ?? [];
+  const files = relevantFiles.map((f) => `--- ${f.path} ---\n${f.content}`).join("\n\n");
   const expectedArtifactType = EXPECTED_ARTIFACT_TYPE[input.role];
 
   return [
@@ -116,6 +118,7 @@ function buildPrompt(input: AgentTaskInput): string {
     "Relevant prior decisions:",
     decisions,
     "",
+    ...(relevantFiles.length > 0 ? ["Real files currently in the project workspace (for reference/review, not to be echoed back verbatim):", files, ""] : []),
     "Respond with ONLY a single JSON object (no prose, no markdown fences) matching exactly this shape:",
     `{"summary": string, "artifacts": [{"kind":"artifact","artifactType": string,"content": string}], "decisions": [{"kind":"decision","type":"decision"|"assumption","summary": string}], "testResults": [], "events": [], "fileOperations": [], "recommendedNextActions": [string]}`,
     expectedArtifactType

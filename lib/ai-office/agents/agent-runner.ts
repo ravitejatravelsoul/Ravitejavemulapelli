@@ -38,6 +38,9 @@ import { SimulatedAdapter } from "../providers/simulated/simulated-adapter.ts";
 import { OllamaAdapter } from "../providers/ollama/ollama-adapter.ts";
 import type { AIProviderAdapter } from "../providers/types.ts";
 import { applyFileOperations } from "../workspace/apply-file-operations.ts";
+import { workspaceExists } from "../workspace/workspace-service.ts";
+import { runQABrowserVerification } from "../workspace/qa-browser-verification.ts";
+import { getWorkspace, listWorkspaceFileRecords, setDeliveryState } from "../domain/workspace.ts";
 
 /**
  * AgentRunner — the central execution boundary between a claimed Task
@@ -63,6 +66,34 @@ export interface ExecuteTaskResult {
 const DEFAULT_TASK_TIMEOUT_MS = 5 * 60 * 1000;
 
 class AdapterTimeoutError extends Error {}
+
+/**
+ * Release Agent's real (non-fixture) pre-flight gate (Phase 8 Part K) —
+ * must not say "Ready" merely because preceding task statuses are DONE.
+ * A project with no `workspaces` row at all is a legacy/pure-text
+ * project: the gate does not apply and release proceeds exactly as
+ * before. A project *with* a workspace must have at least one real
+ * file, a `VERIFIED` delivery state, and no unresolved failure.
+ */
+function checkReleaseReadiness(db: DatabaseSync, projectId: string): { ready: true } | { ready: false; reason: string } {
+  const workspace = getWorkspace(db, projectId);
+  if (!workspace) return { ready: true };
+
+  const fileCount = listWorkspaceFileRecords(db, projectId).length;
+  if (fileCount === 0) {
+    return { ready: false, reason: "Release blocked: this project has a workspace but no real deliverable files exist yet." };
+  }
+  if (workspace.deliveryState !== "VERIFIED") {
+    return {
+      ready: false,
+      reason: `Release blocked: the real deliverable's verification state is "${workspace.deliveryState}", not VERIFIED.`,
+    };
+  }
+  if (listUnresolvedFailures(db, projectId).length > 0) {
+    return { ready: false, reason: "Release blocked: unresolved failure(s) remain for this project." };
+  }
+  return { ready: true };
+}
 
 /**
  * Bounds `adapter.runAgentTask()` with `Promise.race` against a timer —
@@ -153,39 +184,62 @@ export async function executeTask(
 
   updateTaskStatus(db, task.id, "IN_PROGRESS");
   const attempt = createTaskAttempt(db, task.id);
-  const context = buildTaskContext(db, task, role, { scenario: options.scenario, attemptNumber: attempt.attemptNumber });
+  const context = await buildTaskContext(db, task, role, { scenario: options.scenario, attemptNumber: attempt.attemptNumber });
   const adapter = options.provider ?? (project.provider === "ollama" ? new OllamaAdapter() : new SimulatedAdapter());
 
   let agentRun = createAgentRunForAttempt(db, { taskAttemptId: attempt.id, roleId: role.id, provider: adapter.name });
   agentRun = updateAgentRunStatus(db, agentRun.id, "RUNNING");
 
+  const releaseReadiness = role.id === "release-agent" ? checkReleaseReadiness(db, project.id) : { ready: true as const };
+
   let result: import("../providers/types.ts").AgentTaskResult;
-  try {
-    result = await callAdapterWithTimeout(
-      adapter,
-      { role: role.id, task: context, instructions: `Execute ${role.name} task: ${task.title}` },
-      options.timeoutMs ?? DEFAULT_TASK_TIMEOUT_MS,
-    );
-  } catch (error) {
-    // Every provider-side failure — a timeout, a thrown exception, a
-    // rejected promise, a malformed adapter — is a normal, expected
-    // *operational* failure, not a reason to let an exception escape
-    // executeTask(). All three collapse to the same synthesized FAILED
-    // result so they flow through the exact same retry/escalation path
-    // as a fixture-driven failure, with no separate "timeout" or
-    // "adapter threw" code path to keep in sync. This is the boundary
-    // that matters: nothing past this point in executeTask() may throw
-    // for a provider-caused reason — only a genuine internal/persistence
-    // error (below) may still propagate, and the Runner treats that
-    // differently (see runner.ts's crash-recovery note).
-    const timedOut = error instanceof AdapterTimeoutError;
-    const reason = error instanceof Error ? error.message : String(error);
+  if (!releaseReadiness.ready) {
+    // Never even calls the adapter — a project whose real deliverable
+    // isn't verified yet must not be allowed to "succeed" its way to a
+    // release summary regardless of what the adapter might say.
     result = {
       status: "FAILED",
-      output: { summary: "", artifacts: [], decisions: [], testResults: [], events: [], fileOperations: [], recommendedNextActions: [], failure: { reason } },
+      output: {
+        summary: "",
+        artifacts: [],
+        decisions: [],
+        testResults: [],
+        events: [],
+        fileOperations: [],
+        recommendedNextActions: [],
+        failure: { reason: releaseReadiness.reason },
+      },
       usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
-      raw: { timedOut, threw: !timedOut },
+      raw: { releaseGateBlocked: true },
     };
+  } else {
+    try {
+      result = await callAdapterWithTimeout(
+        adapter,
+        { role: role.id, task: context, instructions: `Execute ${role.name} task: ${task.title}` },
+        options.timeoutMs ?? DEFAULT_TASK_TIMEOUT_MS,
+      );
+    } catch (error) {
+      // Every provider-side failure — a timeout, a thrown exception, a
+      // rejected promise, a malformed adapter — is a normal, expected
+      // *operational* failure, not a reason to let an exception escape
+      // executeTask(). All three collapse to the same synthesized FAILED
+      // result so they flow through the exact same retry/escalation path
+      // as a fixture-driven failure, with no separate "timeout" or
+      // "adapter threw" code path to keep in sync. This is the boundary
+      // that matters: nothing past this point in executeTask() may throw
+      // for a provider-caused reason — only a genuine internal/persistence
+      // error (below) may still propagate, and the Runner treats that
+      // differently (see runner.ts's crash-recovery note).
+      const timedOut = error instanceof AdapterTimeoutError;
+      const reason = error instanceof Error ? error.message : String(error);
+      result = {
+        status: "FAILED",
+        output: { summary: "", artifacts: [], decisions: [], testResults: [], events: [], fileOperations: [], recommendedNextActions: [], failure: { reason } },
+        usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+        raw: { timedOut, threw: !timedOut },
+      };
+    }
   }
 
   recordAiUsage(db, {
@@ -212,6 +266,12 @@ export async function executeTask(
         roleId: role.id,
         operations: result.output.fileOperations,
       });
+      // Real files just changed — any prior "VERIFIED" claim about this
+      // project's deliverable is now stale until QA re-verifies it for
+      // real (mirrors the same "a code change invalidates a prior
+      // review" reasoning finishFailure's stale-downstream-review
+      // handling already applies at the task level).
+      setDeliveryState(db, project.id, "BUILDING");
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       result = {
@@ -230,6 +290,38 @@ export async function executeTask(
         raw: { fileOperationRejected: true },
       };
     }
+  }
+
+  // Real, provider-independent QA (Phase 8 Part H): once a project has an
+  // actual generated deliverable, "QA passed" must mean a real headless
+  // browser actually loaded it and exercised it — never just that a
+  // fixture or a model *said* "PASS". This replaces the adapter's own
+  // testResults/status for this one task; every other role's output is
+  // untouched. Projects with no workspace (legacy/pure-text) are
+  // completely unaffected — the adapter's fixture testResults still
+  // stand as before.
+  if (role.id === "qa-agent" && workspaceExists(project.id)) {
+    const verification = await runQABrowserVerification(project.id);
+    const testResult: import("../providers/types.ts").TestResultPayload = {
+      kind: "test-result",
+      status: verification.status,
+      summary: verification.summary,
+      details: verification.details,
+      durationMs: verification.durationMs,
+      targetUrl: verification.targetUrl,
+    };
+    result = {
+      status: verification.status === "PASS" ? "SUCCEEDED" : "FAILED",
+      output: {
+        ...result.output,
+        summary: verification.summary,
+        testResults: [testResult],
+        failure: verification.status === "FAIL" ? { reason: verification.summary } : undefined,
+      },
+      usage: result.usage,
+      raw: { realQaVerification: true },
+    };
+    setDeliveryState(db, project.id, verification.status === "PASS" ? "VERIFIED" : "FAILED");
   }
 
   if (result.status === "SUCCEEDED") {
@@ -291,6 +383,8 @@ function finishSuccess(
         status: testResult.status,
         summary: testResult.summary,
         details: testResult.details,
+        durationMs: testResult.durationMs,
+        targetUrl: testResult.targetUrl,
       });
     }
     for (const event of output.events) {
@@ -369,6 +463,8 @@ function finishFailure(
         status: testResult.status,
         summary: testResult.summary,
         details: testResult.details,
+        durationMs: testResult.durationMs,
+        targetUrl: testResult.targetUrl,
       });
     }
 

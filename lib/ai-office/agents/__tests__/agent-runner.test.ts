@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { listFiles, readFile } from "../../workspace/workspace-service.ts";
-import { listWorkspaceFileRecords } from "../../domain/workspace.ts";
+import { listWorkspaceFileRecords, getWorkspace, setDeliveryState } from "../../domain/workspace.ts";
 import { getOwner } from "../../domain/users.ts";
 import { createProjectWithIdea, getProject } from "../../domain/projects.ts";
 import { createTask, createTaskWithDependencies, getTask, listTaskAttempts, getAgentRun, updateTaskStatus } from "../../domain/tasks.ts";
@@ -37,6 +37,20 @@ function setupProject(t: ReturnType<typeof createTestDb>) {
  */
 function lowerMaxRetries(t: ReturnType<typeof createTestDb>, roleId: string, maxRetries: number) {
   t.db.prepare("UPDATE agent_roles SET maxRetries = ? WHERE id = ?").run(maxRetries, roleId);
+}
+
+/** Isolates a real, temporary workspace root for the duration of `fn` — shared by every describe block that needs a real filesystem-backed workspace. */
+async function withWorkspace<T>(fn: () => Promise<T>): Promise<T> {
+  const priorRoot = process.env.AI_OFFICE_WORKSPACES_ROOT;
+  const workspaceRoot = mkdtempSync(join(tmpdir(), "ai-office-agent-runner-workspace-"));
+  process.env.AI_OFFICE_WORKSPACES_ROOT = workspaceRoot;
+  try {
+    return await fn();
+  } finally {
+    if (priorRoot === undefined) delete process.env.AI_OFFICE_WORKSPACES_ROOT;
+    else process.env.AI_OFFICE_WORKSPACES_ROOT = priorRoot;
+    rmSync(workspaceRoot, { recursive: true, force: true });
+  }
 }
 
 describe("successful execution", () => {
@@ -573,21 +587,6 @@ describe("provider selection — a project's own `provider` column picks the def
 });
 
 describe("real file materialization (Phase 8)", () => {
-  let workspaceRoot: string;
-  const priorRoot = process.env.AI_OFFICE_WORKSPACES_ROOT;
-
-  function withWorkspace<T>(fn: () => T): T {
-    workspaceRoot = mkdtempSync(join(tmpdir(), "ai-office-agent-runner-workspace-"));
-    process.env.AI_OFFICE_WORKSPACES_ROOT = workspaceRoot;
-    try {
-      return fn();
-    } finally {
-      if (priorRoot === undefined) delete process.env.AI_OFFICE_WORKSPACES_ROOT;
-      else process.env.AI_OFFICE_WORKSPACES_ROOT = priorRoot;
-      rmSync(workspaceRoot, { recursive: true, force: true });
-    }
-  }
-
   test("a successful frontend-developer attempt writes real files to disk and records attribution, driven entirely through executeTask() — no test-only file-writing shortcut", async () => {
     await withWorkspace(async () => {
       const t = createTestDb();
@@ -690,6 +689,229 @@ describe("real file materialization (Phase 8)", () => {
 
       const failures = listUnresolvedFailures(t.db, project.id);
       assert.match(failures[0]!.reason, /File operation rejected/);
+
+      t.close();
+    });
+  });
+
+  test("qa-agent's real browser check PASSes against real correct files and marks the workspace VERIFIED", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const { project } = setupProject(t);
+      const devTask = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+      // Attempt 1 writes all three files (deliberately buggy script.js);
+      // attempt 2's "retry-success" fixture rewrites only script.js with
+      // the fix — matching the real two-attempt shape exactly, since
+      // "retry-success" alone would never have written index.html/styles.css.
+      await executeTask(t.db, devTask.id, { scenario: "success" });
+      updateTaskStatus(t.db, devTask.id, "PENDING");
+      await executeTask(t.db, devTask.id, { scenario: "retry-success" });
+
+      const { task: qaTask } = createTaskWithDependencies(t.db, {
+        projectId: project.id,
+        roleId: "qa-agent",
+        title: "Test",
+        dependsOnTaskIds: [devTask.id],
+      });
+      const result = await executeTask(t.db, qaTask.id, { scenario: "success" });
+
+      assert.equal(result.outcome, "succeeded");
+      const testResults = listTestResultsForTask(t.db, qaTask.id);
+      assert.equal(testResults.length, 1);
+      assert.equal(testResults[0]!.status, "PASS");
+      assert.ok(testResults[0]!.durationMs !== null, "a real verification must record a real duration");
+      assert.match(testResults[0]!.targetUrl ?? "", /^http:\/\/127\.0\.0\.1:\d+\/index\.html$/);
+      assert.equal(getWorkspace(t.db, project.id)?.deliveryState, "VERIFIED");
+
+      t.close();
+    });
+  });
+
+  test("qa-agent's real browser check FAILs against the real deliberate bug, retries the frontend-developer task, and marks the workspace FAILED", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const { project } = setupProject(t);
+      const devTask = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+      await executeTask(t.db, devTask.id, { scenario: "success" }); // attempt 1 — deliberately buggy
+
+      const { task: qaTask } = createTaskWithDependencies(t.db, {
+        projectId: project.id,
+        roleId: "qa-agent",
+        title: "Test",
+        dependsOnTaskIds: [devTask.id],
+      });
+      const result = await executeTask(t.db, qaTask.id, { scenario: "success" });
+
+      assert.equal(result.outcome, "retried", "a real QA failure is a normal retryable failure, exactly like a fixture failure");
+      assert.equal(getTask(t.db, devTask.id)?.status, "PENDING", "the real remediation target — the developer task — must be reopened");
+      const testResults = listTestResultsForTask(t.db, qaTask.id);
+      assert.equal(testResults[0]!.status, "FAIL");
+      assert.match(testResults[0]!.summary, /did not change/i);
+      assert.equal(getWorkspace(t.db, project.id)?.deliveryState, "FAILED");
+
+      t.close();
+    });
+  });
+
+  test("legacy/pure-text projects with no workspace are completely unaffected by the real QA override — the adapter's own fixture testResults still stand", async () => {
+    const t = createTestDb();
+    const { project } = setupProject(t);
+    const devTask = createTask(t.db, { projectId: project.id, roleId: "backend-developer", title: "Implement backend" });
+    await executeTask(t.db, devTask.id, { scenario: "success" });
+
+    const qaTask = createTask(t.db, { projectId: project.id, roleId: "qa-agent", title: "Test" });
+    const result = await executeTask(t.db, qaTask.id, { scenario: "success" });
+
+    assert.equal(result.outcome, "succeeded");
+    const testResults = listTestResultsForTask(t.db, qaTask.id);
+    assert.equal(testResults[0]!.durationMs, null, "an ordinary fixture test result carries no real verification evidence");
+    assert.equal(getWorkspace(t.db, project.id), undefined, "no workspace row should ever be created for a project that never wrote a real file");
+
+    t.close();
+  });
+});
+
+describe("Release Agent's real deliverable readiness gate (Phase 8 Part K)", () => {
+  function releaseSpy() {
+    let called = false;
+    return {
+      called: () => called,
+      adapter: {
+        name: "simulated",
+        async runAgentTask(input: import("../../providers/types.ts").AgentTaskInput) {
+          called = true;
+          const { SimulatedAdapter } = await import("../../providers/simulated/simulated-adapter.ts");
+          return new SimulatedAdapter().runAgentTask(input);
+        },
+        estimateCost() {
+          return { estimatedInputTokens: 0, estimatedOutputTokens: 0, estimatedCostUsd: 0 };
+        },
+      },
+    };
+  }
+
+  test("a legacy project with no workspace at all is unaffected — the gate does not apply and the adapter runs normally", async () => {
+    const t = createTestDb();
+    const { project } = setupProject(t);
+    const releaseTask = createTask(t.db, { projectId: project.id, roleId: "release-agent", title: "Prepare release" });
+    const spy = releaseSpy();
+
+    const result = await executeTask(t.db, releaseTask.id, { scenario: "success", provider: spy.adapter });
+
+    assert.equal(spy.called(), true, "no workspace exists — the real-deliverable gate must not block a legacy project");
+    assert.equal(result.outcome, "succeeded");
+
+    t.close();
+  });
+
+  test("a real-development project whose deliverable is not yet VERIFIED is blocked before the adapter is ever called", async () => {
+    const t = createTestDb();
+    const { project } = setupProject(t);
+    // getOrCreateWorkspace-via-setDeliveryState simulates "files exist, but
+    // QA hasn't verified them yet" without needing a real filesystem write.
+    setDeliveryState(t.db, project.id, "BUILDING");
+    t.db
+      .prepare("INSERT INTO workspace_files (id, projectId, path, sizeBytes, createdAt, updatedAt) VALUES ('f1', ?, 'index.html', 10, ?, ?)")
+      .run(project.id, Date.now(), Date.now());
+
+    const releaseTask = createTask(t.db, { projectId: project.id, roleId: "release-agent", title: "Prepare release" });
+    const spy = releaseSpy();
+    const result = await executeTask(t.db, releaseTask.id, { scenario: "success", provider: spy.adapter });
+
+    assert.equal(spy.called(), false, "the adapter must never be called for an unverified real deliverable");
+    assert.equal(result.outcome, "retried");
+    assert.match(result.reason ?? "", /not VERIFIED/);
+
+    t.close();
+  });
+
+  test("a VERIFIED deliverable with an unresolved failure elsewhere in the project is still blocked", async () => {
+    const t = createTestDb();
+    const { project } = setupProject(t);
+    setDeliveryState(t.db, project.id, "VERIFIED");
+    t.db
+      .prepare("INSERT INTO workspace_files (id, projectId, path, sizeBytes, createdAt, updatedAt) VALUES ('f1', ?, 'index.html', 10, ?, ?)")
+      .run(project.id, Date.now(), Date.now());
+    const otherTask = createTask(t.db, { projectId: project.id, roleId: "backend-developer", title: "Some other task" });
+    const { recordFailure } = await import("../../domain/project-outputs.ts");
+    recordFailure(t.db, { projectId: project.id, taskId: otherTask.id, reason: "unrelated unresolved failure" });
+
+    const releaseTask = createTask(t.db, { projectId: project.id, roleId: "release-agent", title: "Prepare release" });
+    const spy = releaseSpy();
+    const result = await executeTask(t.db, releaseTask.id, { scenario: "success", provider: spy.adapter });
+
+    assert.equal(spy.called(), false);
+    assert.equal(result.outcome, "retried");
+    assert.match(result.reason ?? "", /unresolved failure/i);
+
+    t.close();
+  });
+
+  test("a VERIFIED deliverable with no unresolved failures and at least one real file lets release proceed normally", async () => {
+    const t = createTestDb();
+    const { project } = setupProject(t);
+    setDeliveryState(t.db, project.id, "VERIFIED");
+    t.db
+      .prepare("INSERT INTO workspace_files (id, projectId, path, sizeBytes, createdAt, updatedAt) VALUES ('f1', ?, 'index.html', 10, ?, ?)")
+      .run(project.id, Date.now(), Date.now());
+
+    const releaseTask = createTask(t.db, { projectId: project.id, roleId: "release-agent", title: "Prepare release" });
+    const spy = releaseSpy();
+    const result = await executeTask(t.db, releaseTask.id, { scenario: "success", provider: spy.adapter });
+
+    assert.equal(spy.called(), true);
+    assert.equal(result.outcome, "succeeded");
+
+    t.close();
+  });
+});
+
+describe("scoped real-file context for code-consuming roles (Phase 8 Part J)", () => {
+  async function captureRelevantFiles(t: ReturnType<typeof createTestDb>, taskId: string) {
+    let captured: Array<{ path: string; content: string }> | undefined;
+    const spyAdapter = {
+      name: "simulated",
+      async runAgentTask(input: import("../../providers/types.ts").AgentTaskInput) {
+        captured = input.task.relevantFiles;
+        const { SimulatedAdapter } = await import("../../providers/simulated/simulated-adapter.ts");
+        return new SimulatedAdapter().runAgentTask(input);
+      },
+      estimateCost() {
+        return { estimatedInputTokens: 0, estimatedOutputTokens: 0, estimatedCostUsd: 0 };
+      },
+    };
+    await executeTask(t.db, taskId, { scenario: "success", provider: spyAdapter });
+    return captured;
+  }
+
+  test("qa-agent, security-reviewer, and code-reviewer all receive real file content once a workspace has files", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const { project } = setupProject(t);
+      const devTask = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+      await executeTask(t.db, devTask.id, { scenario: "success" });
+
+      for (const roleId of ["qa-agent", "security-reviewer", "code-reviewer"]) {
+        const task = createTask(t.db, { projectId: project.id, roleId, title: `Review (${roleId})` });
+        const files = await captureRelevantFiles(t, task.id);
+        assert.ok(files && files.length > 0, `${roleId} must receive real file content`);
+        assert.ok(files!.some((f) => f.path === "index.html"));
+      }
+
+      t.close();
+    });
+  });
+
+  test("a role whose allowedInputs does not include \"code\" (product-owner) never receives relevantFiles, even when a workspace has files", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const { project } = setupProject(t);
+      const devTask = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+      await executeTask(t.db, devTask.id, { scenario: "success" });
+
+      const poTask = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "Requirements" });
+      const files = await captureRelevantFiles(t, poTask.id);
+      assert.deepEqual(files, []);
 
       t.close();
     });
