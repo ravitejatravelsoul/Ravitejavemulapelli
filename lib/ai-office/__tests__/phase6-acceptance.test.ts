@@ -1,5 +1,8 @@
-import { describe, test } from "node:test";
+import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createTestDb } from "../db/test-helpers.ts";
 import { getOwner } from "../domain/users.ts";
 import { createProjectWithIdea, getProject } from "../domain/projects.ts";
@@ -15,6 +18,20 @@ import { listPendingApprovals } from "../domain/project-outputs.ts";
 
 process.env.OFFICE_OWNER_EMAIL = "test-owner@example.invalid";
 process.env.OFFICE_OWNER_PASSWORD_HASH = "synthetic-test-salt:synthetic-test-hash-not-a-real-scrypt-output";
+
+// This file's ideas ("Build a small web application...") select
+// frontend-developer, whose real SimulatedAdapter fixture now writes
+// real files (Phase 8) — isolates those writes into a throwaway temp
+// directory rather than this machine's real .data/ai-office-workspaces/.
+let workspaceRoot: string;
+beforeEach(() => {
+  workspaceRoot = mkdtempSync(join(tmpdir(), "ai-office-test-workspace-"));
+  process.env.AI_OFFICE_WORKSPACES_ROOT = workspaceRoot;
+});
+afterEach(() => {
+  delete process.env.AI_OFFICE_WORKSPACES_ROOT;
+  rmSync(workspaceRoot, { recursive: true, force: true });
+});
 
 /**
  * The Phase 6 brief's exact end-to-end acceptance scenario (§25-27),

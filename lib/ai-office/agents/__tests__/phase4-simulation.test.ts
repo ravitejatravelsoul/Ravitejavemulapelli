@@ -1,5 +1,8 @@
-import { describe, test } from "node:test";
+import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createTestDb } from "../../db/test-helpers.ts";
 import { getOwner } from "../../domain/users.ts";
 import { createProjectWithIdea, getProject } from "../../domain/projects.ts";
@@ -12,6 +15,22 @@ import { executeTask } from "../agent-runner.ts";
 
 process.env.OFFICE_OWNER_EMAIL = "test-owner@example.invalid";
 process.env.OFFICE_OWNER_PASSWORD_HASH = "synthetic-test-salt:synthetic-test-hash-not-a-real-scrypt-output";
+
+// Isolates any real file writes a frontend-developer task might trigger
+// (Phase 8's SimulatedAdapter fixture writes real files) into a throwaway
+// temp directory — without this, a test whose idea/role selection ever
+// touches frontend-developer would leak real directories into this
+// machine's actual .data/ai-office-workspaces/, orphaned forever since
+// the owning project only ever exists in this test's temp SQLite DB.
+let workspaceRoot: string;
+beforeEach(() => {
+  workspaceRoot = mkdtempSync(join(tmpdir(), "ai-office-test-workspace-"));
+  process.env.AI_OFFICE_WORKSPACES_ROOT = workspaceRoot;
+});
+afterEach(() => {
+  delete process.env.AI_OFFICE_WORKSPACES_ROOT;
+  rmSync(workspaceRoot, { recursive: true, force: true });
+});
 
 const IDEA_TEXT = "Build a simple tool where manual testers capture screenshots and generate a test report.";
 

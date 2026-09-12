@@ -1,5 +1,8 @@
-import { describe, test } from "node:test";
+import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createTestDb } from "../../db/test-helpers.ts";
 import { getOwner } from "../../domain/users.ts";
 import { createProjectWithIdea, updateProjectStatus } from "../../domain/projects.ts";
@@ -22,6 +25,20 @@ import { upsertRunnerHeartbeat, setDeliveryState } from "../../domain/workspace.
 
 process.env.OFFICE_OWNER_EMAIL = "test-owner@example.invalid";
 process.env.OFFICE_OWNER_PASSWORD_HASH = "synthetic-test-salt:synthetic-test-hash-not-a-real-scrypt-output";
+
+// See agents/__tests__/phase4-simulation.test.ts's identical block for
+// why this matters: isolates any real file writes a frontend-developer
+// task might trigger into a throwaway temp directory rather than this
+// machine's real .data/ai-office-workspaces/.
+let workspaceRoot: string;
+beforeEach(() => {
+  workspaceRoot = mkdtempSync(join(tmpdir(), "ai-office-test-workspace-"));
+  process.env.AI_OFFICE_WORKSPACES_ROOT = workspaceRoot;
+});
+afterEach(() => {
+  delete process.env.AI_OFFICE_WORKSPACES_ROOT;
+  rmSync(workspaceRoot, { recursive: true, force: true });
+});
 
 describe("dashboard-data — empty states", () => {
   test("a freshly-seeded office with zero projects/approvals/activity looks intentional, not broken", () => {
