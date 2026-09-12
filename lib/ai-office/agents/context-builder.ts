@@ -5,6 +5,7 @@ import type { AgentRoleRow } from "../domain/agent-roles.ts";
 import type { TaskRow } from "../domain/tasks.ts";
 import { listArtifactsForProject, listDecisionsForProject } from "../domain/project-outputs.ts";
 import { getProjectMemory } from "../domain/project-memory.ts";
+import { getProject, getProjectIdea } from "../domain/projects.ts";
 import type { TaskContext } from "../providers/types.ts";
 import { workspaceExists, listFiles, readFile } from "../workspace/workspace-service.ts";
 
@@ -81,12 +82,21 @@ export async function buildTaskContext(
   const memory = allowedInputs.includes("project-memory") ? getProjectMemory(db, task.projectId) : undefined;
   const relevantFiles = allowedInputs.includes("code") ? await buildRelevantFiles(task.projectId) : [];
 
+  // Unconditional, unlike everything else above — every role serves the
+  // original request, so unlike artifacts/decisions/files (which are
+  // legitimately scoped by allowedInputs), the request itself is never
+  // scoped away. See TaskContext.authoritativeUserRequest's docblock.
+  const idea = getProjectIdea(db, task.projectId);
+  const project = getProject(db, task.projectId);
+
   return {
     projectId: task.projectId,
     taskId: task.id,
     roleId: role.id,
     taskTitle: task.title,
     projectSummary: memory?.summary ?? "",
+    authoritativeUserRequest: idea?.rawText ?? "",
+    projectTitle: project?.title ?? "",
     relevantArtifacts,
     relevantDecisions,
     relevantFiles,

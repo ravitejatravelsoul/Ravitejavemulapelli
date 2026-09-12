@@ -917,3 +917,221 @@ describe("scoped real-file context for code-consuming roles (Phase 8 Part J)", (
     });
   });
 });
+
+describe("intent-consistency gates — real-provider only, never triggered by SimulatedAdapter (Phase 8 follow-up)", () => {
+  function setupOllamaProject(t: ReturnType<typeof createTestDb>, rawIdeaText: string) {
+    const owner = getOwner(t.db)!;
+    const { project } = createProjectWithIdea(t.db, { title: "Ollama Hello World Build", rawIdeaText, ownerId: owner.id, provider: "ollama" });
+    return project;
+  }
+
+  function fetchReturning(consistent: boolean, reason: string): typeof fetch {
+    return (async () =>
+      ({ ok: true, status: 200, json: async () => ({ response: JSON.stringify({ consistent, reason }) }) }) as unknown as Response) as unknown as typeof fetch;
+  }
+
+  const architectAdapter = {
+    name: "ollama",
+    async runAgentTask() {
+      return {
+        status: "SUCCEEDED" as const,
+        output: {
+          summary: "Proposed an architecture.",
+          artifacts: [{ kind: "artifact" as const, artifactType: "architecture", content: "A Python CLI client for calling a local LLM server." }],
+          decisions: [],
+          testResults: [],
+          events: [],
+          fileOperations: [],
+          recommendedNextActions: [],
+        },
+        usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+      };
+    },
+    estimateCost() {
+      return { estimatedInputTokens: 0, estimatedOutputTokens: 0, estimatedCostUsd: 0 };
+    },
+  };
+
+  test("Gate 1: an inconsistent architecture blocks the developer, reopens the architecture task, and never calls the developer's own adapter", async () => {
+    const t = createTestDb();
+    const project = setupOllamaProject(t, "Create a simple webpage with a heading, description and button.");
+    const archTask = createTask(t.db, { projectId: project.id, roleId: "solution-architect", title: "Design architecture" });
+    await executeTask(t.db, archTask.id, { provider: architectAdapter });
+    assert.equal(getTask(t.db, archTask.id)?.status, "DONE");
+
+    const { task: devTask } = createTaskWithDependencies(t.db, {
+      projectId: project.id,
+      roleId: "frontend-developer",
+      title: "Implement frontend",
+      dependsOnTaskIds: [archTask.id],
+    });
+
+    let developerAdapterCalled = false;
+    const developerAdapter = {
+      name: "ollama",
+      async runAgentTask() {
+        developerAdapterCalled = true;
+        throw new Error("must never be reached — the plan-consistency gate should have blocked this call");
+      },
+      estimateCost() {
+        return { estimatedInputTokens: 0, estimatedOutputTokens: 0, estimatedCostUsd: 0 };
+      },
+    };
+
+    const result = await executeTask(t.db, devTask.id, {
+      provider: developerAdapter,
+      intentCheckFetch: fetchReturning(false, "The architecture describes an API client, not a webpage."),
+    });
+
+    assert.equal(developerAdapterCalled, false, "the developer's own adapter must never be called once the plan check fails");
+    assert.equal(result.outcome, "retried");
+    assert.match(result.reason ?? "", /Intent-consistency check failed/);
+    assert.equal(getTask(t.db, archTask.id)?.status, "PENDING", "the real source of the problem — the architecture task — must be reopened");
+    const failures = listUnresolvedFailures(t.db, project.id);
+    assert.ok(failures.some((f) => f.taskId === archTask.id && /architecture describes an API client/.test(f.reason)));
+
+    t.close();
+  });
+
+  test("Gate 1: a consistent architecture lets the developer's adapter run normally", async () => {
+    const t = createTestDb();
+    const project = setupOllamaProject(t, "Create a simple webpage with a heading, description and button.");
+    const archTask = createTask(t.db, { projectId: project.id, roleId: "solution-architect", title: "Design architecture" });
+    await executeTask(t.db, archTask.id, { provider: architectAdapter });
+
+    const { task: devTask } = createTaskWithDependencies(t.db, {
+      projectId: project.id,
+      roleId: "frontend-developer",
+      title: "Implement frontend",
+      dependsOnTaskIds: [archTask.id],
+    });
+
+    let developerAdapterCalled = false;
+    const developerAdapter = {
+      name: "ollama",
+      async runAgentTask() {
+        developerAdapterCalled = true;
+        return {
+          status: "SUCCEEDED" as const,
+          output: { summary: "ok", artifacts: [], decisions: [], testResults: [], events: [], fileOperations: [], recommendedNextActions: [] },
+          usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+        };
+      },
+      estimateCost() {
+        return { estimatedInputTokens: 0, estimatedOutputTokens: 0, estimatedCostUsd: 0 };
+      },
+    };
+
+    const result = await executeTask(t.db, devTask.id, {
+      provider: developerAdapter,
+      intentCheckFetch: fetchReturning(true, "The architecture describes a webpage as requested."),
+    });
+
+    assert.equal(developerAdapterCalled, true);
+    assert.equal(result.outcome, "succeeded");
+
+    t.close();
+  });
+
+  test("Gate 1 never runs for a SIMULATED project — SimulatedAdapter's idea-independent fixtures are never subjected to an intent check", async () => {
+    const t = createTestDb();
+    const owner = getOwner(t.db)!;
+    const { project } = createProjectWithIdea(t.db, { title: "P", rawIdeaText: "Build a small tool.", ownerId: owner.id, provider: "simulated" });
+    const archTask = createTask(t.db, { projectId: project.id, roleId: "solution-architect", title: "Design architecture" });
+    await executeTask(t.db, archTask.id, { scenario: "success" });
+
+    const { task: devTask } = createTaskWithDependencies(t.db, {
+      projectId: project.id,
+      roleId: "frontend-developer",
+      title: "Implement frontend",
+      dependsOnTaskIds: [archTask.id],
+    });
+
+    let intentCheckCalled = false;
+    const result = await executeTask(t.db, devTask.id, {
+      scenario: "success",
+      intentCheckFetch: (async () => {
+        intentCheckCalled = true;
+        return { ok: true, status: 200, json: async () => ({ response: JSON.stringify({ consistent: true, reason: "x" }) }) } as unknown as Response;
+      }) as unknown as typeof fetch,
+    });
+
+    assert.equal(intentCheckCalled, false, "a SIMULATED project must never invoke the intent-consistency Ollama call");
+    assert.equal(result.outcome, "succeeded");
+
+    t.close();
+  });
+
+  test("Gate 2: a structurally-passing but off-request deliverable is downgraded to FAIL and reopens the developer", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const project = setupOllamaProject(t, "Create a very small Hello World webpage.");
+      const devTask = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+      // Seed a real, fully-correct static page cheaply and deterministically
+      // via the real SimulatedAdapter fixture, injected explicitly to
+      // override this project's own "ollama" provider — the mechanism
+      // under test here is Gate 2 (qa-agent's deliverable-consistency
+      // check), not file generation itself.
+      const { SimulatedAdapter } = await import("../../providers/simulated/simulated-adapter.ts");
+      await executeTask(t.db, devTask.id, { provider: new SimulatedAdapter(), scenario: "success" });
+      updateTaskStatus(t.db, devTask.id, "PENDING");
+      await executeTask(t.db, devTask.id, { provider: new SimulatedAdapter(), scenario: "retry-success" });
+      assert.equal(getTask(t.db, devTask.id)?.status, "DONE");
+
+      const { task: qaTask } = createTaskWithDependencies(t.db, {
+        projectId: project.id,
+        roleId: "qa-agent",
+        title: "Test",
+        dependsOnTaskIds: [devTask.id],
+      });
+
+      const result = await executeTask(t.db, qaTask.id, {
+        provider: architectAdapter, // any SUCCEEDED adapter — its own output is replaced by the real QA override regardless
+        intentCheckFetch: fetchReturning(false, "This is a generic placeholder page, not the requested Hello World greeting experience."),
+      });
+
+      assert.equal(result.outcome, "retried", "a real structural PASS must still be downgraded when the deliverable doesn't match the request");
+      assert.equal(getTask(t.db, devTask.id)?.status, "PENDING", "the developer must be reopened, exactly like a real QA structural failure");
+      const testResults = listTestResultsForTask(t.db, qaTask.id);
+      assert.equal(testResults[0]!.status, "FAIL");
+      assert.match(testResults[0]!.summary, /does not match the requested product/);
+      assert.equal(getWorkspace(t.db, project.id)?.deliveryState, "FAILED");
+
+      t.close();
+    });
+  });
+
+  test("Gate 2 never runs for a SIMULATED project", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const owner = getOwner(t.db)!;
+      const { project } = createProjectWithIdea(t.db, { title: "P", rawIdeaText: "Build a small tool.", ownerId: owner.id, provider: "simulated" });
+      const devTask = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+      await executeTask(t.db, devTask.id, { scenario: "success" });
+      updateTaskStatus(t.db, devTask.id, "PENDING");
+      await executeTask(t.db, devTask.id, { scenario: "retry-success" });
+
+      const { task: qaTask } = createTaskWithDependencies(t.db, {
+        projectId: project.id,
+        roleId: "qa-agent",
+        title: "Test",
+        dependsOnTaskIds: [devTask.id],
+      });
+
+      let intentCheckCalled = false;
+      const result = await executeTask(t.db, qaTask.id, {
+        scenario: "success",
+        intentCheckFetch: (async () => {
+          intentCheckCalled = true;
+          return { ok: true, status: 200, json: async () => ({ response: JSON.stringify({ consistent: false, reason: "x" }) }) } as unknown as Response;
+        }) as unknown as typeof fetch,
+      });
+
+      assert.equal(intentCheckCalled, false, "a SIMULATED project must never invoke the deliverable-consistency Ollama call");
+      assert.equal(result.outcome, "succeeded", "a real structural PASS for a SIMULATED project is unaffected");
+
+      t.close();
+    });
+  });
+});

@@ -3,15 +3,18 @@ import assert from "node:assert/strict";
 import { OllamaAdapter, OllamaConnectionError, OllamaTimeoutError } from "../ollama/ollama-adapter.ts";
 import type { TaskContext } from "../types.ts";
 
-function context(): TaskContext {
+function context(overrides: Partial<TaskContext> = {}): TaskContext {
   return {
     projectId: "p1",
     taskId: "t1",
     roleId: "product-owner",
     taskTitle: "Define requirements",
     projectSummary: "Build a one-page todo application.",
+    authoritativeUserRequest: "Build a one-page todo application.",
+    projectTitle: "Todo App Project",
     relevantArtifacts: [],
     relevantDecisions: [],
+    ...overrides,
   };
 }
 
@@ -154,6 +157,70 @@ describe("OllamaAdapter — connection and HTTP errors throw (agent-runner's exi
       });
     const adapter = new OllamaAdapter({ fetchImpl: fetchImpl as unknown as typeof fetch, timeoutMs: 20 });
     await assert.rejects(() => adapter.runAgentTask({ role: "product-owner", task: context(), instructions: "x" }), OllamaTimeoutError);
+  });
+});
+
+describe("OllamaAdapter — a misleading project title can never hijack the authoritative user request (regression)", () => {
+  /**
+   * Found via a real local-model acceptance run: a project titled "Ollama
+   * Hello World Build" caused the model to build a Python client FOR
+   * Ollama instead of the simple webpage the idea actually asked for,
+   * because the only place the idea text was echoed was inside a
+   * templated status string dominated by the project's own title, and
+   * frontend/backend-developer's allowedInputs never included "requirements"
+   * or "idea" at all — the raw idea text never reached them by any path.
+   * These tests prove the fix generically: it's the PROMPT'S STRUCTURE
+   * being tested (authoritative section present, prominent, and clearly
+   * senior to metadata), not any hardcoded "Hello World"/"Ollama" special
+   * case — three unrelated title/idea pairs are used deliberately.
+   */
+  const CASES: Array<{ projectTitle: string; authoritativeUserRequest: string }> = [
+    { projectTitle: "Ollama Hello World Build", authoritativeUserRequest: "Create a simple webpage with a heading, description and button." },
+    { projectTitle: "Python Experiment", authoritativeUserRequest: "Create a static HTML landing page." },
+    { projectTitle: "Database Test", authoritativeUserRequest: "Create a calculator webpage." },
+  ];
+
+  for (const { projectTitle, authoritativeUserRequest } of CASES) {
+    test(`title "${projectTitle}" never appears ahead of, or in place of, the authoritative request "${authoritativeUserRequest}"`, async () => {
+      let capturedPrompt = "";
+      const fetchImpl = async (_url: string, init: RequestInit) => {
+        capturedPrompt = (JSON.parse(init.body as string) as { prompt: string }).prompt;
+        return jsonResponse({ response: JSON.stringify(VALID_STRUCTURED_OUTPUT) });
+      };
+      const adapter = new OllamaAdapter({ fetchImpl: fetchImpl as unknown as typeof fetch });
+      await adapter.runAgentTask({
+        role: "backend-developer",
+        task: context({ roleId: "backend-developer", taskTitle: `Implement backend — ${projectTitle}`, projectTitle, authoritativeUserRequest }),
+        instructions: "x",
+      });
+
+      assert.match(capturedPrompt, /AUTHORITATIVE USER REQUEST/);
+      assert.ok(capturedPrompt.includes(authoritativeUserRequest), "the real idea text must appear verbatim in the prompt");
+      assert.ok(
+        capturedPrompt.indexOf(authoritativeUserRequest) < capturedPrompt.indexOf(projectTitle),
+        "the authoritative request must appear before the project title, not after",
+      );
+      assert.match(capturedPrompt, /organizational label/);
+      assert.match(capturedPrompt, /not a product spec/);
+      assert.match(capturedPrompt, /never infer what to build from a title/i);
+    });
+  }
+
+  test("frontend-developer and backend-developer — the two roles with no 'requirements'/'idea' in allowedInputs — still receive the authoritative request", async () => {
+    for (const roleId of ["frontend-developer", "backend-developer"]) {
+      let capturedPrompt = "";
+      const fetchImpl = async (_url: string, init: RequestInit) => {
+        capturedPrompt = (JSON.parse(init.body as string) as { prompt: string }).prompt;
+        return jsonResponse({ response: JSON.stringify(VALID_STRUCTURED_OUTPUT) });
+      };
+      const adapter = new OllamaAdapter({ fetchImpl: fetchImpl as unknown as typeof fetch });
+      await adapter.runAgentTask({
+        role: roleId,
+        task: context({ roleId, authoritativeUserRequest: "Build a calculator with add and subtract buttons." }),
+        instructions: "x",
+      });
+      assert.ok(capturedPrompt.includes("Build a calculator with add and subtract buttons."), `${roleId} must see the authoritative request`);
+    }
   });
 });
 

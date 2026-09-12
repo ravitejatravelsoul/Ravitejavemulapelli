@@ -26,6 +26,21 @@ export interface TaskContext {
   roleId: AgentRoleId;
   taskTitle: string;
   projectSummary: string;
+  /**
+   * The original, unedited idea text the owner submitted when the project
+   * was created — present for EVERY role unconditionally, never gated by
+   * `allowedInputs`. This is the one thing every role's work ultimately
+   * serves, so scoping it away (the way artifacts/decisions/files are
+   * scoped) would be exactly backwards. Always authoritative: a project
+   * title, provider name, or model name is organizational metadata only
+   * and must never be read as redefining what to build, even when it
+   * happens to mention a technology or tool by name. Empty string only if
+   * the project genuinely has no recorded idea (should not happen in
+   * practice — projects are always created with one).
+   */
+  authoritativeUserRequest: string;
+  /** The project's own organizational title — a label for tracking/display only, never a product specification. A title like "Ollama Hello World Build" describes which provider/test this project is, not that the deliverable should be about Ollama. */
+  projectTitle: string;
   relevantArtifacts: Array<{ type: string; content: string }>;
   relevantDecisions: Array<{ type: string; summary: string }>;
   /**

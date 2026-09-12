@@ -175,6 +175,12 @@ export async function runQABrowserVerification(
     return finish("PASS", "Page loaded, heading and description are present, and clicking the button changed the page's visible text with no console/page errors.", {
       consoleErrors,
       pageErrors,
+      // Real, actually-rendered page text — not the fixture/model's own
+      // description of what it built. Lets a caller (agent-runner.ts's
+      // deliverable-consistency check) compare what was really produced
+      // against the user's original request, not just trust "QA passed."
+      headingText,
+      bodyTextAfter,
     });
   } catch (error) {
     return {

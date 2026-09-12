@@ -27,13 +27,15 @@ import {
   recordFailure,
   listUnresolvedFailures,
   resolveFailure,
+  listArtifactsForProject,
 } from "../domain/project-outputs.ts";
 import { recordEvent } from "../domain/events.ts";
 import { recordAiUsage } from "../domain/budget.ts";
 import { refreshProjectMemory } from "../domain/project-memory.ts";
 import { buildTaskContext } from "./context-builder.ts";
 import { authorizeBudget } from "./budget-gate.ts";
-import { isReviewRole, findRemediationTargets, findStaleDownstreamReviews } from "./remediation.ts";
+import { isReviewRole, isDevelopmentRole, findRemediationTargets, findStaleDownstreamReviews } from "./remediation.ts";
+import { checkIntentConsistency } from "./intent-consistency.ts";
 import { SimulatedAdapter } from "../providers/simulated/simulated-adapter.ts";
 import { OllamaAdapter } from "../providers/ollama/ollama-adapter.ts";
 import type { AIProviderAdapter } from "../providers/types.ts";
@@ -96,6 +98,62 @@ function checkReleaseReadiness(db: DatabaseSync, projectId: string): { ready: tr
 }
 
 /**
+ * Intent-consistency gate, checkpoint 1 of 2 (Phase 8 follow-up — see
+ * lib/ai-office/agents/intent-consistency.ts's docblock for the
+ * incident this closes). Before a development role starts real work,
+ * for an `ollama` project, compares the planning artifacts it's about
+ * to build from against the project's authoritative user request. Real
+ * providers only — SimulatedAdapter's fixtures are deliberately
+ * idea-independent (Phase 8 Part E), so there is nothing meaningful to
+ * compare for a SIMULATED project, and running this against Ollama
+ * regardless of project provider would be a silent cross-provider
+ * dependency this codebase explicitly forbids.
+ */
+async function checkPlanConsistencyBeforeDevelopment(
+  authoritativeUserRequest: string,
+  planningArtifacts: Array<{ type: string; content: string }>,
+  fetchImpl?: typeof fetch,
+): Promise<{ consistent: true } | { consistent: false; reason: string }> {
+  if (planningArtifacts.length === 0) return { consistent: true };
+  const candidate = planningArtifacts.map((a) => `[${a.type}]\n${a.content}`).join("\n\n");
+  const check = await checkIntentConsistency({ authoritativeUserRequest, candidate, checkpointLabel: "planned architecture/UX", fetchImpl });
+  return check.consistent ? { consistent: true } : { consistent: false, reason: check.reason };
+}
+
+/**
+ * Side effect of a failed plan-consistency check: reopens whichever
+ * DONE planning task(s) actually produced the inconsistent architecture/
+ * UX-spec artifact(s), so the *real* source of the problem gets redone —
+ * not just the development task that happened to notice it. Reuses the
+ * exact same primitives (updateTaskStatus, recordFailure, recordEvent)
+ * every other failure path in this file already uses; the normal
+ * dependency-eligibility mechanics then keep the development task
+ * ineligible until the reopened planning task is DONE again for real.
+ */
+function reopenPlanningTasksForRework(db: DatabaseSync, projectId: string, reason: string): void {
+  const artifacts = listArtifactsForProject(db, projectId);
+  const planningTypes = new Set(["architecture", "ux-spec"]);
+  const latestByType = new Map<string, (typeof artifacts)[number]>();
+  for (const artifact of artifacts) {
+    if (planningTypes.has(artifact.type)) latestByType.set(artifact.type, artifact);
+  }
+
+  for (const artifact of latestByType.values()) {
+    if (!artifact.taskId) continue;
+    const planningTask = getTask(db, artifact.taskId);
+    if (!planningTask || planningTask.status !== "DONE") continue; // already being reworked or never completed
+    updateTaskStatus(db, planningTask.id, "PENDING");
+    recordFailure(db, { projectId, taskId: planningTask.id, reason: `Intent-consistency check failed: ${reason}` });
+    recordEvent(db, {
+      projectId,
+      type: "task.invalidated_by_upstream_change",
+      payload: { taskId: planningTask.id, reason: `Intent-consistency check failed: ${reason}` },
+      actor: "system",
+    });
+  }
+}
+
+/**
  * Bounds `adapter.runAgentTask()` with `Promise.race` against a timer —
  * the standard, correct way to bound async work in Node (a Promise
  * cannot be forcibly cancelled, only stopped-waiting-for; safe here
@@ -147,6 +205,8 @@ export interface ExecuteTaskOptions {
   provider?: AIProviderAdapter;
   /** Overrides DEFAULT_TASK_TIMEOUT_MS — tests use a short value so timeout tests run fast. */
   timeoutMs?: number;
+  /** Test-injection point for the intent-consistency gates' own Ollama call (separate from `provider`, which only covers the main adapter call) — lets a test prove the gates' plumbing deterministically, without a real Ollama server. Real (non-test) runner operation never sets this. */
+  intentCheckFetch?: typeof fetch;
 }
 
 export async function executeTask(
@@ -191,6 +251,10 @@ export async function executeTask(
   agentRun = updateAgentRunStatus(db, agentRun.id, "RUNNING");
 
   const releaseReadiness = role.id === "release-agent" ? checkReleaseReadiness(db, project.id) : { ready: true as const };
+  const planConsistency =
+    releaseReadiness.ready && isDevelopmentRole(role) && project.provider === "ollama"
+      ? await checkPlanConsistencyBeforeDevelopment(context.authoritativeUserRequest, context.relevantArtifacts, options.intentCheckFetch)
+      : { consistent: true as const };
 
   let result: import("../providers/types.ts").AgentTaskResult;
   if (!releaseReadiness.ready) {
@@ -212,11 +276,43 @@ export async function executeTask(
       usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
       raw: { releaseGateBlocked: true },
     };
+  } else if (!planConsistency.consistent) {
+    // The plan this developer would build from doesn't actually serve
+    // the user's request — never let the developer proceed on it. The
+    // real source of the problem (the planning artifact) gets reopened
+    // as a side effect; this task's own attempt fails normally and
+    // retries once the plan has been redone, via the existing
+    // dependency-eligibility mechanics (no new retry system).
+    reopenPlanningTasksForRework(db, project.id, planConsistency.reason);
+    result = {
+      status: "FAILED",
+      output: {
+        summary: "",
+        artifacts: [],
+        decisions: [],
+        testResults: [],
+        events: [],
+        fileOperations: [],
+        recommendedNextActions: [],
+        failure: { reason: `Intent-consistency check failed before development: ${planConsistency.reason}` },
+      },
+      usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+      raw: { intentConsistencyBlocked: true },
+    };
   } else {
     try {
       result = await callAdapterWithTimeout(
         adapter,
-        { role: role.id, task: context, instructions: `Execute ${role.name} task: ${task.title}` },
+        // Deliberately role-generic, not task.title — task.title is a
+        // display/tracking label built by concatenating the project's own
+        // title (e.g. "Implement backend — Ollama Hello World Build"),
+        // and echoing it here as "instructions" led a real model to treat
+        // the project title as part of the spec (see
+        // TaskContext.authoritativeUserRequest's docblock for the full
+        // incident writeup). The actual work to do lives in
+        // context.authoritativeUserRequest plus the role's own scoped
+        // artifacts, both already part of `context`.
+        { role: role.id, task: context, instructions: `Perform your assigned "${role.name}" responsibilities for this task.` },
         options.timeoutMs ?? DEFAULT_TASK_TIMEOUT_MS,
       );
     } catch (error) {
@@ -302,26 +398,50 @@ export async function executeTask(
   // stand as before.
   if (role.id === "qa-agent" && workspaceExists(project.id)) {
     const verification = await runQABrowserVerification(project.id);
+    let finalStatus = verification.status;
+    let finalSummary = verification.summary;
+
+    // Intent-consistency gate, checkpoint 2 of 2: a structurally-passing
+    // page (real heading/description/button, real interactivity, no
+    // console errors) can still be the wrong product — e.g. a real
+    // working page about something other than what was asked for. Real
+    // providers only, same reasoning as the pre-development checkpoint.
+    if (verification.status === "PASS" && project.provider === "ollama") {
+      const builtDescription = [verification.details.headingText, verification.details.bodyTextAfter]
+        .filter((v): v is string => typeof v === "string" && v.length > 0)
+        .join("\n");
+      const deliverableCheck = await checkIntentConsistency({
+        authoritativeUserRequest: context.authoritativeUserRequest,
+        candidate: builtDescription,
+        checkpointLabel: "built deliverable",
+        fetchImpl: options.intentCheckFetch,
+      });
+      if (!deliverableCheck.consistent) {
+        finalStatus = "FAIL";
+        finalSummary = `The page loaded and worked, but does not match the requested product: ${deliverableCheck.reason}`;
+      }
+    }
+
     const testResult: import("../providers/types.ts").TestResultPayload = {
       kind: "test-result",
-      status: verification.status,
-      summary: verification.summary,
+      status: finalStatus,
+      summary: finalSummary,
       details: verification.details,
       durationMs: verification.durationMs,
       targetUrl: verification.targetUrl,
     };
     result = {
-      status: verification.status === "PASS" ? "SUCCEEDED" : "FAILED",
+      status: finalStatus === "PASS" ? "SUCCEEDED" : "FAILED",
       output: {
         ...result.output,
-        summary: verification.summary,
+        summary: finalSummary,
         testResults: [testResult],
-        failure: verification.status === "FAIL" ? { reason: verification.summary } : undefined,
+        failure: finalStatus === "FAIL" ? { reason: finalSummary } : undefined,
       },
       usage: result.usage,
       raw: { realQaVerification: true },
     };
-    setDeliveryState(db, project.id, verification.status === "PASS" ? "VERIFIED" : "FAILED");
+    setDeliveryState(db, project.id, finalStatus === "PASS" ? "VERIFIED" : "FAILED");
   }
 
   if (result.status === "SUCCEEDED") {

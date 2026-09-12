@@ -11,6 +11,8 @@ function context(roleId: string, scenario?: string): TaskContext {
     roleId,
     taskTitle: "Test task",
     projectSummary: "",
+    authoritativeUserRequest: "Build a small internal tool.",
+    projectTitle: "Test Project",
     relevantArtifacts: [],
     relevantDecisions: [],
     scenario,
