@@ -67,6 +67,36 @@ export function AgentDetailDrawer({ detail, onOpenChange }: { detail: AgentDetai
                 </div>
               )}
 
+              {detail.filesChanged.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold tracking-tight text-muted-foreground uppercase">Files changed</p>
+                  <ul className="mt-1.5 flex flex-col gap-1 text-xs">
+                    {detail.filesChanged.map((file) => (
+                      <li key={file.path} className="flex items-center justify-between gap-2 font-mono text-[0.7rem]">
+                        <span className="truncate">{file.path}</span>
+                        <span className="text-muted-foreground">{file.sizeBytes}B</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {detail.latestTestResult && (
+                <div>
+                  <p className="text-xs font-semibold tracking-tight text-muted-foreground uppercase">Test result</p>
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <Badge variant={detail.latestTestResult.status === "PASS" ? "default" : "destructive"}>{detail.latestTestResult.status}</Badge>
+                    {detail.latestTestResult.durationMs !== null && (
+                      <span className="text-xs text-muted-foreground">real check · {detail.latestTestResult.durationMs}ms</span>
+                    )}
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">{detail.latestTestResult.summary}</p>
+                  {detail.latestTestResult.targetUrl && (
+                    <p className="mt-0.5 truncate font-mono text-[0.65rem] text-muted-foreground">{detail.latestTestResult.targetUrl}</p>
+                  )}
+                </div>
+              )}
+
               <div>
                 <p className="text-xs font-semibold tracking-tight text-muted-foreground uppercase">Recent activity</p>
                 {detail.recentActivity.length === 0 ? (

@@ -2,6 +2,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { getAppDatabase } from "../db/client.ts";
 import { startRunLoop, DEFAULT_POLL_INTERVAL_MS } from "./runner.ts";
+import { upsertRunnerHeartbeat } from "../domain/workspace.ts";
 
 /**
  * Standalone companion process for the Durable Local Execution Runner —
@@ -37,10 +38,23 @@ const pollIntervalMs = Number(process.env.AI_OFFICE_RUNNER_POLL_INTERVAL_MS) || 
 const db = getAppDatabase();
 log(`starting — runnerId=${runnerId} pollIntervalMs=${pollIntervalMs}`);
 
+// A real liveness signal (Phase 8 Part P) — upserted every poll tick so
+// the dashboard can tell "runner process not running" (OFFLINE) apart
+// from "runner alive, nothing eligible right now" (ONLINE_IDLE), which
+// the previous activity-event heuristic could never distinguish. An
+// immediate upsert here (before the first tick) means the dashboard
+// reflects this process as online right away, even at a slow poll
+// interval.
+upsertRunnerHeartbeat(db, { runnerId, status: "IDLE" });
+
 const handle = startRunLoop(db, {
   runnerId,
   pollIntervalMs,
   onCycle: (outcome) => {
+    upsertRunnerHeartbeat(db, {
+      runnerId,
+      status: outcome.kind === "executed" || outcome.kind === "recovered" ? "WORKING" : "IDLE",
+    });
     // Deliberately quiet on "idle"/"no-eligible-work" — an office with
     // nothing to do polls silently rather than spamming the terminal
     // every interval; every other outcome is worth a line.

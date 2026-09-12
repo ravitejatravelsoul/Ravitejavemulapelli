@@ -18,6 +18,7 @@ import {
   describeEvent,
 } from "../dashboard-data.ts";
 import { getProjectDetail } from "../project-detail-data.ts";
+import { upsertRunnerHeartbeat } from "../../domain/workspace.ts";
 
 process.env.OFFICE_OWNER_EMAIL = "test-owner@example.invalid";
 process.env.OFFICE_OWNER_PASSWORD_HASH = "synthetic-test-salt:synthetic-test-hash-not-a-real-scrypt-output";
@@ -111,38 +112,53 @@ describe("dashboard-data — project summaries and activity reflect real state",
   });
 });
 
-describe("dashboard-data — runner visibility is honest, never a fake heartbeat", () => {
-  test("no runner activity ever recorded gives clear, non-alarming guidance", () => {
+describe("dashboard-data — runner visibility is a real heartbeat (Phase 8 Part P)", () => {
+  test("no runner heartbeat has ever been recorded — OFFLINE, with clear non-alarming guidance", () => {
     const t = createTestDb();
     const view = getRunnerActivityView(t.db);
-    assert.equal(view.hasRecentActivity, false);
+    assert.equal(view.runnerStatus, "OFFLINE");
     assert.match(view.message, /npm run ai-office:runner/);
     t.close();
   });
 
-  test("a closed office reports that clearly rather than describing runner activity", () => {
+  test("a stale heartbeat (older than the freshness window) reports OFFLINE, never 'idle'", () => {
     const t = createTestDb();
-    const owner = getOwner(t.db)!;
-    closeOffice(t.db, owner.id);
-    const view = getRunnerActivityView(t.db);
-    assert.equal(view.officeState, "CLOSED");
-    assert.match(view.message, /closed/i);
+    const staleTime = Date.now() - 60_000;
+    upsertRunnerHeartbeat(t.db, { runnerId: "runner-1", status: "IDLE", now: staleTime });
+    const view = getRunnerActivityView(t.db, staleTime + 60_000);
+    assert.equal(view.runnerStatus, "OFFLINE");
+    assert.match(view.message, /offline/i);
     t.close();
   });
 
-  test("recent runner activity is reported as a relative time, not a false 'online' claim", async () => {
+  test("a fresh heartbeat reporting WORKING is reflected as ONLINE_WORKING", () => {
+    const t = createTestDb();
+    upsertRunnerHeartbeat(t.db, { runnerId: "runner-1", status: "WORKING" });
+    const view = getRunnerActivityView(t.db);
+    assert.equal(view.runnerStatus, "ONLINE_WORKING");
+    assert.match(view.message, /executing a task/);
+    t.close();
+  });
+
+  test("a fresh heartbeat reporting IDLE while Office is OPEN is reflected as ONLINE_IDLE", () => {
+    const t = createTestDb();
+    upsertRunnerHeartbeat(t.db, { runnerId: "runner-1", status: "IDLE" });
+    const view = getRunnerActivityView(t.db);
+    assert.equal(view.officeState, "OPEN");
+    assert.equal(view.runnerStatus, "ONLINE_IDLE");
+    assert.match(view.message, /idle — waiting/);
+    t.close();
+  });
+
+  test("a fresh heartbeat while Office is CLOSED is still ONLINE — the runner process is alive, it just won't claim new work", () => {
     const t = createTestDb();
     const owner = getOwner(t.db)!;
-    const { project } = createProjectWithIdea(t.db, { title: "P", rawIdeaText: "Build a small tool.", ownerId: owner.id });
-    updateProjectStatus(t.db, project.id, "IN_PROGRESS");
-    createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "x" });
-    await runOneCycle(t.db, "runner-1", { execution: { scenario: "success" } });
-
+    upsertRunnerHeartbeat(t.db, { runnerId: "runner-1", status: "IDLE" });
+    closeOffice(t.db, owner.id);
     const view = getRunnerActivityView(t.db);
-    assert.equal(view.hasRecentActivity, true);
-    assert.match(view.message, /Last runner activity/);
-    assert.ok(!/online/i.test(view.message), "must never claim the runner is 'online' — only describe observed activity");
-
+    assert.equal(view.officeState, "CLOSED");
+    assert.equal(view.runnerStatus, "ONLINE_IDLE", "the process itself is still alive — only its ability to claim work is gated");
+    assert.match(view.message, /closed/i);
     t.close();
   });
 
@@ -153,6 +169,20 @@ describe("dashboard-data — runner visibility is honest, never a fake heartbeat
     openOffice(t.db, owner.id);
     const view = getRunnerActivityView(t.db);
     assert.equal(view.officeState, "OPEN");
+    t.close();
+  });
+
+  test("real runner activity (via runOneCycle) still populates the legacy hasRecentActivity/lastActivityAt fields for any remaining consumer", async () => {
+    const t = createTestDb();
+    const { project } = createProjectWithIdea(t.db, { title: "P", rawIdeaText: "Build a small tool.", ownerId: getOwner(t.db)!.id });
+    updateProjectStatus(t.db, project.id, "IN_PROGRESS");
+    createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "x" });
+    await runOneCycle(t.db, "runner-1", { execution: { scenario: "success" } });
+
+    const view = getRunnerActivityView(t.db);
+    assert.equal(view.hasRecentActivity, true);
+    assert.ok(view.lastActivityAt !== null);
+
     t.close();
   });
 });

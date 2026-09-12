@@ -2,11 +2,17 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getAppDatabase } from "@/lib/ai-office/db/client";
 import { getProjectDetail } from "@/lib/ai-office/dashboard/project-detail-data";
+import { getPreviewStatusLabel } from "@/lib/ai-office/dashboard/delivery-status";
+import { readFile } from "@/lib/ai-office/workspace/workspace-service";
+import { highlightFileContent } from "@/lib/ai-office/workspace/code-highlight";
 import { GlassCard } from "@/components/common/glass-card";
 import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ActionButton } from "@/components/ai-office/action-button";
 import { TaskFlow } from "@/components/ai-office/dashboard/task-flow";
 import { AutoRefresh } from "@/components/ai-office/auto-refresh";
+import { FileBrowser, type WorkspaceFileEntry } from "@/components/ai-office/workspace/file-browser";
+import { PreviewPanel } from "@/components/ai-office/workspace/preview-panel";
 import { pauseProjectAction, resumeProjectAction } from "@/app/office/actions/projects";
 
 export const metadata: Metadata = { title: "Project" };
@@ -21,11 +27,44 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
   const detail = getProjectDetail(db, projectId);
   if (!detail) notFound();
 
-  const { project, ideaText, tasks, progress, failures, decisions, artifacts, approvals, activity, memorySummary, knownIssues, simulatedCostUsd, liveCostUsd } = detail;
+  const {
+    project,
+    ideaText,
+    tasks,
+    progress,
+    failures,
+    decisions,
+    artifacts,
+    approvals,
+    activity,
+    memorySummary,
+    knownIssues,
+    simulatedCostUsd,
+    liveCostUsd,
+    workspace,
+    displayStatusLabel,
+    isUnverifiedCompletion,
+  } = detail;
   const canPause = project.status === "IN_PROGRESS";
   const canResume = project.status === "PAUSED";
 
   const isActive = project.status === "IN_PROGRESS";
+
+  const hasIndexHtml = workspace.files.some((f) => f.path === "index.html");
+  const previewStatus = getPreviewStatusLabel(workspace.hasWorkspace, workspace.deliveryState, hasIndexHtml);
+  const fileEntries: WorkspaceFileEntry[] = workspace.hasWorkspace
+    ? await Promise.all(
+        workspace.files.map(async (file) => {
+          const content = await readFile(project.id, file.path);
+          return {
+            path: file.path,
+            sizeBytes: file.sizeBytes,
+            lastModifiedByRoleId: file.lastModifiedByRoleId,
+            html: await highlightFileContent(file.path, content),
+          };
+        }),
+      )
+    : [];
 
   return (
     <div className="flex flex-col gap-6">
@@ -35,7 +74,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-lg font-semibold tracking-tight">{project.title}</h1>
-              <Badge>{project.status.replace(/_/g, " ")}</Badge>
+              <Badge variant={isUnverifiedCompletion ? "outline" : "default"}>{displayStatusLabel}</Badge>
               <Badge variant="outline" className="font-mono text-[0.6rem] uppercase">
                 {project.aiMode}
               </Badge>
@@ -81,6 +120,24 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
           <TaskFlow tasks={tasks} />
         </div>
       </GlassCard>
+
+      {workspace.hasWorkspace && (
+        <GlassCard>
+          <h2 className="text-sm font-semibold tracking-tight">Real Development Workspace</h2>
+          <Tabs defaultValue="files" className="mt-4">
+            <TabsList>
+              <TabsTrigger value="files">Files ({fileEntries.length})</TabsTrigger>
+              <TabsTrigger value="preview">Preview</TabsTrigger>
+            </TabsList>
+            <TabsContent value="files">
+              <FileBrowser files={fileEntries} />
+            </TabsContent>
+            <TabsContent value="preview">
+              <PreviewPanel projectId={project.id} status={previewStatus} />
+            </TabsContent>
+          </Tabs>
+        </GlassCard>
+      )}
 
       {approvals.length > 0 && (
         <GlassCard>

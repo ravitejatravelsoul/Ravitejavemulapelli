@@ -8,6 +8,8 @@ import { listPendingApprovals } from "../domain/project-outputs.ts";
 import { listRecentEvents, type MessageEventRow } from "../domain/events.ts";
 import { sumSimulatedCostForProject, sumLiveCostForProject } from "../domain/budget.ts";
 import { getBudgetSnapshot, type BudgetSnapshot } from "../budget/budget-service.ts";
+import { getWorkspace, getMostRecentRunnerHeartbeat, type DeliveryState } from "../domain/workspace.ts";
+import { getHonestStatusLabel, isUnverifiedCompletionClaim } from "./delivery-status.ts";
 
 /**
  * Read-only aggregation for the private dashboard
@@ -78,6 +80,9 @@ export interface ProjectSummary {
   liveCostUsd: number;
   canPause: boolean;
   canResume: boolean;
+  /** Phase 8 Part L — the honest completion label to display instead of `status` (identical to `status` unless the project claims completion without a verified real deliverable). */
+  displayStatusLabel: string;
+  isUnverifiedCompletion: boolean;
 }
 
 function truncate(text: string, max: number): string {
@@ -97,6 +102,8 @@ function summarizeProject(db: DatabaseSync, project: ProjectRow): ProjectSummary
   // it's either actively running or the next thing eligible to run.
   const currentTask = tasks.find((task) => task.status !== "DONE") ?? null;
   const latestAttemptedTask = [...tasks].sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null;
+  const workspace = getWorkspace(db, project.id);
+  const deliveryState: DeliveryState | null = workspace?.deliveryState ?? null;
 
   return {
     id: project.id,
@@ -116,6 +123,8 @@ function summarizeProject(db: DatabaseSync, project: ProjectRow): ProjectSummary
     liveCostUsd: sumLiveCostForProject(db, project.id), // must stay $0 through Phase 6 — no live provider exists yet
     canPause: project.status === "IN_PROGRESS",
     canResume: project.status === "PAUSED",
+    displayStatusLabel: getHonestStatusLabel(project.status, workspace !== undefined, deliveryState),
+    isUnverifiedCompletion: isUnverifiedCompletionClaim(project.status, workspace !== undefined, deliveryState),
   };
 }
 
@@ -218,16 +227,22 @@ export function getPendingApprovalsView(db: DatabaseSync): PendingApprovalView[]
 
 // ---- runner visibility ---------------------------------------------------
 
+export type RunnerLivenessStatus = "ONLINE_IDLE" | "ONLINE_WORKING" | "OFFLINE";
+
 export interface RunnerActivityView {
   officeState: OfficeState;
   lastActivityAt: number | null;
   hasRecentActivity: boolean;
   message: string;
+  /** Phase 8 Part P — a real liveness signal from `runner_heartbeats`, not the old activity-event heuristic. `OFFLINE` whenever no runner has reported in within `HEARTBEAT_STALE_MS`, regardless of office state — an offline worker is never called "idle." */
+  runnerStatus: RunnerLivenessStatus;
 }
 
 const RUNNER_EVENT_TYPES = ["task.executed", "task.recovered_after_crash", "task.claimed", "project.live_mode_refused"];
-/** A heuristic freshness window, not a real heartbeat — see the module docblock. */
+/** A heuristic freshness window for the legacy activity-event fields, kept only for backward compatibility — `runnerStatus` above is the real signal now. */
 const RECENT_ACTIVITY_WINDOW_MS = 2 * 60 * 1000;
+/** Several multiples of the runner's default 5s poll interval — generous enough to absorb a slow cycle without flapping to OFFLINE, tight enough that a genuinely dead process is caught within seconds, not minutes. */
+const HEARTBEAT_STALE_MS = 20 * 1000;
 
 function formatRelativeTime(fromMs: number, nowMs: number): string {
   const diffSeconds = Math.max(0, Math.round((nowMs - fromMs) / 1000));
@@ -241,10 +256,12 @@ function formatRelativeTime(fromMs: number, nowMs: number): string {
 }
 
 /**
- * Honest, persisted-state-only runner visibility — never claims "Runner
- * Online" (that would require a real heartbeat this system doesn't
- * have). Only ever describes what's actually knowable: when the Runner
- * last did something, derived from its own activity events.
+ * Real runner liveness from `runner_heartbeats` (upserted every poll
+ * tick by the standalone runner process, lib/ai-office/runner/start.ts)
+ * — a project can be IN_PROGRESS while the runner process isn't
+ * actually running, which used to make the UI look merely "idle." This
+ * distinguishes that case (OFFLINE) from a runner that's alive but has
+ * no eligible work right now (ONLINE_IDLE).
  */
 export function getRunnerActivityView(db: DatabaseSync, now = Date.now()): RunnerActivityView {
   const office = getOfficeStatus(db);
@@ -256,18 +273,25 @@ export function getRunnerActivityView(db: DatabaseSync, now = Date.now()): Runne
   const lastActivityAt = row.lastActivityAt;
   const hasRecentActivity = lastActivityAt !== null && now - lastActivityAt < RECENT_ACTIVITY_WINDOW_MS;
 
+  const heartbeat = getMostRecentRunnerHeartbeat(db);
+  const heartbeatFresh = heartbeat !== undefined && now - heartbeat.lastSeenAt < HEARTBEAT_STALE_MS;
+  const runnerStatus: RunnerLivenessStatus = !heartbeatFresh ? "OFFLINE" : heartbeat!.status === "WORKING" ? "ONLINE_WORKING" : "ONLINE_IDLE";
+
   let message: string;
-  if (office?.state !== "OPEN") {
-    message = "Office is closed — the runner will not claim new work until it's reopened.";
-  } else if (lastActivityAt === null) {
-    message = "Office is open, but no runner activity has ever been recorded. Start the local runner with `npm run ai-office:runner`.";
-  } else if (hasRecentActivity) {
-    message = `Last runner activity: ${formatRelativeTime(lastActivityAt, now)}.`;
+  if (runnerStatus === "OFFLINE") {
+    message =
+      heartbeat === undefined
+        ? "No runner process has ever reported in. Start the local runner with `npm run ai-office:runner`."
+        : `Runner process is offline (last seen ${formatRelativeTime(heartbeat.lastSeenAt, now)}). Restart it with \`npm run ai-office:runner\`.`;
+  } else if (office?.state !== "OPEN") {
+    message = "Runner process is online, but Office is closed — it will not claim new work until reopened.";
+  } else if (runnerStatus === "ONLINE_WORKING") {
+    message = "Runner is online and currently executing a task.";
   } else {
-    message = `Office is open, but no recent runner activity was detected (last seen ${formatRelativeTime(lastActivityAt, now)}). Start the local runner to process work.`;
+    message = "Runner is online and idle — waiting for eligible work.";
   }
 
-  return { officeState: office?.state ?? "CLOSED", lastActivityAt, hasRecentActivity, message };
+  return { officeState: office?.state ?? "CLOSED", lastActivityAt, hasRecentActivity, message, runnerStatus };
 }
 
 export interface BudgetView extends BudgetSnapshot {

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Plus } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ActionButton } from "@/components/ai-office/action-button";
@@ -33,8 +34,10 @@ export function OfficeTopBar({
     <div className="glass flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl px-4 py-2.5 text-xs">
       <p className="text-sm font-semibold tracking-tight whitespace-nowrap">Teja&apos;s AI Office</p>
       <Badge variant={isOpen ? "default" : "outline"}>{isOpen ? "OPEN" : "CLOSED"}</Badge>
-      <span className="hidden text-muted-foreground sm:inline" title={runnerActivity.message}>
-        {runnerActivity.hasRecentActivity ? "Runner active" : "Runner idle"}
+      <span className={cn("hidden sm:inline", runnerActivity.runnerStatus === "OFFLINE" ? "text-destructive" : "text-muted-foreground")} title={runnerActivity.message}>
+        {runnerActivity.runnerStatus === "ONLINE_WORKING" && "Runner online · working"}
+        {runnerActivity.runnerStatus === "ONLINE_IDLE" && "Runner online · idle"}
+        {runnerActivity.runnerStatus === "OFFLINE" && "Runner offline"}
       </span>
       <span className="rounded-full bg-muted px-2 py-0.5 font-mono text-[0.65rem] tracking-widest uppercase">Mode: {providerLabel}</span>
       {floor.selectedProject && <span className="hidden truncate font-medium text-foreground sm:inline">{floor.selectedProject.title}</span>}

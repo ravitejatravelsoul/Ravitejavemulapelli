@@ -19,6 +19,8 @@ import { listEventsForProject } from "../domain/events.ts";
 import { getProjectMemory } from "../domain/project-memory.ts";
 import { sumSimulatedCostForProject, sumLiveCostForProject } from "../domain/budget.ts";
 import { describeEvent, type ActivityEntry } from "./dashboard-data.ts";
+import { getWorkspace, listWorkspaceFileRecords, type DeliveryState, type WorkspaceFileRow } from "../domain/workspace.ts";
+import { getHonestStatusLabel, isUnverifiedCompletionClaim } from "./delivery-status.ts";
 
 /** Read-only aggregation for `/office/projects/[projectId]` — one project, examined deeply. */
 
@@ -49,6 +51,14 @@ export interface ArtifactPreview {
   createdAt: number;
 }
 
+export interface WorkspaceView {
+  hasWorkspace: boolean;
+  deliveryState: DeliveryState | null;
+  files: WorkspaceFileRow[];
+  /** True only when a real deliverable exists and passed verification — the one condition under which the owner-facing preview route/iframe should be offered. */
+  canPreview: boolean;
+}
+
 export interface ProjectDetail {
   project: ProjectRow;
   ideaText: string;
@@ -63,6 +73,9 @@ export interface ProjectDetail {
   knownIssues: string[];
   simulatedCostUsd: number;
   liveCostUsd: number;
+  workspace: WorkspaceView;
+  displayStatusLabel: string;
+  isUnverifiedCompletion: boolean;
 }
 
 function truncate(text: string, max: number): string {
@@ -112,6 +125,16 @@ export function getProjectDetail(db: DatabaseSync, projectId: string): ProjectDe
     message: describeEvent(event),
   }));
 
+  const workspaceRow = getWorkspace(db, projectId);
+  const files = workspaceRow ? listWorkspaceFileRecords(db, projectId) : [];
+  const deliveryState = workspaceRow?.deliveryState ?? null;
+  const workspace: WorkspaceView = {
+    hasWorkspace: workspaceRow !== undefined,
+    deliveryState,
+    files,
+    canPreview: deliveryState === "VERIFIED" && files.some((f) => f.path === "index.html"),
+  };
+
   return {
     project,
     ideaText: idea?.rawText ?? "",
@@ -126,6 +149,9 @@ export function getProjectDetail(db: DatabaseSync, projectId: string): ProjectDe
     knownIssues: memory ? (JSON.parse(memory.knownIssues) as string[]) : [],
     simulatedCostUsd: sumSimulatedCostForProject(db, projectId),
     liveCostUsd: sumLiveCostForProject(db, projectId),
+    workspace,
+    displayStatusLabel: getHonestStatusLabel(project.status, workspace.hasWorkspace, deliveryState),
+    isUnverifiedCompletion: isUnverifiedCompletionClaim(project.status, workspace.hasWorkspace, deliveryState),
   };
 }
 

@@ -4,9 +4,10 @@ import { listAgentRoles, getAgentRole, type AgentRoleRow } from "../domain/agent
 import { isReviewRole } from "../agents/remediation.ts";
 import { listProjects, getProject, type ProjectRow, type ProjectStatus } from "../domain/projects.ts";
 import { listTasksForProject, listTaskAttempts, getAgentRun, type TaskRow, type AgentRunRow } from "../domain/tasks.ts";
-import { listArtifactsForProject, type ArtifactRow } from "../domain/project-outputs.ts";
+import { listArtifactsForProject, listTestResultsForTask, type ArtifactRow, type TestResultRow } from "../domain/project-outputs.ts";
 import { listEventsForProject } from "../domain/events.ts";
 import { describeEvent, type ActivityEntry } from "./dashboard-data.ts";
+import { listWorkspaceFileRecords, type WorkspaceFileRow } from "../domain/workspace.ts";
 
 /**
  * Read-only "office floor" projection — turns real, already-persisted
@@ -199,6 +200,10 @@ export interface AgentDetailView {
   lastCompletedTaskTitle: string | null;
   latestArtifactPreview: string | null;
   recentActivity: ActivityEntry[];
+  /** Real workspace files this role's current task last touched (Phase 8 Part O) — never fabricated, derived from `workspace_files.lastModifiedByTaskId`. Empty for a role/task that never wrote a real file. */
+  filesChanged: WorkspaceFileRow[];
+  /** The current task's most recent real test result, if any — e.g. qa-agent's real Playwright verification (durationMs/targetUrl populated only for a real check, never a fixture). */
+  latestTestResult: TestResultRow | null;
 }
 
 function truncate(text: string, max: number): string {
@@ -218,6 +223,8 @@ export function getAgentDetail(db: DatabaseSync, roleId: string, selectedProject
   let latestArtifactPreview: string | null = null;
   let recentActivity: ActivityEntry[] = [];
   let taskStatus: string | null = null;
+  let filesChanged: WorkspaceFileRow[] = [];
+  let latestTestResult: TestResultRow | null = null;
   const maxRetries = role.maxRetries;
 
   if (project) {
@@ -228,6 +235,12 @@ export function getAgentDetail(db: DatabaseSync, roleId: string, selectedProject
     const artifacts = listArtifactsForProject(db, project.id).filter((a: ArtifactRow) => a.taskId === task?.id);
     const latest = [...artifacts].sort((a, b) => b.createdAt - a.createdAt)[0];
     if (latest) latestArtifactPreview = truncate(latest.content, 320);
+
+    if (task) {
+      filesChanged = listWorkspaceFileRecords(db, project.id).filter((f) => f.lastModifiedByTaskId === task.id);
+      const testResults = listTestResultsForTask(db, task.id);
+      latestTestResult = testResults[testResults.length - 1] ?? null;
+    }
 
     recentActivity = listEventsForProject(db, project.id)
       .filter((event) => {
@@ -256,5 +269,7 @@ export function getAgentDetail(db: DatabaseSync, roleId: string, selectedProject
     lastCompletedTaskTitle: agent.lastCompletedTaskTitle,
     latestArtifactPreview,
     recentActivity,
+    filesChanged,
+    latestTestResult,
   };
 }
