@@ -97,6 +97,11 @@ function projectRoot(projectId: string): string {
   return path.join(getWorkspacesRootPath(), projectId);
 }
 
+/** The same validated project root `resolveSafePath` uses internally — exported so other workspace-adjacent modules (command execution, preview serving) that need a real directory on disk, not a specific file, don't have to re-implement project-id validation themselves. */
+export function getWorkspaceRootDir(projectId: string): string {
+  return projectRoot(projectId);
+}
+
 /**
  * Resolves `relativePath` against `projectId`'s own workspace root and
  * verifies the result cannot have escaped it. Two independent checks:
