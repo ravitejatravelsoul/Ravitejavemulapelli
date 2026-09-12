@@ -10,8 +10,8 @@ import type { TaskContext, RemediationContext } from "../providers/types.ts";
 import { workspaceExists, listFiles, readFile } from "../workspace/workspace-service.ts";
 import { isDevelopmentRole } from "./remediation.ts";
 
-/** Fixed, idea-independent — never redescribes what this specific project builds. */
-const PRESERVE_REQUIREMENTS_GUIDANCE =
+/** Fixed, idea-independent — never redescribes what this specific project builds. Exported so the local-model benchmark's frontend-bug-fix scenario (lib/ai-office/benchmark/scenarios.ts) can seed the identical corrective-attempt guidance real remediation uses, rather than a duplicated copy that could drift out of sync. */
+export const PRESERVE_REQUIREMENTS_GUIDANCE =
   "This is a corrective attempt, not a redesign. The authoritative user request has not changed. Preserve all existing content and behavior that the failure reason does not mention — do not rename, retheme, or reinterpret the product, and do not replace working UI/content unless the failure genuinely requires it. Prefer changing only the file(s) most directly related to the reported failure (e.g. if the failure describes broken interactive behavior, prefer editing the script over rewriting the markup/styles) — but you may rewrite whichever file(s) are actually necessary to fix it.";
 
 /** All current real workspace files, unabridged by role — a corrective attempt needs to see exactly what already exists to preserve it, not just the subset its own allowedInputs would normally scope it to. */
