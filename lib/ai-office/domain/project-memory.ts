@@ -29,21 +29,43 @@ export function getProjectMemory(db: DatabaseSync, projectId: string): ProjectMe
     | undefined;
 }
 
+/** Token economics phase, Part 4 — how many of a task's most recent unresolved-failure reasons the compact memory keeps verbatim; older ones are dropped rather than accumulated forever (the real, unabridged history remains queryable via `listUnresolvedFailures`/`failures` — this is only the *compact* summary a paid-provider prompt might reference). */
+const MAX_KNOWN_ISSUES = 10;
+
 function upsertProjectMemory(
   db: DatabaseSync,
-  input: { projectId: string; summary: string; knownIssues: unknown[] },
+  input: { projectId: string; summary: string; knownIssues: unknown[]; fileMap: Array<{ path: string; sizeBytes: number }> | null },
 ): ProjectMemoryRow {
   const now = Date.now();
   db.prepare(
     `INSERT INTO project_memory_cache (projectId, summary, fileMap, knownIssues, lastUpdatedAt, createdAt, updatedAt)
-     VALUES (?, ?, NULL, ?, ?, ?, ?)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (projectId) DO UPDATE SET
        summary = excluded.summary,
+       fileMap = excluded.fileMap,
        knownIssues = excluded.knownIssues,
        lastUpdatedAt = excluded.lastUpdatedAt,
        updatedAt = excluded.updatedAt`,
-  ).run(input.projectId, input.summary, JSON.stringify(input.knownIssues), now, now, now);
+  ).run(
+    input.projectId,
+    input.summary,
+    input.fileMap ? JSON.stringify(input.fileMap) : null,
+    JSON.stringify(input.knownIssues.slice(-MAX_KNOWN_ISSUES)),
+    now,
+    now,
+    now,
+  );
   return getProjectMemory(db, input.projectId) as ProjectMemoryRow;
+}
+
+/** Parses the compact file map back out — `undefined` for a legacy row from before this phase (column exists but was never populated) or a project with no workspace at all; never a filesystem read. */
+export function getProjectFileMap(memory: ProjectMemoryRow | undefined): Array<{ path: string; sizeBytes: number }> | undefined {
+  if (!memory?.fileMap) return undefined;
+  try {
+    return JSON.parse(memory.fileMap) as Array<{ path: string; sizeBytes: number }>;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -86,9 +108,22 @@ export function refreshProjectMemory(db: DatabaseSync, projectId: string): Proje
     decisionCount > 0 ? `${decisionCount} recorded decision(s).` : "No recorded decisions yet.",
   ];
 
+  // Token economics phase, Part 4 — a compact path+size map of the real
+  // workspace, deterministically derived (no filesystem read, no model
+  // call), so a role that needs to know "what files exist" can consult
+  // this cheap summary instead of a paid provider re-deriving it from a
+  // full directory listing every time. Capped, not the whole workspace —
+  // a project with far more files than this only loses the map's
+  // completeness, never crashes or grows this cache unboundedly.
+  const MAX_FILE_MAP_ENTRIES = 50;
+  const fileRows = db
+    .prepare("SELECT path, sizeBytes FROM workspace_files WHERE projectId = ? ORDER BY path LIMIT ?")
+    .all(projectId, MAX_FILE_MAP_ENTRIES) as unknown as Array<{ path: string; sizeBytes: number }>;
+
   return upsertProjectMemory(db, {
     projectId,
     summary: summaryLines.join(" "),
     knownIssues: unresolvedFailures.map((f) => f.reason),
+    fileMap: fileRows.length > 0 ? fileRows : null,
   });
 }

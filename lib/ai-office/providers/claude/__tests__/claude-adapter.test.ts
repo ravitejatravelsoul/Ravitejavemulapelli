@@ -249,3 +249,112 @@ describe("ClaudeAdapter — model configuration", () => {
     assert.equal(adapter.model, "claude-haiku-4-5-20251001");
   });
 });
+
+describe("ClaudeAdapter — token economics: capability output ceiling (Part 7)", () => {
+  test("input.maxOutputTokens is passed through as the real max_tokens request parameter", async () => {
+    let capturedMaxTokens: number | undefined;
+    const adapter = new ClaudeAdapter({
+      client: {
+        messages: {
+          create: async (params: { max_tokens: number }) => {
+            capturedMaxTokens = params.max_tokens;
+            return textMessage(GOOD_OUTPUT);
+          },
+        },
+      } as never,
+    });
+    await adapter.runAgentTask({ ...baseTask(), maxOutputTokens: 1024 });
+    assert.equal(capturedMaxTokens, 1024);
+  });
+
+  test("estimateCost reserves against the given maxOutputTokens, not a flat default, when one is provided", () => {
+    const adapter = new ClaudeAdapter({ client: { messages: { create: async () => textMessage(GOOD_OUTPUT) } } as never });
+    const small = adapter.estimateCost({ ...baseTask(), maxOutputTokens: 512 });
+    const large = adapter.estimateCost({ ...baseTask(), maxOutputTokens: 8192 });
+    assert.equal(small.estimatedOutputTokens, 512);
+    assert.equal(large.estimatedOutputTokens, 8192);
+    assert.ok(small.estimatedCostUsd < large.estimatedCostUsd);
+  });
+});
+
+describe("ClaudeAdapter — token economics: real Anthropic prompt caching (Part 9)", () => {
+  test("the system parameter carries a cache_control breakpoint on the stable content — the officially supported mechanism", async () => {
+    let capturedSystem: unknown;
+    let capturedMessages: unknown;
+    const adapter = new ClaudeAdapter({
+      client: {
+        messages: {
+          create: async (params: { system: unknown; messages: unknown }) => {
+            capturedSystem = params.system;
+            capturedMessages = params.messages;
+            return textMessage(GOOD_OUTPUT);
+          },
+        },
+      } as never,
+    });
+    await adapter.runAgentTask(baseTask());
+
+    assert.ok(Array.isArray(capturedSystem) && capturedSystem.length > 0, "system must be a content-block array, not a bare string");
+    const systemBlocks = capturedSystem as Array<{ type: string; text: string; cache_control?: { type: string } }>;
+    assert.ok(systemBlocks.some((b) => b.cache_control?.type === "ephemeral"), "at least one system block must carry a real cache breakpoint");
+    assert.ok(systemBlocks.some((b) => b.text.includes("Create a simple Hello World webpage")), "the authoritative request is part of the cached system content");
+
+    const userMessages = capturedMessages as Array<{ role: string; content: string }>;
+    assert.equal(userMessages[0]?.role, "user");
+    assert.ok(!userMessages[0]?.content.includes("Create a simple Hello World webpage"), "the authoritative request lives only in the cached system block, never duplicated into the volatile user message");
+  });
+
+  test("real cache_creation_input_tokens/cache_read_input_tokens are tracked separately, never fabricated", async () => {
+    const adapter = new ClaudeAdapter({
+      client: {
+        messages: {
+          create: async () =>
+            textMessage(GOOD_OUTPUT, { input_tokens: 200, output_tokens: 50, cache_creation_input_tokens: 800, cache_read_input_tokens: 0 } as never),
+        },
+      } as never,
+    });
+    const result = await adapter.runAgentTask(baseTask());
+    assert.equal(result.usage.cacheCreationInputTokens, 800);
+    assert.equal(result.usage.cacheReadInputTokens, 0);
+  });
+
+  test("a response reporting no cache activity (null fields) leaves cache usage undefined, not 0 — 0 would falsely claim the cache was checked", async () => {
+    const adapter = new ClaudeAdapter({
+      client: {
+        messages: {
+          create: async () => textMessage(GOOD_OUTPUT, { input_tokens: 200, output_tokens: 50, cache_creation_input_tokens: null, cache_read_input_tokens: null } as never),
+        },
+      } as never,
+    });
+    const result = await adapter.runAgentTask(baseTask());
+    assert.equal(result.usage.cacheCreationInputTokens, undefined);
+    assert.equal(result.usage.cacheReadInputTokens, undefined);
+  });
+
+  test("a cache read is billed at the configured cache-read rate, not the full input rate, when configured", async () => {
+    process.env.ANTHROPIC_CACHE_READ_PRICE_PER_MTOK = "0.3"; // 10% of the $3 input rate
+    const adapter = new ClaudeAdapter({
+      client: {
+        messages: {
+          create: async () => textMessage(GOOD_OUTPUT, { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 1_000_000 } as never),
+        },
+      } as never,
+    });
+    const result = await adapter.runAgentTask(baseTask());
+    assert.ok(Math.abs(result.usage.costUsd - 0.3) < 1e-9, `expected the discounted cache-read rate, got ${result.usage.costUsd}`);
+  });
+
+  test("a malformed response after real cache usage still records the real cache tokens, never zeroing them out", async () => {
+    const adapter = new ClaudeAdapter({
+      client: {
+        messages: {
+          create: async () => textMessage("not json at all", { input_tokens: 100, output_tokens: 20, cache_creation_input_tokens: 500 } as never),
+        },
+      } as never,
+    });
+    const result = await adapter.runAgentTask(baseTask());
+    assert.equal(result.status, "FAILED");
+    assert.equal(result.usage.cacheCreationInputTokens, 500);
+    assert.ok(result.usage.costUsd > 0);
+  });
+});

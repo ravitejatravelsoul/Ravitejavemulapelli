@@ -125,6 +125,9 @@ export interface AiUsageRow {
   inputTokens: number;
   outputTokens: number;
   costUsd: number;
+  /** Real Anthropic prompt-cache token counts (token economics phase, Part 9) — NULL for every non-Claude row and for any Claude row from before caching was wired in. Never guessed/backfilled; see claude-adapter.ts's cache-usage handling. */
+  cacheCreationInputTokens: number | null;
+  cacheReadInputTokens: number | null;
   createdAt: number;
 }
 
@@ -162,14 +165,28 @@ export function recordAiUsage(
     inputTokens: number;
     outputTokens: number;
     costUsd: number;
+    /** Omitted (-> NULL) for every provider except Claude with real cache usage reported — never faked, never defaulted to 0 (0 would falsely claim "cache was checked and found empty"). */
+    cacheCreationInputTokens?: number | null;
+    cacheReadInputTokens?: number | null;
   },
 ): AiUsageRow {
   const id = randomUUID();
   const now = Date.now();
   db.prepare(
-    `INSERT INTO ai_usage (id, agentRunId, projectId, provider, inputTokens, outputTokens, costUsd, createdAt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(id, input.agentRunId, input.projectId, input.provider, input.inputTokens, input.outputTokens, input.costUsd, now);
+    `INSERT INTO ai_usage (id, agentRunId, projectId, provider, inputTokens, outputTokens, costUsd, cacheCreationInputTokens, cacheReadInputTokens, createdAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    input.agentRunId,
+    input.projectId,
+    input.provider,
+    input.inputTokens,
+    input.outputTokens,
+    input.costUsd,
+    input.cacheCreationInputTokens ?? null,
+    input.cacheReadInputTokens ?? null,
+    now,
+  );
   return db.prepare("SELECT * FROM ai_usage WHERE id = ?").get(id) as unknown as AiUsageRow;
 }
 

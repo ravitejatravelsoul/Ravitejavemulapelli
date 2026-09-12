@@ -7,11 +7,14 @@ import { createTestDb } from "../../db/test-helpers.ts";
 import { getOwner } from "../../domain/users.ts";
 import { createProjectWithIdea } from "../../domain/projects.ts";
 import { createTask, getTask, listTaskAttempts } from "../../domain/tasks.ts";
-import { listApprovalsForProject } from "../../domain/project-outputs.ts";
+import { listApprovalsForProject, recordFailure } from "../../domain/project-outputs.ts";
 import { approveApproval, rejectApproval } from "../../approvals/approval-service.ts";
 import { listAiUsageForProject } from "../../domain/budget.ts";
 import { upsertRecommendedRouting, applyRecommendedRouting } from "../../domain/model-routing.ts";
-import { listFiles } from "../../workspace/workspace-service.ts";
+import { listFiles, writeFile } from "../../workspace/workspace-service.ts";
+import { upsertWorkspaceFileRecord } from "../../domain/workspace.ts";
+import { listEventsForProject } from "../../domain/events.ts";
+import { updateTaskStatus } from "../../domain/tasks.ts";
 import { executeTask } from "../agent-runner.ts";
 
 /**
@@ -323,7 +326,145 @@ describe("controlled Claude LIVE pilot — real routing/approval/budget integrat
     assert.notEqual(result.outcome, "claude-blocked");
     assert.equal(listApprovalsForProject(t.db, project.id).length, 0);
     assert.equal(result.agentRun?.provider, "simulated");
+    assert.equal(
+      listEventsForProject(t.db, project.id).some((e) => e.type === "claude.context_prepared"),
+      false,
+      "LOCAL calls never pass through the Context Budget Manager — Part 12",
+    );
 
     t.close();
+  });
+
+  test("token economics: a real Claude call persists context-optimization telemetry (estimated tokens, capability, sections, files) before the call is made", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const owner = getOwner(t.db)!;
+      const { project } = setupHybridProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+      await executeTask(t.db, task.id);
+      const approval = listApprovalsForProject(t.db, project.id)[0];
+      approveApproval(t.db, { approvalId: approval.id, decidedByUserId: owner.id });
+      process.env.ANTHROPIC_API_KEY = "sk-ant-test-key-not-real";
+
+      await executeTask(t.db, task.id, { claudeClientOverride: claudeClient(() => claudeTextMessage(GOOD_HTML_ONLY_OUTPUT)) });
+
+      const telemetryEvents = listEventsForProject(t.db, project.id).filter((e) => e.type === "claude.context_prepared");
+      assert.equal(telemetryEvents.length, 1);
+      const payload = JSON.parse(telemetryEvents[0].payload) as { capability: string; estimatedInputTokens: number; allowedOutputTokens: number; taskId: string };
+      assert.equal(payload.capability, "CODING");
+      assert.equal(payload.taskId, task.id);
+      assert.ok(payload.estimatedInputTokens > 0);
+      assert.ok(payload.allowedOutputTokens > 0);
+
+      t.close();
+    });
+  });
+
+  test("token economics: relevance-selection keeps the estimated/actual input tokens bounded even when many unrelated files exist in the workspace", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const owner = getOwner(t.db)!;
+      const { project } = setupHybridProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+      // A pile of large, unrelated pre-existing files — an unoptimized
+      // "send everything" context would be huge; relevance-selection
+      // (Part 2/5) must keep the real request small regardless.
+      for (let i = 0; i < 20; i++) {
+        const path = `unrelated-${i}.txt`;
+        const content = `irrelevant historical content ${i} `.repeat(200);
+        await writeFile(project.id, path, content);
+        upsertWorkspaceFileRecord(t.db, { projectId: project.id, path, sizeBytes: content.length, roleId: null, taskId: null });
+      }
+
+      await executeTask(t.db, task.id);
+      const approval = listApprovalsForProject(t.db, project.id)[0];
+      approveApproval(t.db, { approvalId: approval.id, decidedByUserId: owner.id });
+      process.env.ANTHROPIC_API_KEY = "sk-ant-test-key-not-real";
+
+      const result = await executeTask(t.db, task.id, { claudeClientOverride: claudeClient(() => claudeTextMessage(GOOD_HTML_ONLY_OUTPUT)) });
+      assert.equal(result.outcome, "succeeded");
+
+      const telemetry = JSON.parse(listEventsForProject(t.db, project.id).find((e) => e.type === "claude.context_prepared")!.payload) as {
+        filesSelected: string[];
+        filesExcluded: string[];
+      };
+      assert.ok(telemetry.filesExcluded.length > 0, "most of the 20 unrelated files were excluded, not all sent");
+      assert.ok(telemetry.filesSelected.length < 20, "never the whole workspace");
+
+      t.close();
+    });
+  });
+
+  test("token economics: repeated identical-failure retries trigger a runaway warning event without blocking the retry (Part 11)", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const owner = getOwner(t.db)!;
+      const { project } = setupHybridProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+      await executeTask(t.db, task.id);
+      const approval = listApprovalsForProject(t.db, project.id)[0];
+      approveApproval(t.db, { approvalId: approval.id, decidedByUserId: owner.id });
+      process.env.ANTHROPIC_API_KEY = "sk-ant-test-key-not-real";
+
+      // Simulate the same unresolved failure having already recurred
+      // twice for this task before this attempt even runs.
+      recordFailure(t.db, { projectId: project.id, taskId: task.id, reason: "The button never responds to clicks." });
+      recordFailure(t.db, { projectId: project.id, taskId: task.id, reason: "The button never responds to clicks." });
+      updateTaskStatus(t.db, task.id, "PENDING");
+
+      const result = await executeTask(t.db, task.id, { claudeClientOverride: claudeClient(() => claudeTextMessage(GOOD_HTML_ONLY_OUTPUT)) });
+      assert.equal(result.outcome, "succeeded", "a runaway signal is a warning, never a new hard stop — Part 11");
+
+      const runawayEvents = listEventsForProject(t.db, project.id).filter((e) => e.type === "claude.runaway_warning");
+      assert.equal(runawayEvents.length, 1);
+      assert.match(JSON.parse(runawayEvents[0].payload).reason, /recurred/);
+
+      t.close();
+    });
+  });
+
+  test("token economics: budget reservation is authorized against the OPTIMIZED context's estimate, not an unoptimized full-workspace estimate", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const owner = getOwner(t.db)!;
+      const { project } = setupHybridProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+      const unrelatedContent = "z".repeat(20_000);
+      let rawUnoptimizedChars = 0;
+      for (let i = 0; i < 15; i++) {
+        const path = `unrelated-${i}.txt`;
+        await writeFile(project.id, path, unrelatedContent);
+        upsertWorkspaceFileRecord(t.db, { projectId: project.id, path, sizeBytes: unrelatedContent.length, roleId: null, taskId: null });
+        rawUnoptimizedChars += unrelatedContent.length;
+      }
+
+      await executeTask(t.db, task.id);
+      const approval = listApprovalsForProject(t.db, project.id)[0];
+      approveApproval(t.db, { approvalId: approval.id, decidedByUserId: owner.id });
+      process.env.ANTHROPIC_API_KEY = "sk-ant-test-key-not-real";
+
+      const result = await executeTask(t.db, task.id, { claudeClientOverride: claudeClient(() => claudeTextMessage(GOOD_HTML_ONLY_OUTPUT)) });
+      assert.equal(result.outcome, "succeeded");
+
+      const telemetry = JSON.parse(listEventsForProject(t.db, project.id).find((e) => e.type === "claude.context_prepared")!.payload) as {
+        estimatedInputTokens: number;
+      };
+      // 15 unrelated files x 20,000 chars ~ 75,000 tokens raw — the real,
+      // reserved-against estimate must be a tiny fraction of that, proving
+      // the reservation was computed from the trimmed context, not a full
+      // dump of every file in the workspace.
+      const rawUnoptimizedEstimatedTokens = Math.ceil(rawUnoptimizedChars / 4);
+      assert.ok(
+        telemetry.estimatedInputTokens < rawUnoptimizedEstimatedTokens / 3,
+        `optimized estimate (${telemetry.estimatedInputTokens}) should be substantially below the raw unoptimized estimate (${rawUnoptimizedEstimatedTokens})`,
+      );
+      assert.ok(telemetry.estimatedInputTokens <= 18_000, "must fit within CODING's own soft budget after shrinking");
+
+      t.close();
+    });
   });
 });

@@ -52,6 +52,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
     isStalledWithNoDeliverable,
     roleProviders,
     budget,
+    claudeCosts,
   } = detail;
   const canPause = project.status === "IN_PROGRESS";
   const canResume = project.status === "PAUSED";
@@ -158,6 +159,58 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
               ))}
             </ul>
           )}
+        </GlassCard>
+      )}
+
+      {claudeCosts.totalCalls > 0 && (
+        <GlassCard>
+          <h2 className="text-sm font-semibold tracking-tight">Claude Cost &amp; Context</h2>
+          <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-muted-foreground">
+            <span>Total: ${claudeCosts.totalCostUsd.toFixed(4)} across {claudeCosts.totalCalls} call{claudeCosts.totalCalls === 1 ? "" : "s"}</span>
+            <span>Paid retries: {claudeCosts.paidRetries}</span>
+            <span>Avg call: ${claudeCosts.averageCallCostUsd.toFixed(4)}</span>
+            <span>Cost/completed task: ${claudeCosts.costPerCompletedPaidTask.toFixed(4)}</span>
+            <span>Largest prompt: {claudeCosts.largestPromptTokens.toLocaleString()} tok</span>
+            <span>Largest output: {claudeCosts.largestOutputTokens.toLocaleString()} tok</span>
+          </div>
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full min-w-[640px] text-left text-xs">
+              <thead className="text-muted-foreground">
+                <tr>
+                  <th className="pb-1 pr-3 font-normal">Role</th>
+                  <th className="pb-1 pr-3 font-normal">Task</th>
+                  <th className="pb-1 pr-3 font-normal">Model</th>
+                  <th className="pb-1 pr-3 font-normal">Input</th>
+                  <th className="pb-1 pr-3 font-normal">Output</th>
+                  <th className="pb-1 pr-3 font-normal">Cache R/W</th>
+                  <th className="pb-1 pr-3 font-normal">Files</th>
+                  <th className="pb-1 font-normal">Cost</th>
+                </tr>
+              </thead>
+              <tbody>
+                {claudeCosts.calls.map((call) => (
+                  <tr key={call.agentRunId} className="border-t border-border/40">
+                    <td className="py-1 pr-3">{call.roleName ?? call.roleId ?? "—"}</td>
+                    <td className="max-w-[180px] truncate py-1 pr-3" title={call.taskTitle ?? undefined}>
+                      {call.taskTitle ?? "—"}
+                    </td>
+                    <td className="py-1 pr-3 font-mono">{call.model ?? "—"}</td>
+                    <td className="py-1 pr-3">{call.inputTokens.toLocaleString()}</td>
+                    <td className="py-1 pr-3">{call.outputTokens.toLocaleString()}</td>
+                    <td className="py-1 pr-3">
+                      {call.cacheReadInputTokens != null || call.cacheCreationInputTokens != null
+                        ? `${call.cacheReadInputTokens ?? 0}/${call.cacheCreationInputTokens ?? 0}`
+                        : "—"}
+                    </td>
+                    <td className="py-1 pr-3">
+                      {call.contextFilesSelected != null ? `${call.contextFilesSelected} sel · ${call.contextFilesExcluded ?? 0} excl` : "—"}
+                    </td>
+                    <td className="py-1">${call.costUsd.toFixed(4)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </GlassCard>
       )}
 

@@ -305,6 +305,9 @@ export interface ReconcileWithUsageInput {
   actualCostUsd: number;
   inputTokens: number;
   outputTokens: number;
+  /** Real Anthropic prompt-cache token counts (token economics phase, Part 9) — omitted/undefined for a provider or call that never reported them; never guessed. */
+  cacheCreationInputTokens?: number | null;
+  cacheReadInputTokens?: number | null;
 }
 
 export interface ReconcileWithUsageResult {
@@ -410,6 +413,8 @@ export function reconcileReservationWithUsage(db: DatabaseSync, input: Reconcile
         inputTokens: input.inputTokens,
         outputTokens: input.outputTokens,
         costUsd: input.actualCostUsd,
+        cacheCreationInputTokens: input.cacheCreationInputTokens,
+        cacheReadInputTokens: input.cacheReadInputTokens,
       });
 
       const periodStart = startOfCurrentMonthUtc();

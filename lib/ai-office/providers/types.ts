@@ -89,6 +89,8 @@ export interface AgentTaskInput {
   role: AgentRoleId;
   task: TaskContext;
   instructions: string;
+  /** Token economics phase, Part 7 — the capability-specific output ceiling the Context Budget Manager computed for this call (`lib/ai-office/context/capability-budgets.ts`). Ollama ignores it (LOCAL calls are unaffected by this phase); undefined lets an adapter fall back to its own default. */
+  maxOutputTokens?: number;
 }
 
 /**
@@ -175,6 +177,9 @@ export interface UsageInfo {
   inputTokens: number;
   outputTokens: number;
   costUsd: number;
+  /** Real Anthropic prompt-cache token counts (token economics phase, Part 9) — undefined for every non-caching call (Ollama, Simulated, or a Claude call the API didn't report cache usage for). Never fabricated. */
+  cacheCreationInputTokens?: number;
+  cacheReadInputTokens?: number;
 }
 
 export interface AgentTaskResult {

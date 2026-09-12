@@ -33,7 +33,7 @@ import {
   createApproval,
   listApprovalsForProject,
 } from "../domain/project-outputs.ts";
-import { recordEvent } from "../domain/events.ts";
+import { recordEvent, listEventsForProject } from "../domain/events.ts";
 import { recordAiUsage } from "../domain/budget.ts";
 import { refreshProjectMemory } from "../domain/project-memory.ts";
 import { buildTaskContext } from "./context-builder.ts";
@@ -47,6 +47,7 @@ import type { AIProviderAdapter } from "../providers/types.ts";
 import { LocalModelRouter, type ModelFailureContext } from "./model-router.ts";
 import { routeProvider } from "./provider-router.ts";
 import { ClaudeAdapter, isClaudeConfigured } from "../providers/claude/claude-adapter.ts";
+import { optimizeContextForPaidCall } from "../context/context-budget-manager.ts";
 import {
   authorizeBudget as authorizeLiveBudget,
   reconcileReservationWithUsage,
@@ -218,6 +219,8 @@ async function runAdapterWithOperationalRetries(
   let totalInputTokens = result.usage.inputTokens;
   let totalOutputTokens = result.usage.outputTokens;
   let totalCostUsd = result.usage.costUsd;
+  let totalCacheCreationInputTokens = result.usage.cacheCreationInputTokens;
+  let totalCacheReadInputTokens = result.usage.cacheReadInputTokens;
   let retries = 0;
   while (result.status === "FAILED" && isOperationalFailureReason(result.output.failure?.reason ?? "") && retries < MAX_OPERATIONAL_RETRIES) {
     retries += 1;
@@ -225,8 +228,23 @@ async function runAdapterWithOperationalRetries(
     totalInputTokens += result.usage.inputTokens;
     totalOutputTokens += result.usage.outputTokens;
     totalCostUsd += result.usage.costUsd;
+    if (result.usage.cacheCreationInputTokens !== undefined) {
+      totalCacheCreationInputTokens = (totalCacheCreationInputTokens ?? 0) + result.usage.cacheCreationInputTokens;
+    }
+    if (result.usage.cacheReadInputTokens !== undefined) {
+      totalCacheReadInputTokens = (totalCacheReadInputTokens ?? 0) + result.usage.cacheReadInputTokens;
+    }
   }
-  return { ...result, usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens, costUsd: totalCostUsd } };
+  return {
+    ...result,
+    usage: {
+      inputTokens: totalInputTokens,
+      outputTokens: totalOutputTokens,
+      costUsd: totalCostUsd,
+      cacheCreationInputTokens: totalCacheCreationInputTokens,
+      cacheReadInputTokens: totalCacheReadInputTokens,
+    },
+  };
 }
 
 /**
@@ -442,6 +460,10 @@ function hasRejectedClaudeApproval(db: DatabaseSync, projectId: string): boolean
 export interface PreparedClaudeCall {
   adapter: ClaudeAdapter;
   reservationId: string;
+  /** The Context Budget Manager's trimmed, relevance-selected `TaskContext` — the ONLY context ever actually sent to Claude (token economics phase); the raw, unoptimized `context` built earlier in `executeTask` is used only to derive this. */
+  optimizedContext: import("../providers/types.ts").TaskContext;
+  /** Capability-specific output ceiling (Part 7) — replaces a flat 8192 for every role. */
+  allowedOutputTokens: number;
 }
 type ClaudeGateResult = ({ outcome: "proceed" } & PreparedClaudeCall) | { outcome: "blocked"; reason: string };
 
@@ -488,18 +510,62 @@ function conservativeReservationEstimateUsd(singleCallEstimateUsd: number): numb
  * consume this task's real retry ceiling the way an actual failed
  * attempt would.
  */
-function prepareClaudeCall(
+/**
+ * Token economics phase, Part 11 — a telemetry-only runaway signal, never
+ * a new hard stop (the existing task-attempt retry ceiling and budget
+ * caps remain the sole authoritative stopping mechanisms, per this
+ * phase's explicit instruction). Reads only what's already persisted: the
+ * most recent prior `claude.context_prepared` telemetry event for this
+ * exact task (for sudden token growth between attempts) and this task's
+ * currently-unresolved failure history (for a repeated identical-failure
+ * retry loop).
+ */
+function detectRunawaySignal(db: DatabaseSync, projectId: string, taskId: string, estimatedInputTokens: number): { warning: boolean; reason?: string } {
+  const priorEstimate = listEventsForProject(db, projectId)
+    .filter((e) => e.type === "claude.context_prepared")
+    .map((e) => {
+      try {
+        return JSON.parse(e.payload) as { taskId?: string; estimatedInputTokens?: number };
+      } catch {
+        return {};
+      }
+    })
+    .find((p) => p.taskId === taskId); // most recent first — listEventsForProject orders by occurredAt DESC
+
+  if (priorEstimate?.estimatedInputTokens && priorEstimate.estimatedInputTokens > 0) {
+    const growth = estimatedInputTokens / priorEstimate.estimatedInputTokens;
+    if (growth >= 2) {
+      return {
+        warning: true,
+        reason: `Estimated input tokens grew ${growth.toFixed(1)}x since this task's previous Claude attempt (${priorEstimate.estimatedInputTokens} -> ${estimatedInputTokens}) — possible runaway context growth.`,
+      };
+    }
+  }
+
+  const failuresForTask = listUnresolvedFailures(db, projectId).filter((f) => f.taskId === taskId);
+  if (failuresForTask.length >= 2 && new Set(failuresForTask.map((f) => f.reason)).size === 1) {
+    return {
+      warning: true,
+      reason: `The same failure has recurred ${failuresForTask.length} times for this task without resolving — repeated paid retry for an identical failure.`,
+    };
+  }
+
+  return { warning: false };
+}
+
+async function prepareClaudeCall(
   db: DatabaseSync,
   ctx: {
     project: ProjectRow;
     role: AgentRoleRow;
     task: TaskRow;
     context: import("../providers/types.ts").TaskContext;
+    capability: import("./model-router.ts").ModelCapability;
     /** Test-injection point for the internally-constructed ClaudeAdapter's own HTTP client (separate from `options.provider`, which bypasses this entire gate) — same pattern as `options.ollamaFetchImpl` for LocalModelRouter's internally-constructed OllamaAdapter. Real (non-test) runner operation never sets this; still requires a real `ANTHROPIC_API_KEY`/pricing configuration to be set (`isClaudeConfigured()`), exactly like real operation. */
     clientOverride?: import("../providers/claude/claude-adapter.ts").ClaudeAdapterOptions["client"];
   },
-): ClaudeGateResult {
-  const { project, role, task, context } = ctx;
+): Promise<ClaudeGateResult> {
+  const { project, role, task, context, capability } = ctx;
 
   if (hasRejectedClaudeApproval(db, project.id)) {
     return {
@@ -549,11 +615,33 @@ function prepareClaudeCall(
     };
   }
 
+  // Token economics phase — every paid call's context passes through the
+  // single centralized Context Budget Manager before a token is ever
+  // estimated for reservation, let alone sent. Never skipped, never
+  // bypassed: this is the ONE place relevance-selection/retry-delta/
+  // shrinking/hard-limit-blocking happens for a Claude call.
+  const optimized = await optimizeContextForPaidCall({ db, capability, role, task, context });
+  const runaway = detectRunawaySignal(db, project.id, task.id, optimized.telemetry.estimatedInputTokens);
+  recordEvent(db, {
+    projectId: project.id,
+    type: "claude.context_prepared",
+    payload: { taskId: task.id, roleId: role.id, ...optimized.telemetry, runawayWarning: runaway.warning, runawayReason: runaway.reason ?? null },
+    actor: "system",
+  });
+  if (runaway.warning) {
+    recordEvent(db, { projectId: project.id, type: "claude.runaway_warning", payload: { taskId: task.id, roleId: role.id, reason: runaway.reason }, actor: "system" });
+  }
+
+  if (!optimized.ok) {
+    return { outcome: "blocked", reason: optimized.telemetry.blockReason ?? "Context exceeded the hard token limit and could not be safely shrunk." };
+  }
+
   const adapter = new ClaudeAdapter(ctx.clientOverride ? { client: ctx.clientOverride } : undefined);
   const singleCallEstimate = adapter.estimateCost({
     role: role.id,
     instructions: `Perform your assigned "${role.name}" responsibilities for this task.`,
-    task: context,
+    task: optimized.context,
+    maxOutputTokens: optimized.allowedOutputTokens,
   });
 
   const authorization = authorizeLiveBudget(db, {
@@ -577,7 +665,13 @@ function prepareClaudeCall(
   // office's 80% owner-warning threshold (Part 7) has been crossed; it
   // is surfaced to the owner via the budget dashboard, not a reason to
   // refuse this call.
-  return { outcome: "proceed", adapter, reservationId: authorization.reservationId! };
+  return {
+    outcome: "proceed",
+    adapter,
+    reservationId: authorization.reservationId!,
+    optimizedContext: optimized.context,
+    allowedOutputTokens: optimized.allowedOutputTokens,
+  };
 }
 
 export async function executeTask(
@@ -631,7 +725,14 @@ export async function executeTask(
   if (!options.provider) {
     const providerDecision = routeProvider(db, { role: role.id, project });
     if (providerDecision.provider === "CLAUDE") {
-      const gate = prepareClaudeCall(db, { project, role, task, context, clientOverride: options.claudeClientOverride });
+      const gate = await prepareClaudeCall(db, {
+        project,
+        role,
+        task,
+        context,
+        capability: providerDecision.capability,
+        clientOverride: options.claudeClientOverride,
+      });
       if (gate.outcome !== "proceed") {
         updateTaskStatus(db, task.id, "PENDING");
         recordEvent(db, {
@@ -642,7 +743,12 @@ export async function executeTask(
         });
         return { outcome: "claude-blocked", task: getTask(db, task.id)!, reason: gate.reason };
       }
-      claudeCall = { adapter: gate.adapter, reservationId: gate.reservationId };
+      claudeCall = {
+        adapter: gate.adapter,
+        reservationId: gate.reservationId,
+        optimizedContext: gate.optimizedContext,
+        allowedOutputTokens: gate.allowedOutputTokens,
+      };
     }
   }
 
@@ -805,7 +911,16 @@ export async function executeTask(
       // incident writeup). The actual work to do lives in
       // context.authoritativeUserRequest plus the role's own scoped
       // artifacts, both already part of `context`.
-      { role: role.id, task: context, instructions: `Perform your assigned "${role.name}" responsibilities for this task.` },
+      {
+        role: role.id,
+        // For a Claude call, the Context Budget Manager's trimmed,
+        // relevance-selected context (token economics phase) — never the
+        // raw, unoptimized `context` built above, which the manager only
+        // used as its input. Every other provider is unaffected.
+        task: claudeCall ? claudeCall.optimizedContext : context,
+        instructions: `Perform your assigned "${role.name}" responsibilities for this task.`,
+        maxOutputTokens: claudeCall?.allowedOutputTokens,
+      },
       options.timeoutMs ?? DEFAULT_TASK_TIMEOUT_MS,
     );
   }
@@ -828,6 +943,8 @@ export async function executeTask(
         actualCostUsd: result.usage.costUsd,
         inputTokens: result.usage.inputTokens,
         outputTokens: result.usage.outputTokens,
+        cacheCreationInputTokens: result.usage.cacheCreationInputTokens,
+        cacheReadInputTokens: result.usage.cacheReadInputTokens,
       });
     } else {
       releaseReservation(db, claudeCall.reservationId);

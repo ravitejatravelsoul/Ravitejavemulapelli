@@ -1,7 +1,7 @@
 import "server-only";
 import type { DatabaseSync } from "node:sqlite";
 import { getProject, getProjectIdea, type ProjectRow } from "../domain/projects.ts";
-import { listTasksForProject, listTaskDependencies, listTaskAttempts, getAgentRun, type TaskRow } from "../domain/tasks.ts";
+import { listTasksForProject, listTaskDependencies, listTaskAttempts, getAgentRun, getTaskAttempt, getTask, type TaskRow } from "../domain/tasks.ts";
 import { getAgentRole } from "../domain/agent-roles.ts";
 import {
   listArtifactsForProject,
@@ -17,7 +17,7 @@ import {
 } from "../domain/project-outputs.ts";
 import { listEventsForProject } from "../domain/events.ts";
 import { getProjectMemory } from "../domain/project-memory.ts";
-import { sumSimulatedCostForProject, sumLiveCostForProject } from "../domain/budget.ts";
+import { sumSimulatedCostForProject, sumLiveCostForProject, listAiUsageForProject } from "../domain/budget.ts";
 import { getBudgetSnapshot } from "../budget/budget-service.ts";
 import { isClaudeConfigured } from "../providers/claude/claude-adapter.ts";
 import { describeEvent, type ActivityEntry } from "./dashboard-data.ts";
@@ -99,6 +99,109 @@ export interface ProjectDetail {
   isStalledWithNoDeliverable: boolean;
   roleProviders: RoleProviderView[];
   budget: ProjectBudgetView;
+  claudeCosts: ClaudeCostSummary;
+}
+
+/** Token economics phase, Part 10 — one row per real Claude call, joined from `ai_usage` (never guessed) through `agent_runs -> task_attempts -> tasks -> agent_roles`, most recent first. Context-selection detail (files/estimate) comes from the matching `claude.context_prepared` telemetry event for the same task, when one exists — best-effort, never blocking the row if it doesn't (an older row from before this phase, for instance). */
+export interface ClaudeCallView {
+  agentRunId: string;
+  taskId: string | null;
+  taskTitle: string | null;
+  roleId: string | null;
+  roleName: string | null;
+  model: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationInputTokens: number | null;
+  cacheReadInputTokens: number | null;
+  costUsd: number;
+  contextEstimatedInputTokens: number | null;
+  contextFilesSelected: number | null;
+  contextFilesExcluded: number | null;
+  createdAt: number;
+}
+
+export interface ClaudeCostSummary {
+  calls: ClaudeCallView[];
+  totalCostUsd: number;
+  totalCalls: number;
+  /** Calls beyond the first real Claude call recorded for a given task — a real paid retry, not the task's original attempt. */
+  paidRetries: number;
+  largestPromptTokens: number;
+  largestOutputTokens: number;
+  averageCallCostUsd: number;
+  /** Total Claude cost divided by the number of DISTINCT tasks (among those with at least one Claude call) that ultimately reached DONE — 0 if none have. */
+  costPerCompletedPaidTask: number;
+}
+
+function buildClaudeCostSummary(db: DatabaseSync, projectId: string): ClaudeCostSummary {
+  const usageRows = listAiUsageForProject(db, projectId).filter((u) => u.provider === "claude");
+  const contextEvents = listEventsForProject(db, projectId)
+    .filter((e) => e.type === "claude.context_prepared")
+    .map((e) => {
+      try {
+        return JSON.parse(e.payload) as {
+          taskId?: string;
+          estimatedInputTokens?: number;
+          filesSelected?: string[];
+          filesExcluded?: string[];
+        };
+      } catch {
+        return {};
+      }
+    });
+
+  const seenTaskIds = new Set<string>();
+  const calls: ClaudeCallView[] = usageRows.map((usage) => {
+    const agentRun = getAgentRun(db, usage.agentRunId);
+    const attempt = agentRun ? getTaskAttempt(db, agentRun.taskAttemptId) : undefined;
+    const task = attempt ? getTask(db, attempt.taskId) : undefined;
+    const role = task ? getAgentRole(db, task.roleId) : undefined;
+    // Best-effort match: the most recent context-prepared telemetry for
+    // this same task — approximate, but the two are always recorded
+    // within the same `executeTask` call, so in practice there is
+    // exactly one candidate per real attempt.
+    const contextEvent = task ? contextEvents.find((e) => e.taskId === task.id) : undefined;
+
+    return {
+      agentRunId: usage.agentRunId,
+      taskId: task?.id ?? null,
+      taskTitle: task?.title ?? null,
+      roleId: task?.roleId ?? null,
+      roleName: role?.name ?? null,
+      model: agentRun?.model ?? null,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      cacheCreationInputTokens: usage.cacheCreationInputTokens,
+      cacheReadInputTokens: usage.cacheReadInputTokens,
+      costUsd: usage.costUsd,
+      contextEstimatedInputTokens: contextEvent?.estimatedInputTokens ?? null,
+      contextFilesSelected: contextEvent?.filesSelected?.length ?? null,
+      contextFilesExcluded: contextEvent?.filesExcluded?.length ?? null,
+      createdAt: usage.createdAt,
+    };
+  });
+
+  let paidRetries = 0;
+  for (const call of calls) {
+    if (!call.taskId) continue;
+    if (seenTaskIds.has(call.taskId)) paidRetries += 1;
+    else seenTaskIds.add(call.taskId);
+  }
+
+  const completedTaskIds = new Set([...seenTaskIds].filter((id) => getTask(db, id)?.status === "DONE"));
+  const totalCostUsd = calls.reduce((sum, c) => sum + c.costUsd, 0);
+
+  return {
+    calls: calls.sort((a, b) => b.createdAt - a.createdAt),
+    totalCostUsd,
+    totalCalls: calls.length,
+    paidRetries,
+    largestPromptTokens: calls.reduce((max, c) => Math.max(max, c.contextEstimatedInputTokens ?? c.inputTokens), 0),
+    largestOutputTokens: calls.reduce((max, c) => Math.max(max, c.outputTokens), 0),
+    averageCallCostUsd: calls.length > 0 ? totalCostUsd / calls.length : 0,
+    costPerCompletedPaidTask: completedTaskIds.size > 0 ? totalCostUsd / completedTaskIds.size : 0,
+  };
 }
 
 function truncate(text: string, max: number): string {
@@ -208,6 +311,7 @@ export function getProjectDetail(db: DatabaseSync, projectId: string): ProjectDe
     isStalledWithNoDeliverable: stalled,
     roleProviders,
     budget,
+    claudeCosts: buildClaudeCostSummary(db, projectId),
   };
 }
 

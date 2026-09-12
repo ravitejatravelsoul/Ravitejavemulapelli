@@ -2,8 +2,9 @@ import "server-only";
 import Anthropic, { APIConnectionError, APIConnectionTimeoutError, RateLimitError, InternalServerError } from "@anthropic-ai/sdk";
 // Relative + extension-explicit — see lib/ai-office/db/client.ts's comment.
 import type { AIProviderAdapter, AgentTaskInput, AgentTaskResult, CostEstimate } from "../types.ts";
-import { buildPrompt, malformedResult, parseStructuredOutput } from "../shared/structured-output-contract.ts";
+import { buildPromptSegments, malformedResult, parseStructuredOutput } from "../shared/structured-output-contract.ts";
 import { getClaudePricingConfig, calculateClaudeCostUsd } from "./pricing.ts";
+import { estimateTokens } from "../../context/token-estimate.ts";
 
 /**
  * The paid, real-money provider — controlled Claude LIVE pilot. Uses
@@ -32,8 +33,16 @@ import { getClaudePricingConfig, calculateClaudeCostUsd } from "./pricing.ts";
 
 const DEFAULT_MODEL = "claude-sonnet-5";
 const DEFAULT_TIMEOUT_MS = 120_000;
-/** A generous but bounded ceiling — both the real request parameter and the worst-case figure `estimateCost()` reserves against, per Part 8's "estimate the MAXIMUM allowed/reserved cost" requirement. */
-const MAX_OUTPUT_TOKENS = 8192;
+/**
+ * Fallback only — reachable when a caller doesn't pass `AgentTaskInput
+ * .maxOutputTokens` (every real call from agent-runner.ts does, sourced
+ * from the Context Budget Manager's capability-specific ceiling —
+ * token-economics phase, Part 7; this used to be one flat number for
+ * every role). Kept generous since it's the *worst-case* reservation
+ * figure for a caller that skipped the budget manager (e.g. a direct
+ * unit test), never the typical real request size.
+ */
+const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
 
 /** Strips anything that looks like a real Anthropic API key from a string before it is ever used as a failure reason / persisted anywhere — defense in depth on top of the SDK's own error messages, which do not normally echo the key back. */
 function sanitizeErrorText(text: string): string {
@@ -89,19 +98,34 @@ export class ClaudeAdapter implements AIProviderAdapter {
 
   estimateCost(input: AgentTaskInput): CostEstimate {
     const pricing = getClaudePricingConfig();
-    const prompt = buildPrompt(input);
-    // A conservative chars-per-token heuristic (rounded up) — this only
-    // ever feeds a budget *reservation* ceiling, never the actual
-    // recorded cost, which always comes from the API's own real usage
-    // counts once the call completes.
-    const estimatedInputTokens = Math.ceil(prompt.length / 4);
-    const estimatedOutputTokens = MAX_OUTPUT_TOKENS;
+    const { systemText, userText } = buildPromptSegments(input);
+    // The shared, single token-estimation heuristic (token economics
+    // phase, Part 6) — this only ever feeds a budget *reservation*
+    // ceiling, never the actual recorded cost, which always comes from
+    // the API's own real usage counts once the call completes. Cache
+    // tokens are never estimated here (no way to know a cache hit will
+    // occur before the call happens) — a worst-case reservation
+    // conservatively assumes every input token is billed at the full
+    // rate, which is always >= the real cache-discounted cost.
+    const estimatedInputTokens = estimateTokens(systemText) + estimateTokens(userText);
+    const estimatedOutputTokens = input.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
     const estimatedCostUsd = pricing ? calculateClaudeCostUsd(pricing, estimatedInputTokens, estimatedOutputTokens) : 0;
     return { estimatedInputTokens, estimatedOutputTokens, estimatedCostUsd };
   }
 
   async runAgentTask(input: AgentTaskInput): Promise<AgentTaskResult> {
-    const prompt = buildPrompt(input);
+    // Token economics phase, Part 9 — real Anthropic prompt caching via
+    // the officially supported mechanism: `system` as a content-block
+    // array with a `cache_control` breakpoint on the stable block (role
+    // contract + structured-output format + the project's authoritative
+    // request, all of which repeat verbatim across a project's retries/
+    // multiple-role calls), and the genuinely per-call content
+    // (remediation/failure detail, task metadata, prior artifacts/
+    // decisions, relevant files) in the volatile `messages` array, never
+    // cached. See structured-output-contract.ts's `buildPromptSegments`
+    // docblock for the full reasoning.
+    const { systemText, userText } = buildPromptSegments(input);
+    const maxOutputTokens = input.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
 
@@ -110,8 +134,9 @@ export class ClaudeAdapter implements AIProviderAdapter {
       message = await this.client.messages.create(
         {
           model: this.model,
-          max_tokens: MAX_OUTPUT_TOKENS,
-          messages: [{ role: "user", content: prompt }],
+          max_tokens: maxOutputTokens,
+          system: [{ type: "text", text: systemText, cache_control: { type: "ephemeral" } }],
+          messages: [{ role: "user", content: userText }],
         },
         { signal: controller.signal, timeout: this.timeoutMs },
       );
@@ -137,6 +162,12 @@ export class ClaudeAdapter implements AIProviderAdapter {
 
     const inputTokens = message.usage.input_tokens ?? 0;
     const outputTokens = message.usage.output_tokens;
+    // Real, as returned by the API — `null` (no cache activity reported)
+    // becomes `undefined` here (see UsageInfo's docblock), never 0
+    // ("cache was checked and found empty" is a different, false claim).
+    // Token economics phase, Part 9 — never fabricated.
+    const cacheCreationInputTokens = message.usage.cache_creation_input_tokens ?? undefined;
+    const cacheReadInputTokens = message.usage.cache_read_input_tokens ?? undefined;
     const pricing = getClaudePricingConfig();
     // Reachable only if pricing configuration was removed *after*
     // isClaudeConfigured() was checked but before this call completed —
@@ -145,7 +176,8 @@ export class ClaudeAdapter implements AIProviderAdapter {
     if (!pricing) {
       return malformedResult("Claude pricing configuration is missing — cannot safely record real usage cost for this call.");
     }
-    const costUsd = calculateClaudeCostUsd(pricing, inputTokens, outputTokens);
+    const costUsd = calculateClaudeCostUsd(pricing, inputTokens, outputTokens, { cacheCreationInputTokens, cacheReadInputTokens });
+    const usage = { inputTokens, outputTokens, costUsd, cacheCreationInputTokens, cacheReadInputTokens };
 
     const parsed = parseStructuredOutput(text);
     if (!parsed.ok) {
@@ -155,14 +187,14 @@ export class ClaudeAdapter implements AIProviderAdapter {
       // default zero usage here is what keeps this call's real cost from
       // silently vanishing from the ledger (Part 6's "never silently
       // report $0 for Claude").
-      return { ...malformedResult(`Claude's model output ${parsed.reason}`), usage: { inputTokens, outputTokens, costUsd } };
+      return { ...malformedResult(`Claude's model output ${parsed.reason}`), usage };
     }
 
     const output = parsed.output;
     return {
       status: output.failure ? "FAILED" : "SUCCEEDED",
       output,
-      usage: { inputTokens, outputTokens, costUsd },
+      usage,
       raw: { model: this.model },
     };
   }

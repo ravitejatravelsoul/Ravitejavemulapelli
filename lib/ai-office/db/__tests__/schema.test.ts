@@ -24,7 +24,7 @@ describe("clean DB creation + migrations from zero", () => {
     const db = openDatabase(join(dir, "fresh.db"));
 
     const result = runMigrations(db);
-    assert.equal(result.version, 6);
+    assert.equal(result.version, 7);
     assert.deepEqual(result.applied, [
       "001-init.sql",
       "002-budget-and-approval-scope.sql",
@@ -32,8 +32,9 @@ describe("clean DB creation + migrations from zero", () => {
       "004-add-real-workspace.sql",
       "005-add-model-routing.sql",
       "006-add-ai-policy.sql",
+      "007-add-claude-cache-usage.sql",
     ]);
-    assert.equal(getSchemaVersion(db), 6);
+    assert.equal(getSchemaVersion(db), 7);
 
     const tableCount = db
       .prepare("SELECT COUNT(*) as count FROM sqlite_master WHERE type = 'table' AND name != 'sqlite_sequence'")
@@ -50,11 +51,11 @@ describe("migrations are idempotent / safe to run repeatedly", () => {
     const t = createTestDb({ seed: false });
     const first = runMigrations(t.db); // no-op, createTestDb already migrated
     assert.deepEqual(first.applied, []);
-    assert.equal(first.version, 6);
+    assert.equal(first.version, 7);
 
     const second = runMigrations(t.db);
     assert.deepEqual(second.applied, []);
-    assert.equal(second.version, 6);
+    assert.equal(second.version, 7);
     t.close();
   });
 });
@@ -75,6 +76,7 @@ describe("schema version is inspectable", () => {
       { version: 4, name: "004-add-real-workspace.sql" },
       { version: 5, name: "005-add-model-routing.sql" },
       { version: 6, name: "006-add-ai-policy.sql" },
+      { version: 7, name: "007-add-claude-cache-usage.sql" },
     ]);
     t.close();
   });
@@ -117,8 +119,9 @@ describe("migrations 002+003+004+005 apply cleanly on top of an existing v1 data
       "004-add-real-workspace.sql",
       "005-add-model-routing.sql",
       "006-add-ai-policy.sql",
+      "007-add-claude-cache-usage.sql",
     ]);
-    assert.equal(getSchemaVersion(db), 6);
+    assert.equal(getSchemaVersion(db), 7);
 
     // The pre-existing rows survive, unmodified except for the new
     // columns now existing (and being NULL, since this data predates
@@ -182,6 +185,26 @@ describe("migrations 002+003+004+005 apply cleanly on top of an existing v1 data
     assert.ok(projectCols.includes("aiPolicyMode"));
     const preExistingProjectAiPolicy = db.prepare("SELECT aiPolicyMode FROM projects WHERE id = 'p1'").get() as { aiPolicyMode: string };
     assert.equal(preExistingProjectAiPolicy.aiPolicyMode, "LOCAL_ONLY", "pre-existing rows get backfilled with the NOT NULL DEFAULT");
+
+    // Migration 007's new nullable columns are fully usable afterward too.
+    const aiUsageCols = (db.prepare("PRAGMA table_info(ai_usage)").all() as Array<{ name: string }>).map((c) => c.name);
+    assert.ok(aiUsageCols.includes("cacheCreationInputTokens"));
+    assert.ok(aiUsageCols.includes("cacheReadInputTokens"));
+    db.prepare(
+      "INSERT INTO tasks (id, projectId, roleId, title, status, attemptCount, createdAt, updatedAt) VALUES ('t1','p1','frontend-developer','Implement frontend','PENDING',1,?,?)",
+    ).run(now, now);
+    db.prepare(
+      "INSERT INTO task_attempts (id, taskId, attemptNumber, status, agentRunId, createdAt, updatedAt) VALUES ('att1','t1',1,'RUNNING',NULL,?,?)",
+    ).run(now, now);
+    db.prepare(
+      "INSERT INTO agent_runs (id, taskAttemptId, roleId, provider, model, status, startedAt, finishedAt, createdAt, updatedAt) VALUES ('run1','att1','frontend-developer','claude','claude-sonnet-5','SUCCEEDED',?,?,?,?)",
+    ).run(now, now, now, now);
+    db.prepare(
+      "INSERT INTO ai_usage (id, agentRunId, projectId, provider, inputTokens, outputTokens, costUsd, cacheCreationInputTokens, cacheReadInputTokens, createdAt) VALUES ('u1','run1','p1','claude',100,50,0.01,20,80,?)",
+    ).run(now);
+    const usage = db.prepare("SELECT * FROM ai_usage WHERE id = 'u1'").get() as { cacheCreationInputTokens: number; cacheReadInputTokens: number };
+    assert.equal(usage.cacheCreationInputTokens, 20);
+    assert.equal(usage.cacheReadInputTokens, 80);
 
     db.close();
     rmSync(dir, { recursive: true, force: true });
@@ -334,7 +357,7 @@ describe("DB survives reopen/reconnect", () => {
     t.db.close();
 
     const reopened = reopenTestDb(dir);
-    assert.equal(getSchemaVersion(reopened), 6);
+    assert.equal(getSchemaVersion(reopened), 7);
     const roles = reopened.prepare("SELECT COUNT(*) as count FROM agent_roles").get() as { count: number };
     assert.equal(roles.count, AGENT_ROLE_CATALOG.length);
     reopened.close();
