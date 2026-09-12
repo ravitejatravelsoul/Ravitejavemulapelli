@@ -44,7 +44,7 @@ import { listInstalledOllamaModels } from "../providers/ollama/ollama-inventory.
 import type { AIProviderAdapter } from "../providers/types.ts";
 import { LocalModelRouter, type ModelFailureContext } from "./model-router.ts";
 import { applyFileOperations } from "../workspace/apply-file-operations.ts";
-import { workspaceExists } from "../workspace/workspace-service.ts";
+import { workspaceExists, listFiles } from "../workspace/workspace-service.ts";
 import { runQABrowserVerification } from "../workspace/qa-browser-verification.ts";
 import { getWorkspace, listWorkspaceFileRecords, setDeliveryState } from "../domain/workspace.ts";
 
@@ -130,6 +130,23 @@ function buildModelFailureContext(db: DatabaseSync, task: TaskRow, attemptNumber
     isSemanticFailure: lastFailureReason ? !isOperationalFailureReason(lastFailureReason) : true,
     previousModel: getPreviousAttemptModel(db, task.id, attemptNumber),
   };
+}
+
+/**
+ * Development deliverable contract, part 1 (local multi-model routing
+ * follow-up) — whether this task's PURPOSE is to implement/change real
+ * files, derived from the task's own intent (its title), not bare
+ * `role.id` alone: a future development-role task that isn't an
+ * implementation task (e.g. "Review frontend code", "Investigate a
+ * flaky test") must never be forced through the zero-fileOperations
+ * gate below just because its role happens to be development. Today,
+ * every task orchestrator.ts actually plans for frontend-developer/
+ * backend-developer is titled "Implement <domain> — <idea title>"
+ * (see orchestrator.ts's `titleFor` map) — this recognizes that same
+ * intent generically, by pattern, rather than hardcoding a role id.
+ */
+function isImplementationIntentTask(role: AgentRoleRow, task: TaskRow): boolean {
+  return isDevelopmentRole(role) && /^implement\b/i.test(task.title.trim());
 }
 
 /**
@@ -643,6 +660,39 @@ export async function executeTask(
         },
         usage: result.usage,
         raw: { fileOperationRejected: true },
+      };
+    }
+  }
+
+  // Development deliverable contract, part 2 (local multi-model routing
+  // follow-up) — text describing code is not equivalent to creating
+  // code. A real acceptance run showed gemma4 return SUCCEEDED with a
+  // fully correct Hello World page's HTML/CSS/JS content, but placed
+  // entirely inside a `code` artifact rather than `fileOperations`, so
+  // nothing was ever materialized to disk. Converted to a normal
+  // SEMANTIC failure (never "Operational:") so it flows through the
+  // *existing* failure/retry/remediation/model-escalation/attempt-
+  // ceiling pipeline untouched — no new retry engine, no new gate type.
+  // Workspace state (not attempt number alone) decides tolerance: a
+  // corrective attempt against a workspace that already has real files
+  // may legitimately require no further change (e.g. QA's reported bug
+  // was actually elsewhere) — a task with no real file yet has nothing
+  // that could possibly already satisfy it, so zero fileOperations there
+  // is never legitimate.
+  if (result.status === "SUCCEEDED" && project.provider === "ollama" && isImplementationIntentTask(role, task) && result.output.fileOperations.length === 0) {
+    const existingFiles = await listFiles(project.id);
+    if (existingFiles.length === 0) {
+      result = {
+        status: "FAILED",
+        output: {
+          ...result.output,
+          failure: {
+            reason:
+              "Development task returned implementation content but did not provide any file operations, so no real deliverable was created or changed.",
+          },
+        },
+        usage: result.usage,
+        raw: { zeroFileOperationsBlocked: true },
       };
     }
   }

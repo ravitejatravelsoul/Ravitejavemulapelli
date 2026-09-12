@@ -91,6 +91,23 @@ export interface AgentTaskInput {
   instructions: string;
 }
 
+/**
+ * Documentation, not execution — the human-readable record of what a
+ * role did (requirements, an architecture writeup, code shown for
+ * review, a summary). Never applied to the filesystem, and never parsed
+ * for code by any part of this codebase, deliberately: auto-extracting
+ * "code" out of free-form artifact text would be dangerous and
+ * ambiguous (no reliable way to know where a snippet begins/ends, what
+ * file it belongs in, or whether it's illustrative rather than
+ * literal). `FileOperationPayload.fileOperations` below is the ONLY
+ * authoritative mechanism for actually changing the real project
+ * workspace — a development role's artifact may *describe or contain*
+ * real code, but agent-runner.ts's development-deliverable contract
+ * (see `isImplementationIntentTask` in agents/agent-runner.ts) treats a
+ * SUCCEEDED implementation task with zero fileOperations as a semantic
+ * failure regardless of what its artifacts say, because text describing
+ * code is not equivalent to creating code.
+ */
 export interface ArtifactPayload {
   kind: "artifact";
   artifactType: string;

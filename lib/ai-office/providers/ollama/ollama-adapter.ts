@@ -167,7 +167,7 @@ function buildPrompt(input: AgentTaskInput): string {
       ? `Every artifact you produce must use exactly "artifactType": "${expectedArtifactType}" — no other value is valid for this role.`
       : "",
     FILE_WRITING_ROLES.has(input.role)
-      ? 'You may also write real files into the project workspace via "fileOperations": [{"kind":"file-operation","action":"write","path": "relative/file/path","content": "full file content"}] — paths must be relative (no leading slash, no ".."), and content must be the complete file, not a diff or a description of one.'
+      ? 'Your implementation is not complete unless you emit the required "fileOperations" that create or update the real project workspace: [{"kind":"file-operation","action":"write","path": "relative/file/path","content": "full file content"}] — paths must be relative (no leading slash, no ".."), and content must be the complete file, not a diff or a description of one. Do not place executable source code only inside the "artifacts" field — an artifact may summarize the work in prose, but "fileOperations" is the ONLY mechanism that actually changes the application. A response with no fileOperations will be treated as if no implementation work was done, even if an artifact describes or contains the code.'
       : "",
     'If you cannot complete the task, instead include a top-level "failure": {"reason": string} field.',
   ].join("\n");

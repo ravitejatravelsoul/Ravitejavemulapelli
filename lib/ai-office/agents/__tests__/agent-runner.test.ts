@@ -9,7 +9,7 @@ import { listWorkspaceFileRecords, getWorkspace, setDeliveryState } from "../../
 import { getOwner } from "../../domain/users.ts";
 import { createProjectWithIdea, getProject } from "../../domain/projects.ts";
 import { createTask, createTaskWithDependencies, getTask, listTaskAttempts, getAgentRun, updateTaskStatus } from "../../domain/tasks.ts";
-import { listArtifactsForProject, listDecisionsForProject, listTestResultsForTask, listUnresolvedFailures } from "../../domain/project-outputs.ts";
+import { listArtifactsForProject, listDecisionsForProject, listTestResultsForTask, listUnresolvedFailures, recordFailure } from "../../domain/project-outputs.ts";
 import { listEventsForProject } from "../../domain/events.ts";
 import { listAiUsageForProject } from "../../domain/budget.ts";
 import { getProjectMemory } from "../../domain/project-memory.ts";
@@ -771,6 +771,238 @@ describe("real file materialization (Phase 8)", () => {
   });
 });
 
+describe("development deliverable contract (local multi-model routing follow-up)", () => {
+  function setupOllamaDevProject(t: ReturnType<typeof createTestDb>) {
+    const owner = getOwner(t.db)!;
+    const { project } = createProjectWithIdea(t.db, {
+      title: "Deliverable contract test",
+      rawIdeaText: "Create a simple Hello World webpage with a heading, description and a button.",
+      ownerId: owner.id,
+      provider: "ollama",
+    });
+    return project;
+  }
+
+  const fastFetch = (async () =>
+    ({ ok: true, status: 200, json: async () => ({ response: JSON.stringify({ consistent: true, reason: "ok" }) }) }) as unknown as Response) as unknown as typeof fetch;
+
+  /** Reproduces the exact real-acceptance-run failure mode: SUCCEEDED, a real `code` artifact containing correct implementation content, but zero fileOperations. */
+  function codeArtifactNoFileOpsAdapter() {
+    return {
+      name: "ollama",
+      async runAgentTask() {
+        return {
+          status: "SUCCEEDED" as const,
+          output: {
+            summary: "Implemented the page.",
+            artifacts: [{ kind: "artifact" as const, artifactType: "code", content: "<!doctype html><html><body><h1>Hello, World!</h1></body></html>" }],
+            decisions: [],
+            testResults: [],
+            events: [],
+            fileOperations: [],
+            recommendedNextActions: [],
+          },
+          usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+        };
+      },
+      estimateCost() {
+        return { estimatedInputTokens: 0, estimatedOutputTokens: 0, estimatedCostUsd: 0 };
+      },
+    };
+  }
+
+  test("SUCCEEDED + code artifact + zero fileOperations on an implementation task is converted to a semantic FAILED result, never silently marked DONE", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const project = setupOllamaDevProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+      const result = await executeTask(t.db, task.id, { provider: codeArtifactNoFileOpsAdapter(), intentCheckFetch: fastFetch });
+
+      assert.equal(result.outcome, "retried", "a real, bounded retry — not a permanently blocked task, not a silent DONE");
+      assert.equal(getTask(t.db, task.id)?.status, "PENDING");
+      const failures = listUnresolvedFailures(t.db, project.id);
+      assert.ok(failures.some((f) => f.taskId === task.id && /did not provide any file operations/.test(f.reason)));
+      assert.deepEqual(await listFiles(project.id), [], "a code artifact alone must never count as a materialized deliverable");
+      assert.equal(getWorkspace(t.db, project.id), undefined, "no workspace should ever be created from artifact text alone");
+
+      t.close();
+    });
+  });
+
+  test("the zero-fileOperations failure is classified SEMANTIC, not operational — it must consume real retry budget, unlike a timeout/malformed-JSON hiccup", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const project = setupOllamaDevProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+      await executeTask(t.db, task.id, { provider: codeArtifactNoFileOpsAdapter(), intentCheckFetch: fastFetch });
+
+      assert.equal(getTask(t.db, task.id)?.attemptCount, 1, "a real semantic failure consumes one real attempt, exactly like any other bad implementation");
+      t.close();
+    });
+  });
+
+  test("zero fileOperations triggers a normal retry that succeeds once real file operations are supplied", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const project = setupOllamaDevProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+      const first = await executeTask(t.db, task.id, { provider: codeArtifactNoFileOpsAdapter(), intentCheckFetch: fastFetch });
+      assert.equal(first.outcome, "retried");
+
+      const fixedAdapter = {
+        name: "ollama",
+        async runAgentTask() {
+          return {
+            status: "SUCCEEDED" as const,
+            output: {
+              summary: "Implemented the page.",
+              artifacts: [],
+              decisions: [],
+              testResults: [],
+              events: [],
+              fileOperations: [{ kind: "file-operation" as const, action: "write" as const, path: "index.html", content: "<h1>Hello, World!</h1>" }],
+              recommendedNextActions: [],
+            },
+            usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+          };
+        },
+        estimateCost() {
+          return { estimatedInputTokens: 0, estimatedOutputTokens: 0, estimatedCostUsd: 0 };
+        },
+      };
+
+      const second = await executeTask(t.db, task.id, { provider: fixedAdapter, intentCheckFetch: fastFetch });
+      assert.equal(second.outcome, "succeeded");
+      assert.deepEqual(await listFiles(project.id), ["index.html"]);
+
+      t.close();
+    });
+  });
+
+  test("zero fileOperations on a real-routing attempt escalates to a different local model on the semantic retry", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const project = setupOllamaDevProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+      const codeArtifactOnlyFetch = (async () =>
+        ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            response: JSON.stringify({
+              summary: "Implemented the page.",
+              artifacts: [{ kind: "artifact", artifactType: "code", content: "<h1>Hello, World!</h1>" }],
+              decisions: [],
+              testResults: [],
+              events: [],
+              fileOperations: [],
+              recommendedNextActions: [],
+            }),
+          }),
+        }) as unknown as Response) as unknown as typeof fetch;
+      const realFileOpFetch = (async () =>
+        ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            response: JSON.stringify({
+              summary: "Implemented the page.",
+              artifacts: [],
+              decisions: [],
+              testResults: [],
+              events: [],
+              fileOperations: [{ kind: "file-operation", action: "write", path: "index.html", content: "<h1>Hello, World!</h1>" }],
+              recommendedNextActions: [],
+            }),
+          }),
+        }) as unknown as Response) as unknown as typeof fetch;
+
+      const first = await executeTask(t.db, task.id, {
+        availableModelsOverride: ["gemma4:latest", "qwen3.6:latest"],
+        ollamaFetchImpl: codeArtifactOnlyFetch,
+        intentCheckFetch: fastFetch,
+      });
+      assert.equal(first.outcome, "retried");
+      assert.equal(first.agentRun!.model, "gemma4:latest");
+
+      const second = await executeTask(t.db, task.id, {
+        availableModelsOverride: ["gemma4:latest", "qwen3.6:latest"],
+        ollamaFetchImpl: realFileOpFetch,
+        intentCheckFetch: fastFetch,
+      });
+      assert.equal(second.outcome, "succeeded");
+      assert.equal(second.agentRun!.model, "qwen3.6:latest", "a zero-fileOperations semantic failure must escalate past the model that just produced it");
+
+      t.close();
+    });
+  });
+
+  test("a legitimate no-write corrective attempt succeeds when the workspace already has real files — not every developer attempt must write a file", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const project = setupOllamaDevProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+      // Attempt 1: real fileOperations actually create the workspace.
+      const firstAdapter = {
+        name: "ollama",
+        async runAgentTask() {
+          return {
+            status: "SUCCEEDED" as const,
+            output: {
+              summary: "Implemented.",
+              artifacts: [],
+              decisions: [],
+              testResults: [],
+              events: [],
+              fileOperations: [{ kind: "file-operation" as const, action: "write" as const, path: "index.html", content: "<h1>Hello, World!</h1>" }],
+              recommendedNextActions: [],
+            },
+            usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+          };
+        },
+        estimateCost() {
+          return { estimatedInputTokens: 0, estimatedOutputTokens: 0, estimatedCostUsd: 0 };
+        },
+      };
+      const first = await executeTask(t.db, task.id, { provider: firstAdapter, intentCheckFetch: fastFetch });
+      assert.equal(first.outcome, "succeeded");
+
+      // Simulate a later reopening (e.g. a QA/review finding unrelated to
+      // the developer's own file) by recording a fresh unresolved failure
+      // against this same task and returning it to PENDING, exactly like
+      // finishFailure's own remediation-target reopening does.
+      recordFailure(t.db, { projectId: project.id, taskId: task.id, agentRunId: first.agentRun!.id, reason: "Unrelated review finding." });
+      updateTaskStatus(t.db, task.id, "PENDING");
+
+      // Attempt 2 (corrective): the model determines no further change is
+      // needed and returns zero fileOperations — must NOT be blocked,
+      // because the workspace already has a real deliverable.
+      const noChangeAdapter = {
+        name: "ollama",
+        async runAgentTask() {
+          return {
+            status: "SUCCEEDED" as const,
+            output: { summary: "No change needed — existing implementation already satisfies the request.", artifacts: [], decisions: [], testResults: [], events: [], fileOperations: [], recommendedNextActions: [] },
+            usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+          };
+        },
+        estimateCost() {
+          return { estimatedInputTokens: 0, estimatedOutputTokens: 0, estimatedCostUsd: 0 };
+        },
+      };
+      const second = await executeTask(t.db, task.id, { provider: noChangeAdapter, intentCheckFetch: fastFetch });
+      assert.equal(second.outcome, "succeeded", "a corrective attempt against an already-real deliverable may legitimately need no further write");
+
+      t.close();
+    });
+  });
+});
+
 describe("Release Agent's real deliverable readiness gate (Phase 8 Part K)", () => {
   function releaseSpy() {
     let called = false;
@@ -1013,7 +1245,15 @@ describe("intent-consistency gates — real-provider only, never triggered by Si
         developerAdapterCalled = true;
         return {
           status: "SUCCEEDED" as const,
-          output: { summary: "ok", artifacts: [], decisions: [], testResults: [], events: [], fileOperations: [], recommendedNextActions: [] },
+          output: {
+            summary: "ok",
+            artifacts: [],
+            decisions: [],
+            testResults: [],
+            events: [],
+            fileOperations: [{ kind: "file-operation" as const, action: "write" as const, path: "index.html", content: "<html></html>" }],
+            recommendedNextActions: [],
+          },
           usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
         };
       },
@@ -1022,10 +1262,12 @@ describe("intent-consistency gates — real-provider only, never triggered by Si
       },
     };
 
-    const result = await executeTask(t.db, devTask.id, {
-      provider: developerAdapter,
-      intentCheckFetch: fetchReturning(true, "The architecture describes a webpage as requested."),
-    });
+    const result = await withWorkspace(() =>
+      executeTask(t.db, devTask.id, {
+        provider: developerAdapter,
+        intentCheckFetch: fetchReturning(true, "The architecture describes a webpage as requested."),
+      }),
+    );
 
     assert.equal(developerAdapterCalled, true);
     assert.equal(result.outcome, "succeeded");
