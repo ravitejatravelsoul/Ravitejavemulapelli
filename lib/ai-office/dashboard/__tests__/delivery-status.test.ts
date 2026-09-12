@@ -1,6 +1,6 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { getHonestStatusLabel, isUnverifiedCompletionClaim, getPreviewStatusLabel, NO_DELIVERABLE_LABEL } from "../delivery-status.ts";
+import { getHonestStatusLabel, isUnverifiedCompletionClaim, getPreviewStatusLabel, NO_DELIVERABLE_LABEL, isStalledWithNoDeliverable } from "../delivery-status.ts";
 
 describe("getHonestStatusLabel", () => {
   test("non-completion statuses always pass through unchanged, regardless of workspace/deliveryState", () => {
@@ -63,5 +63,31 @@ describe("getPreviewStatusLabel", () => {
   test("PREVIEW READY only when VERIFIED and an index.html actually exists", () => {
     assert.equal(getPreviewStatusLabel(true, "VERIFIED", true), "PREVIEW READY");
     assert.equal(getPreviewStatusLabel(true, "VERIFIED", false), "NOT RUNNABLE", "VERIFIED with no index.html is not runnable, never claimed ready");
+  });
+});
+
+describe("isStalledWithNoDeliverable (local multi-model routing follow-up, Part 7)", () => {
+  test("true: every task DONE, IN_PROGRESS, but no workspace ever existed — the exact real acceptance-run failure mode", () => {
+    assert.equal(isStalledWithNoDeliverable({ status: "IN_PROGRESS", allTasksDone: true, hasWorkspace: false, deliveryState: null }), true);
+  });
+
+  test("true: every task DONE, IN_PROGRESS, workspace exists but the last build FAILED", () => {
+    assert.equal(isStalledWithNoDeliverable({ status: "IN_PROGRESS", allTasksDone: true, hasWorkspace: true, deliveryState: "FAILED" }), true);
+  });
+
+  test("false: not every task is DONE yet — still legitimately working", () => {
+    assert.equal(isStalledWithNoDeliverable({ status: "IN_PROGRESS", allTasksDone: false, hasWorkspace: false, deliveryState: null }), false);
+  });
+
+  test("false: project status is not IN_PROGRESS (e.g. already BLOCKED, PAUSED, or a real terminal state)", () => {
+    for (const status of ["BLOCKED", "PAUSED", "READY_FOR_REVIEW", "DRAFT"] as const) {
+      assert.equal(isStalledWithNoDeliverable({ status, allTasksDone: true, hasWorkspace: false, deliveryState: null }), false);
+    }
+  });
+
+  test("false: every task DONE, IN_PROGRESS, but the deliverable is actually VERIFIED, BUILDING, or VERIFYING — not actually stuck", () => {
+    for (const state of ["VERIFIED", "BUILDING", "VERIFYING"] as const) {
+      assert.equal(isStalledWithNoDeliverable({ status: "IN_PROGRESS", allTasksDone: true, hasWorkspace: true, deliveryState: state }), false);
+    }
   });
 });

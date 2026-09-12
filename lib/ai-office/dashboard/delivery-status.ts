@@ -39,6 +39,30 @@ export function isUnverifiedCompletionClaim(status: ProjectStatus, hasWorkspace:
   return TERMINAL_COMPLETION_STATUSES.has(status) && (!hasWorkspace || deliveryState !== "VERIFIED");
 }
 
+export const STALLED_NO_DELIVERABLE_LABEL = "STALLED · NO DELIVERABLE";
+
+/**
+ * Local multi-model routing follow-up, Part 7 — a real acceptance run
+ * exposed a project silently stuck at IN_PROGRESS forever: every planned
+ * task reached DONE, but no real deliverable was ever produced (no
+ * workspace/files, or a build that never got past FAILED), so
+ * `advanceProjectStatus()` in agent-runner.ts (which only advances a
+ * project once a real PASSing QA test result exists) never moves it
+ * forward and nothing further is ever eligible to run. Purely
+ * derived/read-only — `project.status` itself is never touched or
+ * widened; this only decides whether the UI should show something more
+ * honest than an unexplained, indefinitely "IN PROGRESS" project.
+ */
+export function isStalledWithNoDeliverable(input: {
+  status: ProjectStatus;
+  allTasksDone: boolean;
+  hasWorkspace: boolean;
+  deliveryState: DeliveryState | null;
+}): boolean {
+  if (input.status !== "IN_PROGRESS" || !input.allTasksDone) return false;
+  return !input.hasWorkspace || input.deliveryState === null || input.deliveryState === "FAILED";
+}
+
 export type PreviewStatusLabel = "PREVIEW READY" | "BUILD FAILED" | "NOT RUNNABLE" | "VERIFYING";
 
 /** Phase 8 Part N — the Preview UI's status line. Never says "ready" without a verified deliverable that actually has an index.html to serve. */

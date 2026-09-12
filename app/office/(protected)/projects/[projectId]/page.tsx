@@ -49,6 +49,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
     workspace,
     displayStatusLabel,
     isUnverifiedCompletion,
+    isStalledWithNoDeliverable,
   } = detail;
   const canPause = project.status === "IN_PROGRESS";
   const canResume = project.status === "PAUSED";
@@ -84,7 +85,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-lg font-semibold tracking-tight">{project.title}</h1>
-              <Badge variant={isUnverifiedCompletion ? "outline" : "default"}>{displayStatusLabel}</Badge>
+              <Badge variant={isStalledWithNoDeliverable ? "destructive" : isUnverifiedCompletion ? "outline" : "default"}>{displayStatusLabel}</Badge>
               <Badge variant="outline" className="font-mono text-[0.6rem] uppercase">
                 {project.aiMode}
               </Badge>

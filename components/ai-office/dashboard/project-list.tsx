@@ -27,7 +27,9 @@ function ProjectCard({ project }: { project: ProjectSummary }) {
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="truncate text-sm font-semibold tracking-tight">{project.title}</h3>
-            <Badge variant={project.isUnverifiedCompletion ? "outline" : STATUS_VARIANT[project.status]}>{project.displayStatusLabel}</Badge>
+            <Badge variant={project.isStalledWithNoDeliverable ? "destructive" : project.isUnverifiedCompletion ? "outline" : STATUS_VARIANT[project.status]}>
+              {project.displayStatusLabel}
+            </Badge>
             <Badge variant="outline" className="font-mono text-[0.6rem] uppercase">
               {project.aiMode}
             </Badge>

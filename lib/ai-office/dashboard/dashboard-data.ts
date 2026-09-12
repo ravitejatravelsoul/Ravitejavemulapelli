@@ -9,7 +9,7 @@ import { listRecentEvents, type MessageEventRow } from "../domain/events.ts";
 import { sumSimulatedCostForProject, sumLiveCostForProject } from "../domain/budget.ts";
 import { getBudgetSnapshot, type BudgetSnapshot } from "../budget/budget-service.ts";
 import { getWorkspace, getMostRecentRunnerHeartbeat, type DeliveryState } from "../domain/workspace.ts";
-import { getHonestStatusLabel, isUnverifiedCompletionClaim } from "./delivery-status.ts";
+import { getHonestStatusLabel, isUnverifiedCompletionClaim, isStalledWithNoDeliverable, STALLED_NO_DELIVERABLE_LABEL } from "./delivery-status.ts";
 
 /**
  * Read-only aggregation for the private dashboard
@@ -110,6 +110,7 @@ export interface ProjectSummary {
   /** Phase 8 Part L — the honest completion label to display instead of `status` (identical to `status` unless the project claims completion without a verified real deliverable). */
   displayStatusLabel: string;
   isUnverifiedCompletion: boolean;
+  isStalledWithNoDeliverable: boolean;
 }
 
 function truncate(text: string, max: number): string {
@@ -131,6 +132,12 @@ function summarizeProject(db: DatabaseSync, project: ProjectRow): ProjectSummary
   const latestAttemptedTask = [...tasks].sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null;
   const workspace = getWorkspace(db, project.id);
   const deliveryState: DeliveryState | null = workspace?.deliveryState ?? null;
+  const stalled = isStalledWithNoDeliverable({
+    status: project.status,
+    allTasksDone: tasks.length > 0 && completedTasks === tasks.length,
+    hasWorkspace: workspace !== undefined,
+    deliveryState,
+  });
 
   return {
     id: project.id,
@@ -150,8 +157,9 @@ function summarizeProject(db: DatabaseSync, project: ProjectRow): ProjectSummary
     liveCostUsd: sumLiveCostForProject(db, project.id), // must stay $0 through Phase 6 — no live provider exists yet
     canPause: project.status === "IN_PROGRESS",
     canResume: project.status === "PAUSED",
-    displayStatusLabel: getHonestStatusLabel(project.status, workspace !== undefined, deliveryState),
+    displayStatusLabel: stalled ? STALLED_NO_DELIVERABLE_LABEL : getHonestStatusLabel(project.status, workspace !== undefined, deliveryState),
     isUnverifiedCompletion: isUnverifiedCompletionClaim(project.status, workspace !== undefined, deliveryState),
+    isStalledWithNoDeliverable: stalled,
   };
 }
 

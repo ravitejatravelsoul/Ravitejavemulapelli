@@ -88,7 +88,9 @@ export function NewProjectForm() {
               {checking && <span className="text-muted-foreground">Checking Ollama…</span>}
               {!checking && health && health.online && (
                 <span className="text-accent-2">
-                  Ollama online{health.models[0] ? ` · ${health.models[0]}` : ""}
+                  {health.models.length > 0
+                    ? `Ollama online · installed: ${health.models.join(", ")} — routed automatically per role`
+                    : "Ollama online · no models installed"}
                 </span>
               )}
               {!checking && health && !health.online && <span className="text-destructive">Ollama offline — start it before running this project</span>}

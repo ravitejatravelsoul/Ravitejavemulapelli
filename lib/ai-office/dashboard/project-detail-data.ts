@@ -20,7 +20,7 @@ import { getProjectMemory } from "../domain/project-memory.ts";
 import { sumSimulatedCostForProject, sumLiveCostForProject } from "../domain/budget.ts";
 import { describeEvent, type ActivityEntry } from "./dashboard-data.ts";
 import { getWorkspace, listWorkspaceFileRecords, type DeliveryState, type WorkspaceFileRow } from "../domain/workspace.ts";
-import { getHonestStatusLabel, isUnverifiedCompletionClaim } from "./delivery-status.ts";
+import { getHonestStatusLabel, isUnverifiedCompletionClaim, isStalledWithNoDeliverable, STALLED_NO_DELIVERABLE_LABEL } from "./delivery-status.ts";
 
 /** Read-only aggregation for `/office/projects/[projectId]` — one project, examined deeply. */
 
@@ -76,6 +76,7 @@ export interface ProjectDetail {
   workspace: WorkspaceView;
   displayStatusLabel: string;
   isUnverifiedCompletion: boolean;
+  isStalledWithNoDeliverable: boolean;
 }
 
 function truncate(text: string, max: number): string {
@@ -135,11 +136,19 @@ export function getProjectDetail(db: DatabaseSync, projectId: string): ProjectDe
     canPreview: deliveryState === "VERIFIED" && files.some((f) => f.path === "index.html"),
   };
 
+  const progress = { completed: rawTasks.filter((t) => t.status === "DONE").length, total: rawTasks.length };
+  const stalled = isStalledWithNoDeliverable({
+    status: project.status,
+    allTasksDone: progress.total > 0 && progress.completed === progress.total,
+    hasWorkspace: workspace.hasWorkspace,
+    deliveryState,
+  });
+
   return {
     project,
     ideaText: idea?.rawText ?? "",
     tasks,
-    progress: { completed: rawTasks.filter((t) => t.status === "DONE").length, total: rawTasks.length },
+    progress,
     failures: listUnresolvedFailures(db, projectId),
     decisions: listDecisionsForProject(db, projectId),
     artifacts,
@@ -150,8 +159,9 @@ export function getProjectDetail(db: DatabaseSync, projectId: string): ProjectDe
     simulatedCostUsd: sumSimulatedCostForProject(db, projectId),
     liveCostUsd: sumLiveCostForProject(db, projectId),
     workspace,
-    displayStatusLabel: getHonestStatusLabel(project.status, workspace.hasWorkspace, deliveryState),
+    displayStatusLabel: stalled ? STALLED_NO_DELIVERABLE_LABEL : getHonestStatusLabel(project.status, workspace.hasWorkspace, deliveryState),
     isUnverifiedCompletion: isUnverifiedCompletionClaim(project.status, workspace.hasWorkspace, deliveryState),
+    isStalledWithNoDeliverable: stalled,
   };
 }
 
