@@ -112,6 +112,19 @@ describe("frontend-build evaluation", () => {
     );
     assert.equal(evaluation.status, "PARTIAL");
   });
+
+  test("PARTIAL, never PASS: correct code content placed only in an artifact, zero fileOperations (Part 8 — output-channel compliance)", () => {
+    const evaluation = scenario.evaluate(succeeded({ fileOperations: [], artifacts: [{ kind: "artifact", artifactType: "code", content: goodHtml }] }));
+    assert.equal(evaluation.status, "PARTIAL");
+    assert.notEqual(evaluation.status, "PASS", "writing correct code into the wrong channel must never earn a coding PASS");
+    assert.equal(evaluation.fileOperationValid, false);
+    assert.match(evaluation.notes, /wrong structured output channel/i);
+  });
+
+  test("FAIL (not PARTIAL): zero fileOperations AND no recognizable code in artifacts either", () => {
+    const evaluation = scenario.evaluate(succeeded({ fileOperations: [], artifacts: [{ kind: "artifact", artifactType: "code", content: "I could not complete this task." }] }));
+    assert.equal(evaluation.status, "FAIL");
+  });
 });
 
 describe("frontend-bug-fix evaluation (the class of bug gemma4 previously failed)", () => {
@@ -142,6 +155,13 @@ describe("frontend-bug-fix evaluation (the class of bug gemma4 previously failed
   test("FAIL: no file operation at all", () => {
     const evaluation = scenario.evaluate(succeeded({ fileOperations: [] }));
     assert.equal(evaluation.status, "FAIL");
+  });
+
+  test("PARTIAL, never PASS: the fix was described/shown in an artifact but never emitted as a fileOperation (Part 8)", () => {
+    const evaluation = scenario.evaluate(succeeded({ fileOperations: [], artifacts: [{ kind: "artifact", artifactType: "code", content: fixedHtml }] }));
+    assert.equal(evaluation.status, "PARTIAL");
+    assert.notEqual(evaluation.status, "PASS");
+    assert.equal(evaluation.defectDiagnosed, false);
   });
 });
 

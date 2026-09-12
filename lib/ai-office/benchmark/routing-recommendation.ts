@@ -54,15 +54,44 @@ function pickBest(stats: ModelStats[]): ModelStats | undefined {
   return stats.sort((a, b) => (b.successRate !== a.successRate ? b.successRate - a.successRate : a.avgLatencyMs - b.avgLatencyMs))[0];
 }
 
-export interface GenerateRecommendedRoutingResult {
-  generated: RecommendedRoutingRow[];
-  skipped: ModelCapability[];
+/**
+ * Minimum-quality gate (local multi-model routing follow-up, Part 11) —
+ * without this, "highest success rate wins" can recommend a model that
+ * simply failed *less badly* than every alternative (a real run
+ * recommended gemma4 for CODING despite a measured 0% success rate,
+ * purely because qwen3.6 scored even lower). A benchmark recommendation
+ * exists to be an honest signal, not a forced pick — below this
+ * threshold, the honest answer is "no locally-tested model is good
+ * enough yet," not "here's the least-bad option." 50% is a simple,
+ * transparent line (per Part J, not meant to be scientifically precise):
+ * a model that fails more often than it succeeds has not demonstrated
+ * real capability for this work.
+ */
+export const MIN_QUALIFYING_SUCCESS_RATE = 0.5;
+
+/** Sentinel "model" name for a capability where no tested model met the minimum threshold. Never matches a real installed model name, so LocalModelRouter's own `available.has(...)` check naturally treats an applied recommendation of this value as unusable and falls back to the default chain — no special-casing needed in the router itself. */
+export const NO_QUALIFIED_MODEL = "NO QUALIFIED LOCAL MODEL";
+
+function buildUnqualifiedReason(stats: ModelStats[], capability: ModelCapability): string {
+  const perModel = [...stats]
+    .sort((a, b) => b.successRate - a.successRate)
+    .map((s) => `${s.model} produced ${(s.successRate * 100).toFixed(0)}% success across ${s.sampleCount} benchmark run(s)`);
+  return `No locally-tested model met the ${(MIN_QUALIFYING_SUCCESS_RATE * 100).toFixed(0)}% minimum success threshold for ${capability.toLowerCase()}: ${perModel.join("; ")}.`;
 }
 
-/** Regenerates a recommendation for every capability that has at least one benchmark result — a capability with zero evidence is skipped honestly rather than guessed at. */
+export interface GenerateRecommendedRoutingResult {
+  generated: RecommendedRoutingRow[];
+  /** Capabilities with zero benchmark evidence at all (e.g. FAST, which has no scenario yet) — never guessed at. */
+  skipped: ModelCapability[];
+  /** Capabilities that DO have benchmark evidence, but no tested model met MIN_QUALIFYING_SUCCESS_RATE — recommended as NO_QUALIFIED_MODEL rather than the least-bad option. */
+  unqualified: ModelCapability[];
+}
+
+/** Regenerates a recommendation for every capability that has at least one benchmark result — a capability with zero evidence is skipped honestly rather than guessed at, and a capability where nothing cleared the minimum-quality bar is recommended as NO_QUALIFIED_MODEL rather than the least-bad option. */
 export function generateRecommendedRouting(db: DatabaseSync): GenerateRecommendedRoutingResult {
   const generated: RecommendedRoutingRow[] = [];
   const skipped: ModelCapability[] = [];
+  const unqualified: ModelCapability[] = [];
 
   for (const capability of Object.keys(CAPABILITY_SCENARIOS) as ModelCapability[]) {
     const scenarioIds = CAPABILITY_SCENARIOS[capability];
@@ -76,9 +105,14 @@ export function generateRecommendedRouting(db: DatabaseSync): GenerateRecommende
       skipped.push(capability);
       continue;
     }
+    if (best.successRate < MIN_QUALIFYING_SUCCESS_RATE) {
+      unqualified.push(capability);
+      generated.push(upsertRecommendedRouting(db, { capability, model: NO_QUALIFIED_MODEL, reason: buildUnqualifiedReason(stats, capability) }));
+      continue;
+    }
     const reason = `${(best.successRate * 100).toFixed(0)}% success across ${best.sampleCount} benchmark run(s) for ${capability.toLowerCase()} scenarios (${scenarioIds.join(", ")}), avg latency ${Math.round(best.avgLatencyMs)}ms.`;
     generated.push(upsertRecommendedRouting(db, { capability, model: best.model, reason }));
   }
 
-  return { generated, skipped };
+  return { generated, skipped, unqualified };
 }

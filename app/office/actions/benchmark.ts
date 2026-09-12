@@ -54,6 +54,7 @@ export interface GenerateRecommendationActionState {
   success?: boolean;
   generatedCapabilities?: string[];
   skippedCapabilities?: string[];
+  unqualifiedCapabilities?: string[];
 }
 
 export async function generateRecommendedRoutingAction(): Promise<GenerateRecommendationActionState> {
@@ -61,9 +62,9 @@ export async function generateRecommendedRoutingAction(): Promise<GenerateRecomm
   if (!session) return { error: "You must be signed in." };
 
   const db = getAppDatabase();
-  const { generated, skipped } = generateRecommendedRouting(db);
+  const { generated, skipped, unqualified } = generateRecommendedRouting(db);
   const generatedCapabilities = generated.map((r) => capabilitySchema.parse(r.capability));
 
   revalidatePath("/office/local-models");
-  return { success: true, generatedCapabilities, skippedCapabilities: skipped };
+  return { success: true, generatedCapabilities, skippedCapabilities: skipped, unqualifiedCapabilities: unqualified };
 }

@@ -5,6 +5,7 @@ import { getOwner } from "../../domain/users.ts";
 import { createProjectWithIdea } from "../../domain/projects.ts";
 import { setProjectModelPolicy, upsertRecommendedRouting, applyRecommendedRouting } from "../../domain/model-routing.ts";
 import { LocalModelRouter, ModelUnavailableError, capabilityForRole } from "../model-router.ts";
+import { NO_QUALIFIED_MODEL } from "../../benchmark/routing-recommendation.ts";
 
 process.env.OFFICE_OWNER_EMAIL = "test-owner@example.invalid";
 process.env.OFFICE_OWNER_PASSWORD_HASH = "synthetic-test-salt:synthetic-test-hash-not-a-real-scrypt-output";
@@ -97,6 +98,18 @@ describe("LocalModelRouter — AUTO policy (default)", () => {
     const router = new LocalModelRouter(t.db);
     const result = router.selectModel({ role: "frontend-developer", project, attemptNumber: 1, availableModels: BOTH_INSTALLED });
     assert.equal(result.model, "gemma4:latest");
+    t.close();
+  });
+
+  test("an applied NO_QUALIFIED_MODEL recommendation (Part 11) falls back to the default chain — the owner's configured fallback still applies", () => {
+    const t = createTestDb();
+    const project = setupProject(t);
+    upsertRecommendedRouting(t.db, { capability: "CODING", model: NO_QUALIFIED_MODEL, reason: "No locally-tested model met the 50% minimum success threshold." });
+    applyRecommendedRouting(t.db);
+
+    const router = new LocalModelRouter(t.db);
+    const result = router.selectModel({ role: "frontend-developer", project, attemptNumber: 1, availableModels: BOTH_INSTALLED });
+    assert.equal(result.model, "gemma4:latest", "the sentinel is never a real installed model, so AUTO falls back to the default chain, never crashes or fabricates a model");
     t.close();
   });
 });

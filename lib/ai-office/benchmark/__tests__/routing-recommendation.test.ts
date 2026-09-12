@@ -2,7 +2,7 @@ import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { createTestDb } from "../../db/test-helpers.ts";
 import { recordBenchmarkResult, listRecommendedRouting, getAppliedRouting } from "../../domain/model-routing.ts";
-import { generateRecommendedRouting } from "../routing-recommendation.ts";
+import { generateRecommendedRouting, NO_QUALIFIED_MODEL } from "../routing-recommendation.ts";
 
 function seed(db: ReturnType<typeof createTestDb>["db"], model: string, scenarioId: string, roleId: string, status: "PASS" | "FAIL", latencyMs: number) {
   recordBenchmarkResult(db, { model, scenarioId, roleId, status, score: status === "PASS" ? 90 : 10, latencyMs });
@@ -60,6 +60,48 @@ describe("generateRecommendedRouting", () => {
     assert.ok(rows.length > 0);
     for (const row of rows) assert.equal(row.appliedAt, null);
     assert.equal(getAppliedRouting(t.db).length, 0);
+    t.close();
+  });
+});
+
+describe("generateRecommendedRouting — minimum-quality threshold (Part 11)", () => {
+  test("refuses to nominate a model below the minimum success threshold — the real gemma4-CODING-0%-recommended-anyway problem", () => {
+    const t = createTestDb();
+    // Exactly the real observed evidence: gemma4 failed both coding
+    // scenarios every time (0%); qwen3.6 also failed every time (0%).
+    seed(t.db, "gemma4:latest", "frontend-build", "frontend-developer", "FAIL", 90000);
+    seed(t.db, "gemma4:latest", "frontend-bug-fix", "frontend-developer", "FAIL", 25000);
+    seed(t.db, "qwen3.6:latest", "frontend-build", "frontend-developer", "FAIL", 87000);
+    seed(t.db, "qwen3.6:latest", "frontend-bug-fix", "frontend-developer", "FAIL", 44000);
+
+    const { generated, unqualified } = generateRecommendedRouting(t.db);
+    const coding = generated.find((r) => r.capability === "CODING");
+    assert.equal(coding?.model, NO_QUALIFIED_MODEL, "must never recommend the least-bad 0%-quality model");
+    assert.ok(unqualified.includes("CODING"));
+    assert.match(coding!.reason, /gemma4:latest/);
+    assert.match(coding!.reason, /qwen3\.6:latest/);
+    t.close();
+  });
+
+  test("a model exactly at or above the 50% threshold is a real, qualified recommendation", () => {
+    const t = createTestDb();
+    seed(t.db, "gemma4:latest", "frontend-build", "frontend-developer", "PASS", 30000);
+    seed(t.db, "gemma4:latest", "frontend-bug-fix", "frontend-developer", "FAIL", 25000);
+
+    const { generated, unqualified } = generateRecommendedRouting(t.db);
+    const coding = generated.find((r) => r.capability === "CODING");
+    assert.equal(coding?.model, "gemma4:latest");
+    assert.ok(!unqualified.includes("CODING"));
+    t.close();
+  });
+
+  test("a capability where every candidate model qualifies still recommends normally, unaffected by the threshold", () => {
+    const t = createTestDb();
+    seed(t.db, "gemma4:latest", "product-owner-basic", "product-owner", "PASS", 30000);
+    const { generated, unqualified } = generateRecommendedRouting(t.db);
+    const general = generated.find((r) => r.capability === "GENERAL");
+    assert.equal(general?.model, "gemma4:latest");
+    assert.equal(unqualified.length, 0);
     t.close();
   });
 });

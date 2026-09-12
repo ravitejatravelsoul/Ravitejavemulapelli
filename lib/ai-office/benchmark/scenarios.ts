@@ -67,6 +67,22 @@ const BACKEND_LEAK_SIGNALS = /\b(database|rest api|backend service|server-side|a
 
 const HELLO_WORLD_REQUEST = "Create a simple Hello World webpage with a heading, description and a button.";
 
+/**
+ * Output-channel compliance (local multi-model routing follow-up, Part
+ * 8) — a model can produce genuinely correct-looking markup while still
+ * failing the actual task, because it placed that content in `artifacts`
+ * (documentation) instead of `fileOperations` (execution); see
+ * `ArtifactPayload`'s docblock in providers/types.ts for the full
+ * contract. This is exactly the real acceptance-run failure mode: a
+ * model must never receive a coding PASS for writing correct code into
+ * the wrong channel, but it's also meaningfully different from producing
+ * no usable content at all, so it's scored as its own recognizable
+ * PARTIAL rather than collapsed into an undifferentiated FAIL.
+ */
+function looksLikeRealCode(text: string): boolean {
+  return /<html[\s>]/i.test(text) || (/<h1[\s>]/i.test(text) && /<button[\s>]/i.test(text));
+}
+
 const productOwnerBasic: BenchmarkScenario = {
   id: "product-owner-basic",
   roleId: "product-owner",
@@ -151,6 +167,15 @@ const frontendBuild: BenchmarkScenario = {
     if (fileOperationValid && (hasHeading || hasButton)) {
       return { status: "PARTIAL", score: SCORE_BY_STATUS.PARTIAL, notes: "Produced file operations but missing one of heading/button/script linkage.", fileOperationValid: true, matchesRequest: false };
     }
+    if (ops.length === 0 && looksLikeRealCode(result.output.artifacts.map((a) => a.content).join("\n"))) {
+      return {
+        status: "PARTIAL",
+        score: SCORE_BY_STATUS.PARTIAL,
+        notes: "Correct code content, wrong structured output channel — real-looking markup was placed in artifacts instead of fileOperations, so nothing was actually materialized. Must never receive a coding PASS.",
+        fileOperationValid: false,
+        matchesRequest: false,
+      };
+    }
     return { status: "FAIL", score: SCORE_BY_STATUS.FAIL, notes: "No valid index.html file operation with the requested elements.", fileOperationValid, matchesRequest: false };
   },
 };
@@ -209,6 +234,15 @@ const frontendBugFix: BenchmarkScenario = {
     }
     if (fileOperationValid && !linksScript) {
       return { status: "FAIL", score: SCORE_BY_STATUS.FAIL, notes: "Made a change but did not add the missing <script src=\"script.js\"> linkage — the actual reported defect.", fileOperationValid: true, defectDiagnosed: false };
+    }
+    if (ops.length === 0 && looksLikeRealCode(result.output.artifacts.map((a) => a.content).join("\n"))) {
+      return {
+        status: "PARTIAL",
+        score: SCORE_BY_STATUS.PARTIAL,
+        notes: "Correct code content, wrong structured output channel — the fix was described/shown in artifacts but never emitted as a fileOperation, so nothing was actually materialized.",
+        fileOperationValid: false,
+        defectDiagnosed: false,
+      };
     }
     return { status: "FAIL", score: SCORE_BY_STATUS.FAIL, notes: "No file operation addressing the reported bug.", fileOperationValid, defectDiagnosed: false };
   },

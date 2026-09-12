@@ -4,6 +4,7 @@ import { checkOllamaHealth } from "@/lib/ai-office/providers/ollama/health";
 import { listBenchmarkResults, listRecommendedRouting, getAppliedRouting } from "@/lib/ai-office/domain/model-routing";
 import { buildComparisonTable } from "@/lib/ai-office/benchmark/comparison-table";
 import { BENCHMARK_SCENARIOS } from "@/lib/ai-office/benchmark/scenarios";
+import { NO_QUALIFIED_MODEL } from "@/lib/ai-office/benchmark/routing-recommendation";
 import { GlassCard } from "@/components/common/glass-card";
 import { Badge } from "@/components/ui/badge";
 import { BenchmarkControls } from "@/components/ai-office/benchmark/benchmark-controls";
@@ -97,18 +98,23 @@ export default async function LocalModelsPage() {
           <p className="mt-3 text-sm text-muted-foreground">No recommendation generated yet.</p>
         ) : (
           <ul className="mt-3 flex flex-col gap-2 text-xs">
-            {recommendations.map((rec) => (
-              <li key={rec.capability} className="flex flex-wrap items-center gap-2 border-b border-border/40 pb-2 last:border-0">
-                <Badge variant="outline" className="font-mono">
-                  {rec.capability}
-                </Badge>
-                <span className="font-mono">{rec.model}</span>
-                <span className="text-muted-foreground">{rec.reason}</span>
-                <Badge variant={appliedCapabilities.has(rec.capability) ? "secondary" : "outline"}>
-                  {appliedCapabilities.has(rec.capability) ? "APPLIED" : "NOT APPLIED"}
-                </Badge>
-              </li>
-            ))}
+            {recommendations.map((rec) => {
+              const isUnqualified = rec.model === NO_QUALIFIED_MODEL;
+              return (
+                <li key={rec.capability} className="flex flex-wrap items-center gap-2 border-b border-border/40 pb-2 last:border-0">
+                  <Badge variant="outline" className="font-mono">
+                    {rec.capability}
+                  </Badge>
+                  <span className={isUnqualified ? "font-mono text-destructive" : "font-mono"}>{rec.model}</span>
+                  <span className="text-muted-foreground">{rec.reason}</span>
+                  {!isUnqualified && (
+                    <Badge variant={appliedCapabilities.has(rec.capability) ? "secondary" : "outline"}>
+                      {appliedCapabilities.has(rec.capability) ? "APPLIED" : "NOT APPLIED"}
+                    </Badge>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </GlassCard>
