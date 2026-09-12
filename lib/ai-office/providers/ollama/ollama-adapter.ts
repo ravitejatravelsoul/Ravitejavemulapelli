@@ -61,6 +61,13 @@ const testResultSchema = z.object({
   details: z.record(z.string(), z.unknown()).optional(),
 });
 const eventSchema = z.object({ type: z.string(), payload: z.record(z.string(), z.unknown()) });
+/** Mirrors `FileOperationPayload` (providers/types.ts) exactly — the model may only request "write"/"delete" against a relative path; real path/size safety is enforced later, at materialization time (lib/ai-office/workspace/apply-file-operations.ts), never trusted from this schema alone. */
+const fileOperationSchema = z.object({
+  kind: z.literal("file-operation"),
+  action: z.enum(["write", "delete"]),
+  path: z.string().min(1),
+  content: z.string().optional(),
+});
 
 const structuredOutputSchema = z.object({
   summary: z.string(),
@@ -68,9 +75,13 @@ const structuredOutputSchema = z.object({
   decisions: z.array(decisionSchema).default([]),
   testResults: z.array(testResultSchema).default([]),
   events: z.array(eventSchema).default([]),
+  fileOperations: z.array(fileOperationSchema).default([]),
   recommendedNextActions: z.array(z.string()).default([]),
   failure: z.object({ reason: z.string() }).optional(),
 });
+
+/** Roles allowed to request real file writes — a static page's actual implementation work; every other role only ever produces text artifacts, matching their seeded `allowedOutputs`. */
+const FILE_WRITING_ROLES = new Set(["frontend-developer", "backend-developer"]);
 
 /** Each role's one primary output type, matching `AGENT_ROLE_CATALOG`'s `allowedOutputs` — told to the model explicitly so it names an `artifactType` that actually satisfies the DB's CHECK constraint (see `ARTIFACT_TYPES` above), rather than leaving it to guess a synonym. */
 const EXPECTED_ARTIFACT_TYPE: Partial<Record<string, (typeof ARTIFACT_TYPES)[number]>> = {
@@ -106,9 +117,12 @@ function buildPrompt(input: AgentTaskInput): string {
     decisions,
     "",
     "Respond with ONLY a single JSON object (no prose, no markdown fences) matching exactly this shape:",
-    `{"summary": string, "artifacts": [{"kind":"artifact","artifactType": string,"content": string}], "decisions": [{"kind":"decision","type":"decision"|"assumption","summary": string}], "testResults": [], "events": [], "recommendedNextActions": [string]}`,
+    `{"summary": string, "artifacts": [{"kind":"artifact","artifactType": string,"content": string}], "decisions": [{"kind":"decision","type":"decision"|"assumption","summary": string}], "testResults": [], "events": [], "fileOperations": [], "recommendedNextActions": [string]}`,
     expectedArtifactType
       ? `Every artifact you produce must use exactly "artifactType": "${expectedArtifactType}" — no other value is valid for this role.`
+      : "",
+    FILE_WRITING_ROLES.has(input.role)
+      ? 'You may also write real files into the project workspace via "fileOperations": [{"kind":"file-operation","action":"write","path": "relative/file/path","content": "full file content"}] — paths must be relative (no leading slash, no ".."), and content must be the complete file, not a diff or a description of one.'
       : "",
     'If you cannot complete the task, instead include a top-level "failure": {"reason": string} field.',
   ].join("\n");
@@ -117,7 +131,7 @@ function buildPrompt(input: AgentTaskInput): string {
 function malformedResult(reason: string): AgentTaskResult {
   return {
     status: "FAILED",
-    output: { summary: "", artifacts: [], decisions: [], testResults: [], events: [], recommendedNextActions: [], failure: { reason } },
+    output: { summary: "", artifacts: [], decisions: [], testResults: [], events: [], fileOperations: [], recommendedNextActions: [], failure: { reason } },
     usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
     raw: { malformed: true },
   };

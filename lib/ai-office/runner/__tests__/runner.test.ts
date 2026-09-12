@@ -321,6 +321,7 @@ describe("internal/persistence error — the IN_PROGRESS-with-no-lease invariant
           decisions: [],
           testResults: [],
           events: [],
+          fileOperations: [],
           recommendedNextActions: [],
         },
         usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },

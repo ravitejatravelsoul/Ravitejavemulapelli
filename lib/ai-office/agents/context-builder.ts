@@ -8,6 +8,23 @@ import { getProjectMemory } from "../domain/project-memory.ts";
 import type { TaskContext } from "../providers/types.ts";
 
 /**
+ * `SimulatedAdapter`'s fixture scenario ("success"/"failure"/
+ * "retry-success") when nothing explicitly overrides it. Real runner
+ * operation never passes `options.scenario` at all (only tests do) —
+ * without this default, every real run would always resolve to
+ * "success", so a role with a distinct retry-success fixture (today,
+ * `frontend-developer`) could never naturally exercise its fix-attempt
+ * content outside a test harness. Deterministic, not random: purely a
+ * function of which attempt this is. `OllamaAdapter`/future real
+ * providers ignore `scenario` entirely, so this default is inert for
+ * them either way.
+ */
+function defaultScenarioForAttempt(attemptNumber: number | undefined): string | undefined {
+  if (attemptNumber === undefined || attemptNumber <= 1) return undefined; // undefined resolves to "success" in fixtures.ts
+  return "retry-success";
+}
+
+/**
  * Builds the scoped `TaskContext` a role is allowed to see, strictly
  * from that role's own `allowedInputs` tags (seeded in
  * lib/ai-office/domain/agent-role-catalog.ts) — never the whole
@@ -26,7 +43,7 @@ export function buildTaskContext(
   db: DatabaseSync,
   task: TaskRow,
   role: AgentRoleRow,
-  options: { scenario?: string } = {},
+  options: { scenario?: string; attemptNumber?: number } = {},
 ): TaskContext {
   const allowedInputs: string[] = JSON.parse(role.allowedInputs);
   const allArtifacts = listArtifactsForProject(db, task.projectId);
@@ -55,6 +72,6 @@ export function buildTaskContext(
     projectSummary: memory?.summary ?? "",
     relevantArtifacts,
     relevantDecisions,
-    scenario: options.scenario,
+    scenario: options.scenario ?? defaultScenarioForAttempt(options.attemptNumber),
   };
 }

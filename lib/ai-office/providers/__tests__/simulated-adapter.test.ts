@@ -72,6 +72,41 @@ describe("developer roles additionally support a retry-success fixture", () => {
   }
 });
 
+describe("frontend-developer writes real files; backend-developer stays text-only (Phase 8)", () => {
+  test("frontend-developer's success fixture requests writing index.html/styles.css/script.js, with a deliberately buggy script.js", async () => {
+    const adapter = new SimulatedAdapter();
+    const result = await adapter.runAgentTask({ role: "frontend-developer", task: context("frontend-developer", "success"), instructions: "x" });
+    assert.equal(result.status, "SUCCEEDED");
+    const paths = result.output.fileOperations.map((op) => op.path).sort();
+    assert.deepEqual(paths, ["index.html", "script.js", "styles.css"]);
+    const script = result.output.fileOperations.find((op) => op.path === "script.js")!;
+    assert.match(script.content!, /getElementById\("greeting"\)/, "attempt 1 must contain the deliberate wrong-id bug");
+    const html = result.output.fileOperations.find((op) => op.path === "index.html")!;
+    assert.match(html.content!, /<h1>/i);
+    assert.match(html.content!, /id="message"/);
+    assert.match(html.content!, /id="greet-button"/);
+  });
+
+  test("frontend-developer's retry-success fixture rewrites only script.js, with the id bug fixed", async () => {
+    const adapter = new SimulatedAdapter();
+    const result = await adapter.runAgentTask({ role: "frontend-developer", task: context("frontend-developer", "retry-success"), instructions: "x" });
+    assert.equal(result.status, "SUCCEEDED");
+    assert.equal(result.output.fileOperations.length, 1);
+    const script = result.output.fileOperations[0]!;
+    assert.equal(script.path, "script.js");
+    assert.match(script.content!, /getElementById\("message"\)/, "the fix must reference the id that actually exists in index.html");
+    assert.doesNotMatch(script.content!, /getElementById\("greeting"\)/);
+  });
+
+  test("backend-developer never requests any file operation — a static page has no backend", async () => {
+    const adapter = new SimulatedAdapter();
+    const success = await adapter.runAgentTask({ role: "backend-developer", task: context("backend-developer", "success"), instructions: "x" });
+    const retry = await adapter.runAgentTask({ role: "backend-developer", task: context("backend-developer", "retry-success"), instructions: "x" });
+    assert.deepEqual(success.output.fileOperations, []);
+    assert.deepEqual(retry.output.fileOperations, []);
+  });
+});
+
 describe("deterministic fixture selection — no randomness", () => {
   test("the same role+scenario produces byte-identical output across repeated calls", async () => {
     const adapter = new SimulatedAdapter();

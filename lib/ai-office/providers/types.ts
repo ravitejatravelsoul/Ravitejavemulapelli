@@ -69,6 +69,24 @@ export interface EventPayload {
   payload: Record<string, unknown>;
 }
 
+/**
+ * A real file change to apply to the project's isolated development
+ * workspace (Phase 8) — never executed directly by a provider adapter;
+ * `lib/ai-office/workspace/apply-file-operations.ts` is the only thing
+ * that turns this into an actual filesystem write, and only after
+ * validating every operation in the batch against
+ * `lib/ai-office/workspace/workspace-service.ts`'s path/size safety
+ * rules. `path` is relative to the project's own workspace root —
+ * never an absolute path, never containing "..".
+ */
+export interface FileOperationPayload {
+  kind: "file-operation";
+  action: "write" | "delete";
+  path: string;
+  /** Required for "write" (validated at the applying end, not by this type alone); absent/ignored for "delete". */
+  content?: string;
+}
+
 /** Provider-neutral structured result — every field is optional/empty-array by default so a minimal adapter response is still valid. */
 export interface StructuredAgentOutput {
   summary: string;
@@ -76,6 +94,7 @@ export interface StructuredAgentOutput {
   decisions: DecisionPayload[];
   testResults: TestResultPayload[];
   events: EventPayload[];
+  fileOperations: FileOperationPayload[];
   recommendedNextActions: string[];
   /** Present only when status is "FAILED". */
   failure?: {

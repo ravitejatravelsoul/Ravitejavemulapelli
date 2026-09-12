@@ -1,9 +1,14 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { createTestDb } from "../../db/test-helpers.ts";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { listFiles, readFile } from "../../workspace/workspace-service.ts";
+import { listWorkspaceFileRecords } from "../../domain/workspace.ts";
 import { getOwner } from "../../domain/users.ts";
 import { createProjectWithIdea, getProject } from "../../domain/projects.ts";
-import { createTask, createTaskWithDependencies, getTask, listTaskAttempts, getAgentRun } from "../../domain/tasks.ts";
+import { createTask, createTaskWithDependencies, getTask, listTaskAttempts, getAgentRun, updateTaskStatus } from "../../domain/tasks.ts";
 import { listArtifactsForProject, listDecisionsForProject, listTestResultsForTask, listUnresolvedFailures } from "../../domain/project-outputs.ts";
 import { listEventsForProject } from "../../domain/events.ts";
 import { listAiUsageForProject } from "../../domain/budget.ts";
@@ -564,5 +569,129 @@ describe("provider selection — a project's own `provider` column picks the def
     assert.equal(run?.provider, "simulated");
 
     t.close();
+  });
+});
+
+describe("real file materialization (Phase 8)", () => {
+  let workspaceRoot: string;
+  const priorRoot = process.env.AI_OFFICE_WORKSPACES_ROOT;
+
+  function withWorkspace<T>(fn: () => T): T {
+    workspaceRoot = mkdtempSync(join(tmpdir(), "ai-office-agent-runner-workspace-"));
+    process.env.AI_OFFICE_WORKSPACES_ROOT = workspaceRoot;
+    try {
+      return fn();
+    } finally {
+      if (priorRoot === undefined) delete process.env.AI_OFFICE_WORKSPACES_ROOT;
+      else process.env.AI_OFFICE_WORKSPACES_ROOT = priorRoot;
+      rmSync(workspaceRoot, { recursive: true, force: true });
+    }
+  }
+
+  test("a successful frontend-developer attempt writes real files to disk and records attribution, driven entirely through executeTask() — no test-only file-writing shortcut", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const { project } = setupProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+      const result = await executeTask(t.db, task.id, { scenario: "success" });
+      assert.equal(result.outcome, "succeeded");
+
+      assert.deepEqual((await listFiles(project.id)).sort(), ["index.html", "script.js", "styles.css"]);
+      assert.match(await readFile(project.id, "index.html"), /<h1>/i);
+
+      const records = listWorkspaceFileRecords(t.db, project.id);
+      assert.equal(records.length, 3);
+      const indexRecord = records.find((r) => r.path === "index.html")!;
+      assert.equal(indexRecord.lastModifiedByRoleId, "frontend-developer");
+      assert.equal(indexRecord.lastModifiedByTaskId, task.id);
+
+      t.close();
+    });
+  });
+
+  test("a backend-developer attempt succeeds normally and writes no files at all — a static page has no backend", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const { project } = setupProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "backend-developer", title: "Implement backend" });
+
+      const result = await executeTask(t.db, task.id, { scenario: "success" });
+      assert.equal(result.outcome, "succeeded");
+      assert.deepEqual(await listFiles(project.id), []);
+
+      t.close();
+    });
+  });
+
+  test("attempt-based scenario default: a real second attempt (no explicit scenario override) naturally rewrites script.js with the fix, exactly matching the real bug-then-fix cycle QA/remediation drives", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const { project } = setupProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+      // Attempt 1 — no scenario passed at all (this is what the real
+      // runner always does outside a test). Must resolve to the buggy
+      // "success" fixture by default.
+      const first = await executeTask(t.db, task.id);
+      assert.equal(first.outcome, "succeeded");
+      assert.match(await readFile(project.id, "script.js"), /getElementById\("greeting"\)/);
+
+      // Simulate this task becoming eligible again exactly the way real
+      // remediation would (a downstream QA failure reopens it) — without
+      // depending on QA's real-browser-verification work (Phase 8's next
+      // commit) to exercise this specific mechanism in isolation.
+      updateTaskStatus(t.db, task.id, "PENDING");
+
+      // Attempt 2 — again, no scenario passed. attemptCount is already 1
+      // from the first real attempt, so this must resolve to
+      // "retry-success" purely from that real state, not a test override.
+      const second = await executeTask(t.db, task.id);
+      assert.equal(second.outcome, "succeeded");
+      assert.match(await readFile(project.id, "script.js"), /getElementById\("message"\)/);
+      assert.doesNotMatch(await readFile(project.id, "script.js"), /getElementById\("greeting"\)/);
+
+      t.close();
+    });
+  });
+
+  test("an invalid file operation (a path that escapes the workspace) fails the task cleanly through the existing retry path — no exception escapes executeTask(), and no file is written", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const { project } = setupProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+      const maliciousAdapter = {
+        name: "simulated",
+        async runAgentTask() {
+          return {
+            status: "SUCCEEDED" as const,
+            output: {
+              summary: "ok",
+              artifacts: [],
+              decisions: [],
+              testResults: [],
+              events: [],
+              fileOperations: [{ kind: "file-operation" as const, action: "write" as const, path: "../escape.txt", content: "bad" }],
+              recommendedNextActions: [],
+            },
+            usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+          };
+        },
+        estimateCost() {
+          return { estimatedInputTokens: 0, estimatedOutputTokens: 0, estimatedCostUsd: 0 };
+        },
+      };
+
+      const result = await executeTask(t.db, task.id, { provider: maliciousAdapter });
+      assert.equal(result.outcome, "retried", "an invalid file operation is a normal retryable failure, not a crash");
+      assert.equal(getTask(t.db, task.id)?.status, "PENDING");
+      assert.deepEqual(await listFiles(project.id), []);
+
+      const failures = listUnresolvedFailures(t.db, project.id);
+      assert.match(failures[0]!.reason, /File operation rejected/);
+
+      t.close();
+    });
   });
 });

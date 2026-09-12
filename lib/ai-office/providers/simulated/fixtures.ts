@@ -29,14 +29,15 @@ function usage(inputTokens: number, outputTokens: number): AgentTaskResult["usag
 
 function succeed(
   ctx: TaskContext,
-  partial: Omit<AgentTaskResult["output"], "events" | "recommendedNextActions"> &
-    Partial<Pick<AgentTaskResult["output"], "events" | "recommendedNextActions">>,
+  partial: Omit<AgentTaskResult["output"], "events" | "recommendedNextActions" | "fileOperations"> &
+    Partial<Pick<AgentTaskResult["output"], "events" | "recommendedNextActions" | "fileOperations">>,
 ): AgentTaskResult {
   return {
     status: "SUCCEEDED",
     output: {
       events: [],
       recommendedNextActions: [],
+      fileOperations: [],
       ...partial,
     },
     usage: usage(120, 180),
@@ -53,6 +54,7 @@ function fail(ctx: TaskContext, reason: string, extra?: Partial<AgentTaskResult[
       decisions: [],
       testResults: [],
       events: [],
+      fileOperations: [],
       recommendedNextActions: [],
       failure: { reason },
       ...extra,
@@ -177,50 +179,136 @@ const uiUxAgent: Record<string, Fixture> = {
   [FAILURE]: ({ task }) => fail(task, "requirements do not specify enough to design a flow"),
 };
 
-function developerFixtures(roleLabel: string): Record<string, Fixture> {
+/** The generic static page every `writesFiles` developer fixture produces — deliberately idea-independent (deterministic infrastructure fixtures, not a general AI), it just happens to satisfy "heading + description + button that changes a message" by construction. */
+const HELLO_WORLD_HTML = [
+  "<!DOCTYPE html>",
+  '<html lang="en">',
+  "<head>",
+  '<meta charset="UTF-8" />',
+  '<meta name="viewport" content="width=device-width, initial-scale=1.0" />',
+  "<title>Hello, World!</title>",
+  '<link rel="stylesheet" href="styles.css" />',
+  "</head>",
+  "<body>",
+  "<main>",
+  "<h1>Hello, World!</h1>",
+  '<p class="description">This small page was built by Teja&#39;s AI Office.</p>',
+  '<button id="greet-button" type="button">Say hello</button>',
+  '<p id="message"></p>',
+  "</main>",
+  '<script src="script.js"></script>',
+  "</body>",
+  "</html>",
+  "",
+].join("\n");
+
+const HELLO_WORLD_CSS = [
+  ":root { color-scheme: light dark; }",
+  "body {",
+  "  margin: 0;",
+  "  min-height: 100vh;",
+  "  display: flex;",
+  "  align-items: center;",
+  "  justify-content: center;",
+  '  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;',
+  "  background: #0f172a;",
+  "  color: #f8fafc;",
+  "}",
+  "main { text-align: center; padding: 2rem; }",
+  "h1 { font-size: 3.5rem; margin: 0 0 1rem; }",
+  ".description { font-size: 1.125rem; color: #cbd5e1; margin: 0 0 2rem; }",
+  "button {",
+  "  font-size: 1rem;",
+  "  padding: 0.75rem 1.5rem;",
+  "  border-radius: 9999px;",
+  "  border: none;",
+  "  background: #6366f1;",
+  "  color: white;",
+  "  cursor: pointer;",
+  "}",
+  "button:hover { background: #4f46e5; }",
+  "#message { margin-top: 1.5rem; font-size: 1rem; min-height: 1.5rem; }",
+  "",
+].join("\n");
+
+/** Deliberate, deterministic bug: references the wrong element id, so clicking the button never updates the on-page message — real bait for real Playwright-driven QA (Phase 8 Part I) to genuinely catch. */
+const HELLO_WORLD_JS_BUGGY = [
+  'document.getElementById("greet-button").addEventListener("click", function () {',
+  '  document.getElementById("greeting").textContent = "Hello! Thanks for clicking.";',
+  "});",
+  "",
+].join("\n");
+
+/** The fix: the id now matches the real element in HELLO_WORLD_HTML ("message", not "greeting"). */
+const HELLO_WORLD_JS_FIXED = [
+  'document.getElementById("greet-button").addEventListener("click", function () {',
+  '  document.getElementById("message").textContent = "Hello! Thanks for clicking.";',
+  "});",
+  "",
+].join("\n");
+
+function developerFixtures(roleLabel: string, options: { writesFiles?: boolean } = {}): Record<string, Fixture> {
+  const writesFiles = options.writesFiles ?? false;
+
   return {
     [SUCCESS]: ({ task }) =>
       succeed(task, {
-        summary: `${roleLabel}: implemented the tool per the approved architecture.`,
+        summary: writesFiles
+          ? `${roleLabel}: implemented a small static Hello World page in the project workspace.`
+          : `${roleLabel}: implemented the tool per the approved architecture.`,
         artifacts: [
           {
             kind: "artifact",
             artifactType: "code",
-            content: [
-              "# Implementation Summary",
-              "",
-              "Files planned:",
-              "- capture.ts — takes a screenshot, saves to ./captures/",
-              "- report.ts — reads ./captures/, renders report.html",
-              "",
-              "(Simulated — no real source files were created.)",
-            ].join("\n"),
+            content: writesFiles
+              ? "# Implementation Summary\n\nWrote index.html, styles.css, and script.js to the project workspace."
+              : [
+                  "# Implementation Summary",
+                  "",
+                  "Files planned:",
+                  "- capture.ts — takes a screenshot, saves to ./captures/",
+                  "- report.ts — reads ./captures/, renders report.html",
+                  "",
+                  "(Simulated — no real source files were created.)",
+                ].join("\n"),
           },
         ],
         decisions: [],
         testResults: [],
+        fileOperations: writesFiles
+          ? [
+              { kind: "file-operation", action: "write", path: "index.html", content: HELLO_WORLD_HTML },
+              { kind: "file-operation", action: "write", path: "styles.css", content: HELLO_WORLD_CSS },
+              { kind: "file-operation", action: "write", path: "script.js", content: HELLO_WORLD_JS_BUGGY },
+            ]
+          : [],
         recommendedNextActions: ["Proceed to QA"],
       }),
     [RETRY_SUCCESS]: ({ task }) =>
       succeed(task, {
-        summary: `${roleLabel}: applied a fix for the QA-reported issue.`,
+        summary: writesFiles
+          ? `${roleLabel}: fixed the button's element id so the message updates correctly.`
+          : `${roleLabel}: applied a fix for the QA-reported issue.`,
         artifacts: [
           {
             kind: "artifact",
             artifactType: "code",
-            content: [
-              "# Implementation Summary (fix)",
-              "",
-              "Fixed: report generation threw when the capture directory was empty.",
-              "- report.ts — now validates capture count before rendering, returns a clear message if empty.",
-              "",
-              "(Simulated — no real source files were created.)",
-            ].join("\n"),
+            content: writesFiles
+              ? "# Implementation Summary (fix)\n\nFixed: script.js referenced the wrong element id, so the button never updated the message. Now updates #message, matching index.html."
+              : [
+                  "# Implementation Summary (fix)",
+                  "",
+                  "Fixed: report generation threw when the capture directory was empty.",
+                  "- report.ts — now validates capture count before rendering, returns a clear message if empty.",
+                  "",
+                  "(Simulated — no real source files were created.)",
+                ].join("\n"),
             version: 2,
           },
         ],
         decisions: [],
         testResults: [],
+        fileOperations: writesFiles ? [{ kind: "file-operation", action: "write", path: "script.js", content: HELLO_WORLD_JS_FIXED }] : [],
         recommendedNextActions: ["Proceed to QA (re-run)"],
       }),
     [FAILURE]: ({ task }) => fail(task, "architecture does not specify enough detail to implement"),
@@ -319,7 +407,7 @@ export const SIMULATED_FIXTURES: Record<string, Record<string, Fixture>> = {
   "research-agent": researchAgent,
   "solution-architect": solutionArchitect,
   "ui-ux-agent": uiUxAgent,
-  "frontend-developer": developerFixtures("Frontend Developer"),
+  "frontend-developer": developerFixtures("Frontend Developer", { writesFiles: true }),
   "backend-developer": developerFixtures("Backend Developer"),
   "qa-agent": qaAgent,
   "security-reviewer": securityReviewer,

@@ -37,6 +37,7 @@ import { isReviewRole, findRemediationTargets, findStaleDownstreamReviews } from
 import { SimulatedAdapter } from "../providers/simulated/simulated-adapter.ts";
 import { OllamaAdapter } from "../providers/ollama/ollama-adapter.ts";
 import type { AIProviderAdapter } from "../providers/types.ts";
+import { applyFileOperations } from "../workspace/apply-file-operations.ts";
 
 /**
  * AgentRunner — the central execution boundary between a claimed Task
@@ -152,7 +153,7 @@ export async function executeTask(
 
   updateTaskStatus(db, task.id, "IN_PROGRESS");
   const attempt = createTaskAttempt(db, task.id);
-  const context = buildTaskContext(db, task, role, { scenario: options.scenario });
+  const context = buildTaskContext(db, task, role, { scenario: options.scenario, attemptNumber: attempt.attemptNumber });
   const adapter = options.provider ?? (project.provider === "ollama" ? new OllamaAdapter() : new SimulatedAdapter());
 
   let agentRun = createAgentRunForAttempt(db, { taskAttemptId: attempt.id, roleId: role.id, provider: adapter.name });
@@ -181,7 +182,7 @@ export async function executeTask(
     const reason = error instanceof Error ? error.message : String(error);
     result = {
       status: "FAILED",
-      output: { summary: "", artifacts: [], decisions: [], testResults: [], events: [], recommendedNextActions: [], failure: { reason } },
+      output: { summary: "", artifacts: [], decisions: [], testResults: [], events: [], fileOperations: [], recommendedNextActions: [], failure: { reason } },
       usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
       raw: { timedOut, threw: !timedOut },
     };
@@ -195,6 +196,41 @@ export async function executeTask(
     outputTokens: result.usage.outputTokens,
     costUsd: result.usage.costUsd,
   });
+
+  // A reported success that also requested real file changes gets those
+  // applied *before* finishSuccess ever commits anything. An invalid
+  // batch (bad path, oversized write, etc.) is treated exactly like any
+  // other provider-side failure — never a partial workspace write, never
+  // an exception escaping this function, just a normal FAILED result
+  // routed through the same retry/escalation path finishFailure already
+  // handles for every other kind of failure.
+  if (result.status === "SUCCEEDED" && result.output.fileOperations.length > 0) {
+    try {
+      await applyFileOperations(db, {
+        projectId: project.id,
+        taskId: task.id,
+        roleId: role.id,
+        operations: result.output.fileOperations,
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      result = {
+        status: "FAILED",
+        output: {
+          summary: "",
+          artifacts: [],
+          decisions: [],
+          testResults: [],
+          events: [],
+          fileOperations: [],
+          recommendedNextActions: [],
+          failure: { reason: `File operation rejected: ${reason}` },
+        },
+        usage: result.usage,
+        raw: { fileOperationRejected: true },
+      };
+    }
+  }
 
   if (result.status === "SUCCEEDED") {
     return finishSuccess(db, { project, role, task, attempt, agentRun, output: result.output });
