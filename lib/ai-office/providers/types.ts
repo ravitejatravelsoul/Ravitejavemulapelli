@@ -176,6 +176,8 @@ export interface CostEstimate {
 
 export interface AIProviderAdapter {
   readonly name: string; // "simulated" | "claude" | ...
+  /** The specific model this adapter instance is bound to (e.g. "gemma4:latest") — undefined for adapters with no model concept, such as SimulatedAdapter. */
+  readonly model?: string;
   runAgentTask(input: AgentTaskInput): Promise<AgentTaskResult>;
   estimateCost(input: AgentTaskInput): CostEstimate;
 }

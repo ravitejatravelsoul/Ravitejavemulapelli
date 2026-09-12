@@ -1498,3 +1498,116 @@ describe("retry drift prevention (Phase 8 second follow-up)", () => {
     });
   });
 });
+
+/** A fake `fetch` for OllamaAdapter's own HTTP call (distinct from the intent-consistency check's `intentCheckFetch`) — returns a well-formed Ollama /api/generate response with a valid StructuredAgentOutput JSON body, so the real OllamaAdapter code path runs with no real network call. */
+function fakeOllamaGenerateFetch(): typeof fetch {
+  const structuredOutput = {
+    summary: "Done.",
+    artifacts: [],
+    decisions: [],
+    testResults: [],
+    events: [],
+    fileOperations: [],
+    recommendedNextActions: [],
+  };
+  return (async () =>
+    ({ ok: true, status: 200, json: async () => ({ response: JSON.stringify(structuredOutput) }) }) as unknown as Response) as unknown as typeof fetch;
+}
+
+describe("model identity persistence (local multi-model routing follow-up)", () => {
+  test("a real OllamaAdapter instance's bound model is persisted on the agent_runs row", async () => {
+    const t = createTestDb();
+    const owner = getOwner(t.db)!;
+    const { project } = createProjectWithIdea(t.db, {
+      title: "Model identity test",
+      rawIdeaText: "Build a small tool.",
+      ownerId: owner.id,
+      provider: "ollama",
+    });
+    const task = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "Requirements" });
+
+    const { OllamaAdapter } = await import("../../providers/ollama/ollama-adapter.ts");
+    const modelBoundAdapter = new OllamaAdapter({ model: "qwen3.6:latest", fetchImpl: fakeOllamaGenerateFetch() });
+
+    const result = await executeTask(t.db, task.id, {
+      scenario: "success",
+      provider: modelBoundAdapter,
+      intentCheckFetch: (async () =>
+        ({ ok: true, status: 200, json: async () => ({ response: JSON.stringify({ consistent: true, reason: "ok" }) }) }) as unknown as Response) as unknown as typeof fetch,
+    });
+    assert.equal(result.outcome, "succeeded");
+    assert.ok(result.agentRun);
+    assert.equal(result.agentRun!.model, "qwen3.6:latest");
+    assert.equal(getAgentRun(t.db, result.agentRun!.id)?.model, "qwen3.6:latest");
+
+    t.close();
+  });
+
+  test("a SimulatedAdapter run persists a null model — honest absence, not a fabricated value", async () => {
+    const t = createTestDb();
+    const { project } = setupProject(t);
+    const task = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "Requirements" });
+
+    const result = await executeTask(t.db, task.id, { scenario: "success" });
+    assert.equal(result.outcome, "succeeded");
+    assert.equal(result.agentRun!.model, null);
+
+    t.close();
+  });
+
+  test("two attempts using different OllamaAdapter model instances each persist their own model on their own agent_runs row", async () => {
+    const t = createTestDb();
+    const owner = getOwner(t.db)!;
+    const { project } = createProjectWithIdea(t.db, {
+      title: "Model identity per-attempt test",
+      rawIdeaText: "Build a small tool.",
+      ownerId: owner.id,
+      provider: "ollama",
+    });
+    const task = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "Requirements" });
+
+    const { OllamaAdapter } = await import("../../providers/ollama/ollama-adapter.ts");
+    const fastFetch = (async () =>
+      ({ ok: true, status: 200, json: async () => ({ response: JSON.stringify({ consistent: true, reason: "ok" }) }) }) as unknown as Response) as unknown as typeof fetch;
+    // A real (non-Simulated) adapter ignores `scenario` entirely — it
+    // only reflects whatever its own fetch response says. To force a
+    // real FAILED attempt 1 (so a real attempt 2 is eligible on the
+    // same task), the first fetch's structured output carries a
+    // `failure` field, exactly like ollama-adapter.ts's own status
+    // derivation (`output.failure ? "FAILED" : "SUCCEEDED"`).
+    const failingFetch = (async () =>
+      ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          response: JSON.stringify({
+            summary: "",
+            artifacts: [],
+            decisions: [],
+            testResults: [],
+            events: [],
+            fileOperations: [],
+            recommendedNextActions: [],
+            failure: { reason: "Deliberate test failure to allow a second real attempt." },
+          }),
+        }),
+      }) as unknown as Response) as unknown as typeof fetch;
+
+    const first = await executeTask(t.db, task.id, {
+      provider: new OllamaAdapter({ model: "gemma4:latest", fetchImpl: failingFetch }),
+      intentCheckFetch: fastFetch,
+    });
+    assert.equal(first.outcome, "retried");
+    assert.equal(first.agentRun!.model, "gemma4:latest");
+
+    const second = await executeTask(t.db, task.id, {
+      provider: new OllamaAdapter({ model: "qwen3.6:latest", fetchImpl: fakeOllamaGenerateFetch() }),
+      intentCheckFetch: fastFetch,
+    });
+    assert.equal(second.outcome, "succeeded");
+    assert.equal(second.agentRun!.model, "qwen3.6:latest");
+    assert.notEqual(first.agentRun!.id, second.agentRun!.id, "each attempt gets its own agent_runs row, so each keeps its own model identity");
+
+    t.close();
+  });
+});

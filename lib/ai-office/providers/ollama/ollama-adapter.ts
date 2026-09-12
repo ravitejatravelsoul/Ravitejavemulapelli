@@ -192,8 +192,8 @@ export interface OllamaAdapterOptions {
 
 export class OllamaAdapter implements AIProviderAdapter {
   readonly name = "ollama";
+  readonly model: string;
   private readonly baseUrl: string;
-  private readonly model: string;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
 

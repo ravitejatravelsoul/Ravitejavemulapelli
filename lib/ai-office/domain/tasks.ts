@@ -51,6 +51,8 @@ export interface AgentRunRow {
   taskAttemptId: string;
   roleId: string;
   provider: string;
+  /** The actual model that produced this run (e.g. "gemma4:latest") — null for SimulatedAdapter runs and any row from before migration 005. */
+  model: string | null;
   status: AgentRunStatus;
   startedAt: number;
   finishedAt: number | null;
@@ -260,7 +262,7 @@ export function updateTaskAttemptStatus(db: DatabaseSync, id: string, status: Ta
  */
 export function createAgentRunForAttempt(
   db: DatabaseSync,
-  input: { taskAttemptId: string; roleId: string; provider: string },
+  input: { taskAttemptId: string; roleId: string; provider: string; model?: string | null },
 ): AgentRunRow {
   const now = Date.now();
   const runId = randomUUID();
@@ -268,9 +270,9 @@ export function createAgentRunForAttempt(
   db.exec("BEGIN");
   try {
     db.prepare(
-      `INSERT INTO agent_runs (id, taskAttemptId, roleId, provider, status, startedAt, finishedAt, createdAt, updatedAt)
-       VALUES (?, ?, ?, ?, 'QUEUED', ?, NULL, ?, ?)`,
-    ).run(runId, input.taskAttemptId, input.roleId, input.provider, now, now, now);
+      `INSERT INTO agent_runs (id, taskAttemptId, roleId, provider, model, status, startedAt, finishedAt, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?, ?, 'QUEUED', ?, NULL, ?, ?)`,
+    ).run(runId, input.taskAttemptId, input.roleId, input.provider, input.model ?? null, now, now, now);
 
     db.prepare("UPDATE task_attempts SET agentRunId = ?, updatedAt = ? WHERE id = ?").run(
       runId,

@@ -371,9 +371,14 @@ export async function executeTask(
   updateTaskStatus(db, task.id, "IN_PROGRESS");
   const attempt = createTaskAttempt(db, task.id);
   const context = await buildTaskContext(db, task, role, { scenario: options.scenario, attemptNumber: attempt.attemptNumber });
-  const adapter = options.provider ?? (project.provider === "ollama" ? new OllamaAdapter() : new SimulatedAdapter());
+  const adapter: AIProviderAdapter = options.provider ?? (project.provider === "ollama" ? new OllamaAdapter() : new SimulatedAdapter());
 
-  let agentRun = createAgentRunForAttempt(db, { taskAttemptId: attempt.id, roleId: role.id, provider: adapter.name });
+  let agentRun = createAgentRunForAttempt(db, {
+    taskAttemptId: attempt.id,
+    roleId: role.id,
+    provider: adapter.name,
+    model: adapter.model ?? null,
+  });
   agentRun = updateAgentRunStatus(db, agentRun.id, "RUNNING");
 
   const releaseReadiness = role.id === "release-agent" ? checkReleaseReadiness(db, project.id) : { ready: true as const };
