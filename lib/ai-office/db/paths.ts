@@ -21,3 +21,19 @@ export function getDefaultDbPath(): string {
 export function getMigrationsDir(): string {
   return join(process.cwd(), "lib", "ai-office", "db", "migrations");
 }
+
+/**
+ * Root directory for all per-project real-development workspaces
+ * (Phase 8) — a sibling of `.data/office.db`, covered by the same
+ * `.gitignore` `/.data/` rule (no gitignore change needed). Every
+ * project's workspace is `<this>/<projectId>/`; nothing outside
+ * lib/ai-office/workspace/workspace-service.ts should ever read this
+ * path directly.
+ *
+ * `AI_OFFICE_WORKSPACES_ROOT` is a test-only override (mirroring how
+ * `db/test-helpers.ts` isolates the SQLite file into a temp directory
+ * per test) — real app code never sets this env var.
+ */
+export function getWorkspacesRootPath(): string {
+  return process.env.AI_OFFICE_WORKSPACES_ROOT || join(process.cwd(), ".data", "ai-office-workspaces");
+}
