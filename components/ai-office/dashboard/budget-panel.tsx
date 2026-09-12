@@ -46,6 +46,20 @@ export function BudgetPanel({ budget }: { budget: BudgetView }) {
         </dl>
       </div>
 
+      <div className="mt-3 rounded-lg border border-accent-2/30 bg-accent-2/5 p-3">
+        <p className="text-[0.65rem] font-semibold tracking-widest text-accent-2 uppercase">Local · Ollama (free)</p>
+        <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+          <div>
+            <dt className="text-muted-foreground">Local Runs</dt>
+            <dd className="font-medium">{budget.localRuns}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Local AI Cost</dt>
+            <dd className="font-medium">${budget.localCostUsd.toFixed(2)}</dd>
+          </div>
+        </dl>
+      </div>
+
       <div className="mt-3 rounded-lg border border-dashed border-border p-3">
         <p className="text-[0.65rem] font-semibold tracking-widest text-muted-foreground uppercase">Simulated · not real spend</p>
         <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
@@ -62,7 +76,8 @@ export function BudgetPanel({ budget }: { budget: BudgetView }) {
 
       <p className="mt-3 text-[0.7rem] text-muted-foreground">
         No live provider exists yet (Phase 7+) — LIVE spend and reservations are exercised only via automated tests today, and will
-        always remain $0 until a real provider is connected under separate, explicit authorization.
+        always remain $0 until a real provider is connected under separate, explicit authorization. Ollama runs locally and is never
+        billed against this cap.
       </p>
     </GlassCard>
   );

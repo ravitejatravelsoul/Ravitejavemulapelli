@@ -22,6 +22,7 @@ import { pauseProject, resumeProject } from "@/lib/ai-office/control/project-tra
 const newProjectSchema = z.object({
   title: z.string().trim().min(1, "Enter a project name.").max(120, "Keep the project name under 120 characters."),
   ideaText: z.string().trim().min(10, "Describe the idea in at least a sentence.").max(4000, "Keep the idea under 4000 characters."),
+  provider: z.enum(["simulated", "ollama"]).default("simulated"),
 });
 
 export interface CreateProjectState {
@@ -34,8 +35,10 @@ export interface CreateProjectState {
  * `planProject()` (Phase 5's deterministic Orchestrator). Always
  * SIMULATED (`createProjectWithIdea`'s `aiMode` defaults to
  * `"SIMULATED"` when omitted here — never set explicitly to `"LIVE"`
- * from this form). No AI is called; planning is a deterministic
- * keyword classifier, not a model.
+ * from this form). Planning itself is a deterministic keyword
+ * classifier, not a model — no AI is called during planning either
+ * way. `provider` ("simulated" | "ollama") only decides which adapter
+ * later *executes* the planned tasks; it never changes `aiMode`.
  */
 export async function createProjectAction(_prevState: CreateProjectState | undefined, formData: FormData): Promise<CreateProjectState> {
   const session = await verifySession();
@@ -44,6 +47,7 @@ export async function createProjectAction(_prevState: CreateProjectState | undef
   const parsed = newProjectSchema.safeParse({
     title: formData.get("title"),
     ideaText: formData.get("ideaText"),
+    provider: formData.get("provider") || undefined,
   });
   if (!parsed.success) {
     return { error: parsed.error.issues[0]?.message ?? "Enter a project name and an idea." };
@@ -57,6 +61,7 @@ export async function createProjectAction(_prevState: CreateProjectState | undef
     title: parsed.data.title,
     rawIdeaText: parsed.data.ideaText,
     ownerId: owner.id,
+    provider: parsed.data.provider,
   });
 
   try {

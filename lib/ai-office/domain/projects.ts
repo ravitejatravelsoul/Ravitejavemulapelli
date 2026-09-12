@@ -15,11 +15,15 @@ export type ProjectStatus =
 
 export type AiMode = "SIMULATED" | "LIVE";
 
+/** Which engine executes this project's (SIMULATED-authorized) work — orthogonal to `aiMode`, see migrations/003-add-project-provider.sql. */
+export type ProjectProvider = "simulated" | "ollama";
+
 export interface ProjectRow {
   id: string;
   title: string;
   status: ProjectStatus;
   aiMode: AiMode;
+  provider: ProjectProvider;
   monthlyBudgetCapUsd: number | null;
   ownerId: string;
   createdAt: number;
@@ -42,19 +46,20 @@ export interface ProjectIdeaRow {
  */
 export function createProjectWithIdea(
   db: DatabaseSync,
-  input: { title: string; rawIdeaText: string; ownerId: string; aiMode?: AiMode },
+  input: { title: string; rawIdeaText: string; ownerId: string; aiMode?: AiMode; provider?: ProjectProvider },
 ): { project: ProjectRow; idea: ProjectIdeaRow } {
   const now = Date.now();
   const projectId = randomUUID();
   const ideaId = randomUUID();
   const aiMode = input.aiMode ?? "SIMULATED";
+  const provider = input.provider ?? "simulated";
 
   db.exec("BEGIN");
   try {
     db.prepare(
-      `INSERT INTO projects (id, title, status, aiMode, monthlyBudgetCapUsd, ownerId, createdAt, updatedAt)
-       VALUES (?, ?, 'DRAFT', ?, NULL, ?, ?, ?)`,
-    ).run(projectId, input.title, aiMode, input.ownerId, now, now);
+      `INSERT INTO projects (id, title, status, aiMode, provider, monthlyBudgetCapUsd, ownerId, createdAt, updatedAt)
+       VALUES (?, ?, 'DRAFT', ?, ?, NULL, ?, ?, ?)`,
+    ).run(projectId, input.title, aiMode, provider, input.ownerId, now, now);
 
     db.prepare(
       `INSERT INTO project_ideas (id, projectId, rawText, submittedAt, createdAt, updatedAt)

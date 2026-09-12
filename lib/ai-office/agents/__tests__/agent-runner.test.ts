@@ -492,3 +492,77 @@ describe("context scoping", () => {
     t.close();
   });
 });
+
+describe("provider selection — a project's own `provider` column picks the default adapter", () => {
+  test("a 'simulated'-provider project (the default) uses SimulatedAdapter when no adapter is injected", async () => {
+    const t = createTestDb();
+    const { project } = setupProject(t); // provider defaults to "simulated"
+    const task = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "Write requirements" });
+
+    const result = await executeTask(t.db, task.id, { scenario: "success" });
+
+    assert.equal(result.outcome, "succeeded");
+    const attempt = listTaskAttempts(t.db, task.id)[0];
+    const run = getAgentRun(t.db, attempt.agentRunId!);
+    assert.equal(run?.provider, "simulated");
+
+    t.close();
+  });
+
+  test("an 'ollama'-provider project uses OllamaAdapter by default — proven by pointing OLLAMA_BASE_URL at an address nothing listens on and observing the resulting failure carries provider 'ollama', never a silent fallback to 'simulated'", async () => {
+    const t = createTestDb();
+    const owner = getOwner(t.db)!;
+    const { project } = createProjectWithIdea(t.db, {
+      title: "Todo app",
+      rawIdeaText: "Build a one-page todo application.",
+      ownerId: owner.id,
+      provider: "ollama",
+    });
+    const task = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "Write requirements" });
+
+    const prevBaseUrl = process.env.OLLAMA_BASE_URL;
+    process.env.OLLAMA_BASE_URL = "http://127.0.0.1:1"; // reserved, nothing listens here
+    process.env.OLLAMA_TIMEOUT_MS = "500";
+    try {
+      const result = await executeTask(t.db, task.id, {});
+      // No options.provider was passed — executeTask had to pick the
+      // adapter itself from project.provider === "ollama".
+      assert.equal(result.outcome, "retried", "a connection failure is a normal retryable failure, not a crash");
+      assert.equal(getTask(t.db, task.id)?.status, "PENDING", "the task remains retryable — no lost task, no infinite retry loop here");
+
+      const attempt = listTaskAttempts(t.db, task.id)[0];
+      const run = getAgentRun(t.db, attempt.agentRunId!);
+      assert.equal(run?.provider, "ollama", "the run must be attributed to ollama, never silently recorded as simulated or any other provider");
+
+      const failures = listUnresolvedFailures(t.db, project.id);
+      assert.match(failures[0].reason, /Ollama|ECONNREFUSED|reach/i);
+    } finally {
+      if (prevBaseUrl === undefined) delete process.env.OLLAMA_BASE_URL;
+      else process.env.OLLAMA_BASE_URL = prevBaseUrl;
+      delete process.env.OLLAMA_TIMEOUT_MS;
+      t.close();
+    }
+  });
+
+  test("an explicitly injected options.provider always overrides the project's own provider column (test-injection escape hatch, unchanged from before Ollama existed)", async () => {
+    const t = createTestDb();
+    const owner = getOwner(t.db)!;
+    const { project } = createProjectWithIdea(t.db, {
+      title: "Todo app",
+      rawIdeaText: "Build a one-page todo application.",
+      ownerId: owner.id,
+      provider: "ollama",
+    });
+    const task = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "Write requirements" });
+
+    const { SimulatedAdapter } = await import("../../providers/simulated/simulated-adapter.ts");
+    const result = await executeTask(t.db, task.id, { scenario: "success", provider: new SimulatedAdapter() });
+
+    assert.equal(result.outcome, "succeeded");
+    const attempt = listTaskAttempts(t.db, task.id)[0];
+    const run = getAgentRun(t.db, attempt.agentRunId!);
+    assert.equal(run?.provider, "simulated");
+
+    t.close();
+  });
+});

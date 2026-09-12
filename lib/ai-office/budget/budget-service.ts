@@ -12,6 +12,8 @@ import {
   sumReservedCostForProjectInPeriod,
   countSimulatedRunsForOffice,
   sumSimulatedCostForOffice,
+  countLocalRunsForOffice,
+  sumLocalCostForOffice,
   createBudgetReservation,
   getBudgetReservation,
   reconcileBudgetReservation,
@@ -454,6 +456,9 @@ export interface BudgetSnapshot {
   remainingUsd: number;
   simulatedRuns: number;
   simulatedCostUsd: number;
+  /** Ollama runs — always $0, tracked separately from both simulated and LIVE so the UI can show a distinct "LOCAL" figure rather than folding it into either. */
+  localRuns: number;
+  localCostUsd: number;
   status: "SAFE" | "WARNING" | "AT_CAP";
 }
 
@@ -481,6 +486,8 @@ export function getBudgetSnapshot(db: DatabaseSync): BudgetSnapshot {
     remainingUsd,
     simulatedRuns: countSimulatedRunsForOffice(db),
     simulatedCostUsd: sumSimulatedCostForOffice(db),
+    localRuns: countLocalRunsForOffice(db),
+    localCostUsd: sumLocalCostForOffice(db),
     status,
   };
 }

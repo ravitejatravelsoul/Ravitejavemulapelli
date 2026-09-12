@@ -60,15 +60,9 @@ function isThinkingRole(role: AgentRoleRow): boolean {
   return outputs.some((o) => THINKING_OUTPUTS.includes(o));
 }
 
-/**
- * The provider label for a project's own (not-yet-run) work. Today this is
- * trivially "simulated" (the only real code path — LIVE has no adapter and
- * is refused before ever reaching a task), kept as its own function so the
- * local-Ollama-provider work only needs to change this one place to read a
- * real `project.provider` column instead of inferring from `aiMode`.
- */
+/** The provider label for a project's own (not-yet-run) work — the project's configured `provider` column ("simulated" | "ollama"), or "live" for a (currently unreachable) LIVE-mode project. */
 function projectProviderLabel(project: ProjectRow): string {
-  return project.aiMode === "LIVE" ? "live" : "simulated";
+  return project.aiMode === "LIVE" ? "live" : project.provider;
 }
 
 function idleAgent(role: AgentRoleRow): OfficeAgentView {

@@ -1,7 +1,7 @@
 import "server-only";
 import type { DatabaseSync } from "node:sqlite";
 import { getOfficeStatus, type OfficeState } from "../domain/office.ts";
-import { listProjects, getProjectIdea, type ProjectRow, type ProjectStatus, type AiMode } from "../domain/projects.ts";
+import { listProjects, getProjectIdea, type ProjectRow, type ProjectStatus, type AiMode, type ProjectProvider } from "../domain/projects.ts";
 import { listTasksForProject } from "../domain/tasks.ts";
 import { listUnresolvedFailures, listPendingApprovalsForProject, type ApprovalKind } from "../domain/project-outputs.ts";
 import { listPendingApprovals } from "../domain/project-outputs.ts";
@@ -66,6 +66,7 @@ export interface ProjectSummary {
   ideaSummary: string;
   status: ProjectStatus;
   aiMode: AiMode;
+  provider: ProjectProvider;
   totalTasks: number;
   completedTasks: number;
   currentTaskTitle: string | null;
@@ -103,6 +104,7 @@ function summarizeProject(db: DatabaseSync, project: ProjectRow): ProjectSummary
     ideaSummary: idea ? truncate(idea.rawText, 140) : "",
     status: project.status,
     aiMode: project.aiMode,
+    provider: project.provider,
     totalTasks: tasks.length,
     completedTasks,
     currentTaskTitle: currentTask?.title ?? null,

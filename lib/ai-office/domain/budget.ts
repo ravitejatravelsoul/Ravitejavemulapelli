@@ -10,6 +10,15 @@ import { randomUUID } from "node:crypto";
  * is for reading it back and for future per-project budget rows.
  */
 
+/**
+ * Providers that never enter the LIVE financial ledger — `'simulated'`
+ * (Phase 4) and `'ollama'` (local, free inference). Every LIVE-sum query
+ * below excludes both; adding a third free provider later means changing
+ * this one list, not re-auditing every query.
+ */
+const FREE_PROVIDERS = ["simulated", "ollama"] as const;
+const FREE_PROVIDERS_SQL = FREE_PROVIDERS.map((p) => `'${p}'`).join(", ");
+
 // ---- money handling ----------------------------------------------------
 
 /**
@@ -183,10 +192,18 @@ export function sumSimulatedCostForProject(db: DatabaseSync, projectId: string):
   return row.total;
 }
 
-/** All-time (not period-scoped) LIVE cost for one project — the number that must never be confused with `sumSimulatedCostForProject`, per the "clearly distinguish simulated from LIVE" requirement. */
+/** All-time (not period-scoped) local (Ollama) cost for one project — always $0 by construction, tracked separately from simulated/LIVE for the same reason sumSimulatedCostForProject is: an honest number, not an assumed constant. */
+export function sumLocalCostForProject(db: DatabaseSync, projectId: string): number {
+  const row = db
+    .prepare("SELECT COALESCE(SUM(costUsd), 0) as total FROM ai_usage WHERE projectId = ? AND provider = 'ollama'")
+    .get(projectId) as { total: number };
+  return row.total;
+}
+
+/** All-time (not period-scoped) LIVE cost for one project — the number that must never be confused with `sumSimulatedCostForProject`/`sumLocalCostForProject`, per the "clearly distinguish simulated/local from LIVE" requirement. Excludes both free providers — see `FREE_PROVIDERS`. */
 export function sumLiveCostForProject(db: DatabaseSync, projectId: string): number {
   const row = db
-    .prepare("SELECT COALESCE(SUM(costUsd), 0) as total FROM ai_usage WHERE projectId = ? AND provider != 'simulated'")
+    .prepare(`SELECT COALESCE(SUM(costUsd), 0) as total FROM ai_usage WHERE projectId = ? AND provider NOT IN (${FREE_PROVIDERS_SQL})`)
     .get(projectId) as { total: number };
   return row.total;
 }
@@ -215,7 +232,7 @@ export function startOfCurrentMonthUtc(): number {
  */
 export function sumLiveAiUsageCostForOfficeInPeriod(db: DatabaseSync, periodStart: number, periodEndExclusive: number): number {
   const row = db
-    .prepare("SELECT COALESCE(SUM(costUsd), 0) as total FROM ai_usage WHERE provider != 'simulated' AND createdAt >= ? AND createdAt < ?")
+    .prepare(`SELECT COALESCE(SUM(costUsd), 0) as total FROM ai_usage WHERE provider NOT IN (${FREE_PROVIDERS_SQL}) AND createdAt >= ? AND createdAt < ?`)
     .get(periodStart, periodEndExclusive) as { total: number };
   return row.total;
 }
@@ -227,13 +244,20 @@ export function sumLiveAiUsageCostForProjectInPeriod(
   periodEndExclusive: number,
 ): number {
   const row = db
-    .prepare("SELECT COALESCE(SUM(costUsd), 0) as total FROM ai_usage WHERE provider != 'simulated' AND projectId = ? AND createdAt >= ? AND createdAt < ?")
+    .prepare(
+      `SELECT COALESCE(SUM(costUsd), 0) as total FROM ai_usage WHERE provider NOT IN (${FREE_PROVIDERS_SQL}) AND projectId = ? AND createdAt >= ? AND createdAt < ?`,
+    )
     .get(projectId, periodStart, periodEndExclusive) as { total: number };
   return row.total;
 }
 
 export function countSimulatedRunsForOffice(db: DatabaseSync): number {
   const row = db.prepare("SELECT COUNT(*) as count FROM ai_usage WHERE provider = 'simulated'").get() as { count: number };
+  return row.count;
+}
+
+export function countLocalRunsForOffice(db: DatabaseSync): number {
+  const row = db.prepare("SELECT COUNT(*) as count FROM ai_usage WHERE provider = 'ollama'").get() as { count: number };
   return row.count;
 }
 
@@ -246,6 +270,12 @@ export function countSimulatedRunsForOffice(db: DatabaseSync): number {
  */
 export function sumSimulatedCostForOffice(db: DatabaseSync): number {
   const row = db.prepare("SELECT COALESCE(SUM(costUsd), 0) as total FROM ai_usage WHERE provider = 'simulated'").get() as { total: number };
+  return row.total;
+}
+
+/** Same honesty rationale as `sumSimulatedCostForOffice` — OllamaAdapter is designed to always report $0, but this reads the real recorded total rather than assuming it. */
+export function sumLocalCostForOffice(db: DatabaseSync): number {
+  const row = db.prepare("SELECT COALESCE(SUM(costUsd), 0) as total FROM ai_usage WHERE provider = 'ollama'").get() as { total: number };
   return row.total;
 }
 

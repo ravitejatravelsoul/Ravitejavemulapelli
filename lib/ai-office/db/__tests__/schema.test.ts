@@ -24,9 +24,9 @@ describe("clean DB creation + migrations from zero", () => {
     const db = openDatabase(join(dir, "fresh.db"));
 
     const result = runMigrations(db);
-    assert.equal(result.version, 2);
-    assert.deepEqual(result.applied, ["001-init.sql", "002-budget-and-approval-scope.sql"]);
-    assert.equal(getSchemaVersion(db), 2);
+    assert.equal(result.version, 3);
+    assert.deepEqual(result.applied, ["001-init.sql", "002-budget-and-approval-scope.sql", "003-add-project-provider.sql"]);
+    assert.equal(getSchemaVersion(db), 3);
 
     const tableCount = db
       .prepare("SELECT COUNT(*) as count FROM sqlite_master WHERE type = 'table' AND name != 'sqlite_sequence'")
@@ -43,11 +43,11 @@ describe("migrations are idempotent / safe to run repeatedly", () => {
     const t = createTestDb({ seed: false });
     const first = runMigrations(t.db); // no-op, createTestDb already migrated
     assert.deepEqual(first.applied, []);
-    assert.equal(first.version, 2);
+    assert.equal(first.version, 3);
 
     const second = runMigrations(t.db);
     assert.deepEqual(second.applied, []);
-    assert.equal(second.version, 2);
+    assert.equal(second.version, 3);
     t.close();
   });
 });
@@ -64,13 +64,14 @@ describe("schema version is inspectable", () => {
     assert.deepEqual(rows, [
       { version: 1, name: "001-init.sql" },
       { version: 2, name: "002-budget-and-approval-scope.sql" },
+      { version: 3, name: "003-add-project-provider.sql" },
     ]);
     t.close();
   });
 });
 
-describe("migration 002 applies cleanly on top of an existing v1 database", () => {
-  test("Phase 1-5 data survives the upgrade, and the new columns/table work afterward", () => {
+describe("migrations 002+003 apply cleanly on top of an existing v1 database", () => {
+  test("Phase 1-5 data survives the upgrade, and the new columns/table/provider column work afterward", () => {
     const dir = mkdtempSync(join(tmpdir(), "ai-office-v1-"));
     const db = openDatabase(join(dir, "v1.db"));
 
@@ -100,14 +101,16 @@ describe("migration 002 applies cleanly on top of an existing v1 database", () =
     ).run(now, now);
 
     const result = runMigrations(db);
-    assert.deepEqual(result.applied, ["002-budget-and-approval-scope.sql"]);
-    assert.equal(getSchemaVersion(db), 2);
+    assert.deepEqual(result.applied, ["002-budget-and-approval-scope.sql", "003-add-project-provider.sql"]);
+    assert.equal(getSchemaVersion(db), 3);
 
     // The pre-existing rows survive, unmodified except for the new
     // columns now existing (and being NULL, since this data predates
-    // them).
-    const project = db.prepare("SELECT * FROM projects WHERE id = 'p1'").get();
+    // them) — except `provider`, which is NOT NULL DEFAULT 'simulated',
+    // so pre-existing rows get backfilled with that default rather than NULL.
+    const project = db.prepare("SELECT * FROM projects WHERE id = 'p1'").get() as { provider: string } | undefined;
     assert.ok(project);
+    assert.equal(project!.provider, "simulated");
     const approval = db.prepare("SELECT * FROM approvals WHERE id = 'a1'").get() as {
       status: string;
       taskId: string | null;
@@ -276,7 +279,7 @@ describe("DB survives reopen/reconnect", () => {
     t.db.close();
 
     const reopened = reopenTestDb(dir);
-    assert.equal(getSchemaVersion(reopened), 2);
+    assert.equal(getSchemaVersion(reopened), 3);
     const roles = reopened.prepare("SELECT COUNT(*) as count FROM agent_roles").get() as { count: number };
     assert.equal(roles.count, AGENT_ROLE_CATALOG.length);
     reopened.close();

@@ -35,6 +35,7 @@ import { buildTaskContext } from "./context-builder.ts";
 import { authorizeBudget } from "./budget-gate.ts";
 import { isReviewRole, findRemediationTargets, findStaleDownstreamReviews } from "./remediation.ts";
 import { SimulatedAdapter } from "../providers/simulated/simulated-adapter.ts";
+import { OllamaAdapter } from "../providers/ollama/ollama-adapter.ts";
 import type { AIProviderAdapter } from "../providers/types.ts";
 
 /**
@@ -110,7 +111,7 @@ function callAdapterWithTimeout(
 export interface ExecuteTaskOptions {
   /** Explicit, deterministic scenario selector — "success" (default), "failure", "retry-success". Never random. */
   scenario?: string;
-  /** Defaults to SimulatedAdapter. Only ever SimulatedAdapter exists through Phase 5 — this parameter exists for test injection (including a deliberately slow/hanging test double, to prove timeout behavior), not for selecting a live provider. */
+  /** Defaults to the project's own `provider` column (SimulatedAdapter or OllamaAdapter) — this parameter exists for test injection (including a deliberately slow/hanging test double, to prove timeout behavior), not for overriding a real project's configured provider. */
   provider?: AIProviderAdapter;
   /** Overrides DEFAULT_TASK_TIMEOUT_MS — tests use a short value so timeout tests run fast. */
   timeoutMs?: number;
@@ -152,7 +153,7 @@ export async function executeTask(
   updateTaskStatus(db, task.id, "IN_PROGRESS");
   const attempt = createTaskAttempt(db, task.id);
   const context = buildTaskContext(db, task, role, { scenario: options.scenario });
-  const adapter = options.provider ?? new SimulatedAdapter();
+  const adapter = options.provider ?? (project.provider === "ollama" ? new OllamaAdapter() : new SimulatedAdapter());
 
   let agentRun = createAgentRunForAttempt(db, { taskAttemptId: attempt.id, roleId: role.id, provider: adapter.name });
   agentRun = updateAgentRunStatus(db, agentRun.id, "RUNNING");

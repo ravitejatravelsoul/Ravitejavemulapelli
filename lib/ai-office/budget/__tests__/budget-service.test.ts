@@ -180,6 +180,42 @@ describe("simulated vs. LIVE accounting", () => {
   });
 });
 
+describe("local (Ollama) vs. LIVE accounting", () => {
+  test("ollama usage never counts against the LIVE budget and never blocks", () => {
+    const t = createTestDb();
+    const { project } = setupProject(t);
+    seedLiveUsage(t, project.id, 29, "ollama");
+    const result = authorizeBudget(t.db, { projectId: project.id, provider: "synthetic-live-test", estimatedCostUsd: 5 });
+    assert.equal(result.status, "AUTHORIZED", "ollama-provider usage must be invisible to LIVE budget math, exactly like simulated");
+    t.close();
+  });
+
+  test("getBudgetSnapshot separates local (Ollama) runs/cost from both simulated and LIVE", () => {
+    const t = createTestDb();
+    const { project } = setupProject(t);
+    seedLiveUsage(t, project.id, 3, "synthetic-live-test");
+    seedLiveUsage(t, project.id, 0, "simulated");
+    seedLiveUsage(t, project.id, 0, "ollama");
+    seedLiveUsage(t, project.id, 0, "ollama");
+
+    const snapshot = getBudgetSnapshot(t.db);
+    assert.equal(snapshot.liveSpendUsd, 3);
+    assert.equal(snapshot.simulatedRuns, 1);
+    assert.equal(snapshot.localRuns, 2);
+    assert.equal(snapshot.localCostUsd, 0);
+    assert.equal(snapshot.status, "SAFE");
+
+    t.close();
+  });
+
+  test("authorizeBudget still refuses provider 'simulated' but accepts any real LIVE-provider string — 'ollama' is never itself passed to this LIVE-only gate", () => {
+    const t = createTestDb();
+    const { project } = setupProject(t);
+    assert.throws(() => authorizeBudget(t.db, { projectId: project.id, provider: "simulated", estimatedCostUsd: 1 }));
+    t.close();
+  });
+});
+
 describe("reservation / reconciliation — atomic, single source of truth per state", () => {
   test("reconciling $10 estimate to $8 actual keeps exactly $8 committed — never $0, never $18", () => {
     const t = createTestDb();

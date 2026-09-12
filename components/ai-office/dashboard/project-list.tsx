@@ -31,6 +31,9 @@ function ProjectCard({ project }: { project: ProjectSummary }) {
             <Badge variant="outline" className="font-mono text-[0.6rem] uppercase">
               {project.aiMode}
             </Badge>
+            <Badge variant="secondary" className="font-mono text-[0.6rem] uppercase">
+              {project.provider}
+            </Badge>
           </div>
           {project.ideaSummary && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{project.ideaSummary}</p>}
         </div>

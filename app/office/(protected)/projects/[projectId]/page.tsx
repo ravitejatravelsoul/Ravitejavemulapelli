@@ -39,6 +39,9 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
               <Badge variant="outline" className="font-mono text-[0.6rem] uppercase">
                 {project.aiMode}
               </Badge>
+              <Badge variant="secondary" className="font-mono text-[0.6rem] uppercase">
+                {project.provider}
+              </Badge>
             </div>
             <p className="mt-2 max-w-2xl text-sm text-muted-foreground">{ideaText}</p>
             <p className="mt-2 text-xs text-muted-foreground">
