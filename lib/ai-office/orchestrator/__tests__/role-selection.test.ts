@@ -107,6 +107,24 @@ describe("selectRoles — capability-driven backend selection (Phase 8 follow-up
     assert.ok(roles.includes("ui-ux-agent"), "expected ui-ux-agent");
     assert.ok(!roles.includes("backend-developer"), "a static Hello World webpage needs no backend");
   });
+
+  test('a negated backend/database mention ("work without requiring a backend or database") does not select backend-developer — a real UI acceptance run surfaced this exact false positive', () => {
+    const { roles } = selectRoles(
+      "Create a polished modern task manager web application. Users should be able to add tasks, mark tasks complete, delete tasks, and see counts for total, active, and completed tasks. The application should have a clean responsive design and work without requiring a backend or database. Keep the implementation simple and reliable.",
+    );
+    assert.ok(roles.includes("frontend-developer"), "expected frontend-developer");
+    assert.ok(!roles.includes("backend-developer"), "the idea explicitly says no backend/database is required");
+  });
+
+  test("a genuine (non-negated) backend/database mention still selects backend-developer", () => {
+    const { roles } = selectRoles("Build a task manager that stores tasks in a database with a REST API.");
+    assert.ok(roles.includes("backend-developer"), "a real backend/database signal must still be honored");
+  });
+
+  test('other negation phrasings ("no backend needed", "does not require a database") are also recognized', () => {
+    assert.ok(!selectRoles("Build a simple page. No backend needed for this.").roles.includes("backend-developer"));
+    assert.ok(!selectRoles("Build a simple page that does not require a database.").roles.includes("backend-developer"));
+  });
 });
 
 describe("requiresOwnerApproval — synthetic approval signal", () => {

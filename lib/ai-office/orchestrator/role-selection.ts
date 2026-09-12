@@ -72,6 +72,37 @@ function includesAny(text: string, signals: string[]): string[] {
 }
 
 /**
+ * A real UI acceptance run surfaced this exact bug: "work without
+ * requiring a backend or database" contains both "backend" and
+ * "database" as bare words, so a plain `includesAny` check reads it as
+ * two explicit backend signals — the opposite of what the sentence
+ * actually says. Only applied to BACKEND_SIGNALS (not the other signal
+ * categories) since a false-positive backend inclusion is the most
+ * costly mistake role selection can make (an entire unnecessary agent
+ * role). A short, local word window immediately before the match is
+ * enough to catch the natural ways someone phrases this ("without a
+ * database", "no backend needed", "doesn't require a database") without
+ * trying to parse the sentence — still a deterministic keyword rule, not
+ * a language model.
+ */
+const NEGATION_CUES = ["without", "no ", "not ", "don't", "do not", "doesn't", "does not", "never need", "never require", "excluding", "no need for", "not require", "not need"];
+
+function isNegatedMatch(text: string, matchIndex: number): boolean {
+  const windowStart = Math.max(0, matchIndex - 60);
+  const window = text.slice(windowStart, matchIndex);
+  return NEGATION_CUES.some((cue) => window.includes(cue));
+}
+
+function includesAnyUnlessNegated(text: string, signals: string[]): string[] {
+  const hits: string[] = [];
+  for (const signal of signals) {
+    const match = new RegExp(`\\b${escapeRegExp(signal)}\\b`, "i").exec(text);
+    if (match && !isNegatedMatch(text, match.index)) hits.push(signal);
+  }
+  return hits;
+}
+
+/**
  * Selects the roles required for a given idea, per the approved rule
  * table. Always includes product-owner (every project needs
  * requirements), solution-architect (every project needs an
@@ -108,7 +139,7 @@ export function selectRoles(ideaText: string): RoleSelection {
   // more general-purpose "server/logic" role in this catalog — matching
   // every existing generic idea like "Build a small tool." that isn't
   // asserting anything about frontend/backend specifically.
-  const backendHits = includesAny(text, BACKEND_SIGNALS);
+  const backendHits = includesAnyUnlessNegated(text, BACKEND_SIGNALS);
   const needsBackend = backendHits.length > 0 || !needsFrontend;
   if (needsBackend) {
     roles.push("backend-developer");
