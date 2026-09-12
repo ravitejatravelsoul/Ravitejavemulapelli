@@ -18,6 +18,9 @@ export function OverviewCards({ overview }: { overview: OfficeOverview }) {
       <StatCard label="Paused" value={overview.pausedProjects} />
       <StatCard label="Blocked" value={overview.blockedProjects} tone={overview.blockedProjects > 0 ? "warn" : "default"} />
       <StatCard label="Ready for Review" value={overview.readyForReviewProjects} />
+      {overview.readyForReviewUnverifiedProjects > 0 && (
+        <StatCard label="Awaiting Verification" value={overview.readyForReviewUnverifiedProjects} tone="warn" />
+      )}
       <StatCard label="Pending Approvals" value={overview.pendingApprovals} tone={overview.pendingApprovals > 0 ? "warn" : "default"} />
       <StatCard label="Tasks Completed" value={overview.tasksCompleted} />
       <StatCard label="Tasks Running" value={overview.tasksRunning} />

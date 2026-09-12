@@ -25,6 +25,8 @@ export interface OfficeOverview {
   pausedProjects: number;
   blockedProjects: number;
   readyForReviewProjects: number;
+  /** Status READY_FOR_REVIEW but no real deliverable has been verified yet — surfaced separately so it's never silently folded into `readyForReviewProjects`'s count. */
+  readyForReviewUnverifiedProjects: number;
   pendingApprovals: number;
   tasksCompleted: number;
   tasksRunning: number;
@@ -38,6 +40,28 @@ function countProjectsByStatus(db: DatabaseSync, status: ProjectStatus): number 
   return row.count;
 }
 
+/**
+ * Phase 8 Part L applies to this overview card too — "Ready for Review"
+ * must count projects that are genuinely ready, not merely every project
+ * whose `status` happens to be READY_FOR_REVIEW (which today includes
+ * simulated-text-only workflows with no real deliverable). A project
+ * counts here only if it has no workspace at all (a legacy/pure-text
+ * project, for which the status itself is honest) OR its workspace's
+ * deliverable is VERIFIED.
+ */
+function countHonestlyReadyForReviewProjects(db: DatabaseSync): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) as count FROM projects p
+       WHERE p.status = 'READY_FOR_REVIEW'
+         AND NOT EXISTS (
+           SELECT 1 FROM workspaces w WHERE w.projectId = p.id AND w.deliveryState != 'VERIFIED'
+         )`,
+    )
+    .get() as { count: number };
+  return row.count;
+}
+
 function countTasksByStatus(db: DatabaseSync, status: string): number {
   const row = db.prepare("SELECT COUNT(*) as count FROM tasks WHERE status = ?").get(status) as { count: number };
   return row.count;
@@ -46,13 +70,16 @@ function countTasksByStatus(db: DatabaseSync, status: string): number {
 export function getOfficeOverview(db: DatabaseSync): OfficeOverview {
   const office = getOfficeStatus(db);
   const budget = getBudgetSnapshot(db);
+  const honestlyReady = countHonestlyReadyForReviewProjects(db);
+  const rawReady = countProjectsByStatus(db, "READY_FOR_REVIEW");
 
   return {
     officeState: office?.state ?? "CLOSED",
     activeProjects: countProjectsByStatus(db, "IN_PROGRESS"),
     pausedProjects: countProjectsByStatus(db, "PAUSED"),
     blockedProjects: countProjectsByStatus(db, "BLOCKED"),
-    readyForReviewProjects: countProjectsByStatus(db, "READY_FOR_REVIEW"),
+    readyForReviewProjects: honestlyReady,
+    readyForReviewUnverifiedProjects: rawReady - honestlyReady,
     pendingApprovals: listPendingApprovals(db).length,
     tasksCompleted: countTasksByStatus(db, "DONE"),
     tasksRunning: countTasksByStatus(db, "IN_PROGRESS"),

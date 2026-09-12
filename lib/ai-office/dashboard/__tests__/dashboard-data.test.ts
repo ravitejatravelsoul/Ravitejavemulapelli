@@ -18,7 +18,7 @@ import {
   describeEvent,
 } from "../dashboard-data.ts";
 import { getProjectDetail } from "../project-detail-data.ts";
-import { upsertRunnerHeartbeat } from "../../domain/workspace.ts";
+import { upsertRunnerHeartbeat, setDeliveryState } from "../../domain/workspace.ts";
 
 process.env.OFFICE_OWNER_EMAIL = "test-owner@example.invalid";
 process.env.OFFICE_OWNER_PASSWORD_HASH = "synthetic-test-salt:synthetic-test-hash-not-a-real-scrypt-output";
@@ -68,6 +68,12 @@ describe("dashboard-data — project summaries and activity reflect real state",
     assert.ok(activity.length > 0);
     assert.ok(activity.every((entry) => !entry.message.includes("{") && !entry.message.includes('"')), "activity messages must be human-readable, not raw JSON");
 
+    // Overview "Ready for Review" counts this legacy/pure-text project
+    // (no workspace at all) — its status is honest as-is.
+    const overview = getOfficeOverview(t.db);
+    assert.equal(overview.readyForReviewProjects, 1);
+    assert.equal(overview.readyForReviewUnverifiedProjects, 0);
+
     t.close();
   });
 
@@ -90,6 +96,20 @@ describe("dashboard-data — project summaries and activity reflect real state",
     assert.equal(approvalsView.length, 1);
     assert.equal(approvalsView[0].scopeLabel, "Entire project");
     assert.equal(approvalsView[0].projectTitle, "Needs approval");
+
+    t.close();
+  });
+
+  test("Office Overview never folds an unverified real-workspace project into the honest 'Ready for Review' count (Phase 8 Part L)", () => {
+    const t = createTestDb();
+    const owner = getOwner(t.db)!;
+    const { project } = createProjectWithIdea(t.db, { title: "Real dev, not verified", rawIdeaText: "x", ownerId: owner.id });
+    updateProjectStatus(t.db, project.id, "READY_FOR_REVIEW");
+    setDeliveryState(t.db, project.id, "BUILDING"); // a real workspace exists, but nothing has been verified yet
+
+    const overview = getOfficeOverview(t.db);
+    assert.equal(overview.readyForReviewProjects, 0, "an unverified real-deliverable project must not count as honestly ready");
+    assert.equal(overview.readyForReviewUnverifiedProjects, 1);
 
     t.close();
   });
