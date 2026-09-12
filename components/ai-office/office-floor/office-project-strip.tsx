@@ -23,7 +23,7 @@ export function OfficeProjectStrip({ floor }: { floor: OfficeFloorView }) {
     );
   }
 
-  const { title, progress, provider, status } = floor.selectedProject;
+  const { title, progress, provider, displayStatusLabel, isStalledWithNoDeliverable } = floor.selectedProject;
   const percent = progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0;
   const workingAgent = floor.agents.find((a) => a.status === "WORKING" || a.status === "THINKING" || a.status === "REVIEWING");
   const waitingCount = floor.agents.filter((a) => a.status === "WAITING").length;
@@ -33,7 +33,15 @@ export function OfficeProjectStrip({ floor }: { floor: OfficeFloorView }) {
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
           <p className="truncate text-sm font-semibold tracking-tight">{title}</p>
-          <span className="font-mono text-[0.6rem] tracking-widest text-muted-foreground uppercase">{status.replace(/_/g, " ")}</span>
+          <span
+            className={
+              isStalledWithNoDeliverable
+                ? "font-mono text-[0.6rem] tracking-widest text-destructive uppercase"
+                : "font-mono text-[0.6rem] tracking-widest text-muted-foreground uppercase"
+            }
+          >
+            {displayStatusLabel}
+          </span>
           <span className="rounded-full bg-muted px-1.5 py-0.5 font-mono text-[0.6rem] tracking-widest text-muted-foreground uppercase">{provider}</span>
         </div>
         <div className="mt-1.5 flex items-center gap-2">

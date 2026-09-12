@@ -7,7 +7,8 @@ import { listTasksForProject, listTaskAttempts, getAgentRun, type TaskRow, type 
 import { listArtifactsForProject, listTestResultsForTask, type ArtifactRow, type TestResultRow } from "../domain/project-outputs.ts";
 import { listEventsForProject } from "../domain/events.ts";
 import { describeEvent, type ActivityEntry } from "./dashboard-data.ts";
-import { listWorkspaceFileRecords, type WorkspaceFileRow } from "../domain/workspace.ts";
+import { listWorkspaceFileRecords, getWorkspace, type WorkspaceFileRow } from "../domain/workspace.ts";
+import { getHonestStatusLabel, isUnverifiedCompletionClaim, isStalledWithNoDeliverable, STALLED_NO_DELIVERABLE_LABEL } from "./delivery-status.ts";
 
 /**
  * Read-only "office floor" projection — turns real, already-persisted
@@ -43,6 +44,10 @@ export interface OfficeFloorView {
     id: string;
     title: string;
     status: ProjectStatus;
+    /** The honest label to display instead of `status` — identical to it unless the project claims completion without a verified real deliverable, or is stalled (every task DONE, no real deliverable, nothing left to run). */
+    displayStatusLabel: string;
+    isUnverifiedCompletion: boolean;
+    isStalledWithNoDeliverable: boolean;
     progress: { completed: number; total: number };
     provider: string;
   } | null;
@@ -177,8 +182,27 @@ export function getOfficeFloorView(db: DatabaseSync, selectedProjectId?: string,
   const agents = roles.map((role) => buildAgentView(db, role, project, taskByRoleId.get(role.id), { mostRecentDoneAt, now }));
   const completed = tasks.filter((t) => t.status === "DONE").length;
 
+  const workspaceRow = getWorkspace(db, project.id);
+  const hasWorkspace = workspaceRow !== undefined;
+  const deliveryState = workspaceRow?.deliveryState ?? null;
+  const stalled = isStalledWithNoDeliverable({
+    status: project.status,
+    allTasksDone: tasks.length > 0 && completed === tasks.length,
+    hasWorkspace,
+    deliveryState,
+  });
+
   return {
-    selectedProject: { id: project.id, title: project.title, status: project.status, progress: { completed, total: tasks.length }, provider: projectProviderLabel(project) },
+    selectedProject: {
+      id: project.id,
+      title: project.title,
+      status: project.status,
+      displayStatusLabel: stalled ? STALLED_NO_DELIVERABLE_LABEL : getHonestStatusLabel(project.status, hasWorkspace, deliveryState),
+      isUnverifiedCompletion: isUnverifiedCompletionClaim(project.status, hasWorkspace, deliveryState),
+      isStalledWithNoDeliverable: stalled,
+      progress: { completed, total: tasks.length },
+      provider: projectProviderLabel(project),
+    },
     projects,
     agents,
   };

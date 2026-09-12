@@ -147,6 +147,15 @@ describe("getOfficeFloorView — project-level states", () => {
     const view = getOfficeFloorView(t.db);
     assert.equal(view.selectedProject?.id, newer.id);
   });
+
+  test("a project with every task DONE but no real workspace is shown as STALLED · NO DELIVERABLE — a real browser walkthrough found the Living Office strip showing raw 'IN PROGRESS' here instead", () => {
+    const { t, project, tasks } = setup();
+    for (const task of tasks) updateTaskStatus(t.db, task.id, "DONE");
+
+    const view = getOfficeFloorView(t.db, project.id);
+    assert.equal(view.selectedProject?.isStalledWithNoDeliverable, true);
+    assert.match(view.selectedProject!.displayStatusLabel, /STALLED/);
+  });
 });
 
 describe("getOfficeFloorView — provider label", () => {
