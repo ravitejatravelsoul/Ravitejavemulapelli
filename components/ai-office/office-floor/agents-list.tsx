@@ -33,7 +33,15 @@ export function AgentsList({ floor, onSelect }: { floor: OfficeFloorView; onSele
             className="glass flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2.5 text-left transition-colors enabled:hover:border-primary/40 disabled:cursor-default"
           >
             <div className="min-w-0">
-              <p className="truncate text-sm font-medium">{agent.roleName}</p>
+              <p className="truncate text-sm font-medium">
+                {agent.roleName}
+                {/* Subtle paid-AI indicator (Part 19) — only paid work gets a marker; local/simulated agents stay unmarked, no redesign. */}
+                {agent.provider === "claude" && (
+                  <span className="ml-1.5 rounded-full bg-primary/10 px-1.5 py-0.5 align-middle font-mono text-[0.55rem] tracking-widest text-primary uppercase">
+                    Claude
+                  </span>
+                )}
+              </p>
               {agent.currentTaskTitle && <p className="truncate text-xs text-muted-foreground">{agent.currentTaskTitle}</p>}
               {!agent.currentTaskTitle && agent.lastCompletedTaskTitle && (
                 <p className="truncate text-xs text-muted-foreground">Last: {agent.lastCompletedTaskTitle}</p>

@@ -50,6 +50,8 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
     displayStatusLabel,
     isUnverifiedCompletion,
     isStalledWithNoDeliverable,
+    roleProviders,
+    budget,
   } = detail;
   const canPause = project.status === "IN_PROGRESS";
   const canResume = project.status === "PAUSED";
@@ -92,6 +94,12 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
               <Badge variant="secondary" className="font-mono text-[0.6rem] uppercase">
                 {project.provider}
               </Badge>
+              <Badge
+                variant={project.aiPolicyMode === "LOCAL_ONLY" ? "outline" : "default"}
+                className="font-mono text-[0.6rem] uppercase"
+              >
+                AI Policy: {project.aiPolicyMode.replace("_", " ")}
+              </Badge>
             </div>
             <p className="mt-2 max-w-2xl text-sm text-muted-foreground">{ideaText}</p>
             <p className="mt-2 text-xs text-muted-foreground">
@@ -122,6 +130,36 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
           <span>LIVE cost: ${liveCostUsd.toFixed(2)}</span>
         </div>
       </GlassCard>
+
+      {project.aiPolicyMode !== "LOCAL_ONLY" && (
+        <GlassCard>
+          <h2 className="text-sm font-semibold tracking-tight">AI Provider &amp; Budget</h2>
+          <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-muted-foreground">
+            <span>
+              Project LIVE budget: ${budget.projectLiveSpendUsd.toFixed(2)}/{budget.projectLiveCapUsd != null ? `$${budget.projectLiveCapUsd.toFixed(2)}` : "(no cap)"}
+            </span>
+            <span>
+              Monthly LIVE budget: ${budget.officeMonthlySpendUsd.toFixed(2)}/${budget.officeMonthlyCapUsd.toFixed(2)} · ${budget.officeMonthlyRemainingUsd.toFixed(2)} remaining
+            </span>
+            <Badge variant={budget.claudeConfigured ? "secondary" : "destructive"} className="font-mono text-[0.6rem] uppercase">
+              Claude {budget.claudeConfigured ? "configured" : "not configured"}
+            </Badge>
+          </div>
+          {roleProviders.length > 0 && (
+            <ul className="mt-3 flex flex-col gap-1 text-xs">
+              {roleProviders.map((rp) => (
+                <li key={rp.roleId} className="flex items-center gap-2">
+                  <span className="font-medium">{rp.roleName}</span>
+                  <Badge variant={rp.provider === "claude" ? "default" : "outline"} className="font-mono text-[0.6rem] uppercase">
+                    {rp.provider}
+                    {rp.model ? ` · ${rp.model}` : ""}
+                  </Badge>
+                </li>
+              ))}
+            </ul>
+          )}
+        </GlassCard>
+      )}
 
       <GlassCard>
         <h2 className="text-sm font-semibold tracking-tight">

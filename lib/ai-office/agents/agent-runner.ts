@@ -30,6 +30,8 @@ import {
   listUnresolvedFailures,
   resolveFailure,
   listArtifactsForProject,
+  createApproval,
+  listApprovalsForProject,
 } from "../domain/project-outputs.ts";
 import { recordEvent } from "../domain/events.ts";
 import { recordAiUsage } from "../domain/budget.ts";
@@ -43,6 +45,14 @@ import { OllamaAdapter } from "../providers/ollama/ollama-adapter.ts";
 import { listInstalledOllamaModels } from "../providers/ollama/ollama-inventory.ts";
 import type { AIProviderAdapter } from "../providers/types.ts";
 import { LocalModelRouter, type ModelFailureContext } from "./model-router.ts";
+import { routeProvider } from "./provider-router.ts";
+import { ClaudeAdapter, isClaudeConfigured } from "../providers/claude/claude-adapter.ts";
+import {
+  authorizeBudget as authorizeLiveBudget,
+  reconcileReservationWithUsage,
+  releaseReservation,
+  getBudgetSnapshot,
+} from "../budget/budget-service.ts";
 import { applyFileOperations } from "../workspace/apply-file-operations.ts";
 import { workspaceExists, listFiles } from "../workspace/workspace-service.ts";
 import { validateWorkspaceIntegrity, describeIntegrityFailure } from "../workspace/workspace-integrity.ts";
@@ -59,7 +69,7 @@ import { getWorkspace, listWorkspaceFileRecords, setDeliveryState } from "../dom
  * note in docs/ai-office/11-implementation-phases.md.
  */
 
-export type ExecuteTaskOutcome = "not-eligible" | "budget-refused" | "succeeded" | "retried" | "escalated";
+export type ExecuteTaskOutcome = "not-eligible" | "budget-refused" | "claude-blocked" | "succeeded" | "retried" | "escalated";
 
 export interface ExecuteTaskResult {
   outcome: ExecuteTaskOutcome;
@@ -195,12 +205,28 @@ async function runAdapterWithOperationalRetries(
   timeoutMs: number,
 ): Promise<import("../providers/types.ts").AgentTaskResult> {
   let result = await runAdapterOnce(adapter, input, timeoutMs);
+  // Accumulated, not just the last attempt's — a paid provider (Claude)
+  // can incur real, billable usage on an in-process retry that still
+  // ends in failure (e.g. a syntactically-valid-but-schema-mismatched
+  // response, unlike a network timeout/connection error, which never
+  // bills). Every real token this "one logical execution" actually
+  // consumed must be reflected in what gets reconciled against the
+  // budget reservation afterward — dropping an earlier attempt's usage
+  // here would silently under-report real spend (controlled Claude LIVE
+  // pilot, Part 6). A free provider's usage is always {0,0,$0} per call,
+  // so this sums to the same total as before for Ollama/Simulated.
+  let totalInputTokens = result.usage.inputTokens;
+  let totalOutputTokens = result.usage.outputTokens;
+  let totalCostUsd = result.usage.costUsd;
   let retries = 0;
   while (result.status === "FAILED" && isOperationalFailureReason(result.output.failure?.reason ?? "") && retries < MAX_OPERATIONAL_RETRIES) {
     retries += 1;
     result = await runAdapterOnce(adapter, input, timeoutMs);
+    totalInputTokens += result.usage.inputTokens;
+    totalOutputTokens += result.usage.outputTokens;
+    totalCostUsd += result.usage.costUsd;
   }
-  return result;
+  return { ...result, usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens, costUsd: totalCostUsd } };
 }
 
 /**
@@ -390,6 +416,168 @@ export interface ExecuteTaskOptions {
   availableModelsOverride?: string[];
   /** Test-injection point for the real OllamaAdapter's own HTTP call when executeTask constructs it internally via LocalModelRouter (separate from `intentCheckFetch`, which only covers the intent-consistency gates' own call). Real (non-test) runner operation never sets this; ignored when `options.provider` is already given. */
   ollamaFetchImpl?: typeof fetch;
+  /** Test-injection point for the real ClaudeAdapter's own Anthropic client when executeTask constructs it internally via the controlled Claude LIVE pilot's provider-routing/approval/budget gate (separate from `options.provider`, which bypasses that gate entirely). Real (non-test) runner operation never sets this; ignored when `options.provider` is already given. Still requires `isClaudeConfigured()` to hold (a real or test `ANTHROPIC_API_KEY`/pricing configuration) — this only replaces the HTTP client, never the configuration check itself. */
+  claudeClientOverride?: import("../providers/claude/claude-adapter.ts").ClaudeAdapterOptions["client"];
+}
+
+/** The reused ApprovalKind for Claude paid-AI-use approval — see migration 006's docblock for why a new enum value isn't added instead. Project-scoped, never task-scoped: the whole point is a one-time "may this project use paid AI at all" decision (controlled Claude LIVE pilot, Part 9). */
+const CLAUDE_APPROVAL_KIND = "paid_service_purchase" as const;
+
+function claudeApprovalsForProject(db: DatabaseSync, projectId: string) {
+  return listApprovalsForProject(db, projectId).filter((a) => a.kind === CLAUDE_APPROVAL_KIND && a.taskId === null);
+}
+
+function hasApprovedClaudeUse(db: DatabaseSync, projectId: string): boolean {
+  return claudeApprovalsForProject(db, projectId).some((a) => a.status === "APPROVED");
+}
+
+function hasPendingClaudeApproval(db: DatabaseSync, projectId: string): boolean {
+  return claudeApprovalsForProject(db, projectId).some((a) => a.status === "PENDING");
+}
+
+function hasRejectedClaudeApproval(db: DatabaseSync, projectId: string): boolean {
+  return claudeApprovalsForProject(db, projectId).some((a) => a.status === "REJECTED");
+}
+
+export interface PreparedClaudeCall {
+  adapter: ClaudeAdapter;
+  reservationId: string;
+}
+type ClaudeGateResult = ({ outcome: "proceed" } & PreparedClaudeCall) | { outcome: "blocked"; reason: string };
+
+/**
+ * A conservative *ceiling*, not the expected cost — reserves enough to
+ * cover the worst case where every bounded in-process operational retry
+ * (`MAX_OPERATIONAL_RETRIES`, see `runAdapterWithOperationalRetries`)
+ * also incurs real, billable Claude usage. Most operational retries
+ * (a network timeout, a connection error, a rate limit) never bill at
+ * all — the request was never successfully processed — but a
+ * syntactically-valid, schema-mismatched response *does* bill real
+ * tokens and is still classified operational (retried in-process, not
+ * as its own counted task attempt). Reserving for the true worst case
+ * (Part 8's "estimate the MAXIMUM allowed/reserved cost") rather than a
+ * single call's cost is what keeps this "one logical execution" from
+ * ever being able to spend more than what was reserved for it.
+ */
+function conservativeReservationEstimateUsd(singleCallEstimateUsd: number): number {
+  return singleCallEstimateUsd * (MAX_OPERATIONAL_RETRIES + 1);
+}
+
+/**
+ * The controlled Claude LIVE pilot's paid-routing gate — reached only
+ * when `ProviderRouter` has already decided this role/task should use
+ * CLAUDE (evidence-driven: HYBRID + no qualified local model for this
+ * capability, or CLAUDE_ONLY). Nothing here ever spends money itself;
+ * it only decides whether a real Claude call is currently *permitted*,
+ * checked in this exact order (see the module's design notes):
+ *
+ *  1. Owner approval (Part 9) — a one-time, project-scoped decision,
+ *     reachable and testable via the real owner UI even with no
+ *     credential configured at all.
+ *  2. Credential/pricing configuration (Part 33) — a missing credential
+ *     is a clean, honest blocked state, never a thrown exception deep
+ *     inside task execution; `ClaudeAdapter` is never even constructed
+ *     until this passes.
+ *  3. Atomic LIVE budget reservation (Parts 7/8) — the existing,
+ *     already-proven `authorizeBudget()`/reservation architecture,
+ *     reused verbatim rather than rebuilt.
+ *
+ * Called *before* a real TaskAttempt is ever created for this
+ * execution (see `executeTask`'s call site) — a "not yet actionable"
+ * outcome here (no decision yet, no budget, no credential) must never
+ * consume this task's real retry ceiling the way an actual failed
+ * attempt would.
+ */
+function prepareClaudeCall(
+  db: DatabaseSync,
+  ctx: {
+    project: ProjectRow;
+    role: AgentRoleRow;
+    task: TaskRow;
+    context: import("../providers/types.ts").TaskContext;
+    /** Test-injection point for the internally-constructed ClaudeAdapter's own HTTP client (separate from `options.provider`, which bypasses this entire gate) — same pattern as `options.ollamaFetchImpl` for LocalModelRouter's internally-constructed OllamaAdapter. Real (non-test) runner operation never sets this; still requires a real `ANTHROPIC_API_KEY`/pricing configuration to be set (`isClaudeConfigured()`), exactly like real operation. */
+    clientOverride?: import("../providers/claude/claude-adapter.ts").ClaudeAdapterOptions["client"];
+  },
+): ClaudeGateResult {
+  const { project, role, task, context } = ctx;
+
+  if (hasRejectedClaudeApproval(db, project.id)) {
+    return {
+      outcome: "blocked",
+      reason: "Paid AI (Claude) use was rejected by the project owner for this project — this role cannot proceed under the current AI policy.",
+    };
+  }
+
+  if (!hasApprovedClaudeUse(db, project.id)) {
+    if (!hasPendingClaudeApproval(db, project.id)) {
+      // Deliberately reachable and fully populated with real, current
+      // budget figures even with no ANTHROPIC_API_KEY configured at all
+      // (Part 33) — this is a pure read (getBudgetSnapshot never writes
+      // or reserves anything), so the owner UI can render "PAID AI
+      // APPROVAL REQUIRED — Provider: Claude · Role: ... · Project LIVE
+      // budget: $.../$... · Monthly LIVE budget: $.../$..." (Part 9)
+      // before Claude is ever configured.
+      const snapshot = getBudgetSnapshot(db);
+      const projectCapText = project.monthlyBudgetCapUsd != null ? `$${project.monthlyBudgetCapUsd.toFixed(2)}` : "(no project cap set)";
+      const approval = createApproval(db, {
+        projectId: project.id,
+        kind: CLAUDE_APPROVAL_KIND,
+        requestedBy: "system",
+        context: {
+          provider: "claude",
+          role: role.id,
+          reason: `PAID AI APPROVAL REQUIRED — Provider: Claude · Role: ${role.name} · Reason: no qualified local model is available for this capability · Project LIVE budget: $0.00/${projectCapText} · Monthly LIVE budget: $${(snapshot.capUsd - snapshot.remainingUsd).toFixed(2)}/$${snapshot.capUsd.toFixed(2)} remaining $${snapshot.remainingUsd.toFixed(2)}.`,
+        },
+      });
+      recordEvent(db, {
+        projectId: project.id,
+        type: "approval.required",
+        payload: { approvalId: approval.id, kind: CLAUDE_APPROVAL_KIND, provider: "claude", roleId: role.id, taskId: task.id },
+        actor: "system",
+      });
+    }
+    return {
+      outcome: "blocked",
+      reason: "PAID AI APPROVAL REQUIRED — waiting for the project owner to approve Claude for this project before any paid call can proceed.",
+    };
+  }
+
+  if (!isClaudeConfigured()) {
+    return {
+      outcome: "blocked",
+      reason: "Claude is approved for this project, but no ANTHROPIC_API_KEY/pricing configuration is set on the server.",
+    };
+  }
+
+  const adapter = new ClaudeAdapter(ctx.clientOverride ? { client: ctx.clientOverride } : undefined);
+  const singleCallEstimate = adapter.estimateCost({
+    role: role.id,
+    instructions: `Perform your assigned "${role.name}" responsibilities for this task.`,
+    task: context,
+  });
+
+  const authorization = authorizeLiveBudget(db, {
+    projectId: project.id,
+    taskId: task.id,
+    provider: "claude",
+    estimatedCostUsd: conservativeReservationEstimateUsd(singleCallEstimate.estimatedCostUsd),
+  });
+
+  if (authorization.status === "BLOCKED_PROJECT_CAP" || authorization.status === "BLOCKED_MONTHLY_CAP") {
+    return { outcome: "blocked", reason: authorization.reason ?? "Budget cap reached." };
+  }
+  if (authorization.status === "APPROVAL_REQUIRED") {
+    return { outcome: "blocked", reason: authorization.reason ?? "A pending owner approval is blocking this project." };
+  }
+  if (authorization.status === "TEMPORARILY_UNAVAILABLE") {
+    return { outcome: "blocked", reason: authorization.reason ?? "The budget ledger is temporarily unavailable." };
+  }
+
+  // AUTHORIZED or WARNING — both permit the call. WARNING only means the
+  // office's 80% owner-warning threshold (Part 7) has been crossed; it
+  // is surfaced to the owner via the budget dashboard, not a reason to
+  // refuse this call.
+  return { outcome: "proceed", adapter, reservationId: authorization.reservationId! };
 }
 
 export async function executeTask(
@@ -426,8 +614,39 @@ export async function executeTask(
   }
 
   updateTaskStatus(db, task.id, "IN_PROGRESS");
+
+  // Context is built against the *predicted* next attempt number — a
+  // pure read (buildTaskContext never mutates anything), safe to compute
+  // before the real TaskAttempt row exists. This lets the controlled
+  // Claude LIVE pilot's routing/approval/budget gate below (which needs
+  // an accurate prompt to estimate a real reservation ceiling from) run
+  // *before* any attempt is created, exactly like the SIMULATED/LIVE
+  // budgetDecision gate above never creates one either — a "not yet
+  // actionable" outcome (no owner decision yet, no budget, no
+  // credential) must never consume this task's real retry ceiling.
+  const predictedAttemptNumber = task.attemptCount + 1;
+  const context = await buildTaskContext(db, task, role, { scenario: options.scenario, attemptNumber: predictedAttemptNumber });
+
+  let claudeCall: PreparedClaudeCall | null = null;
+  if (!options.provider) {
+    const providerDecision = routeProvider(db, { role: role.id, project });
+    if (providerDecision.provider === "CLAUDE") {
+      const gate = prepareClaudeCall(db, { project, role, task, context, clientOverride: options.claudeClientOverride });
+      if (gate.outcome !== "proceed") {
+        updateTaskStatus(db, task.id, "PENDING");
+        recordEvent(db, {
+          projectId: project.id,
+          type: "task.claude_routing_blocked",
+          payload: { taskId: task.id, roleId: role.id, capability: providerDecision.capability, reason: gate.reason },
+          actor: "system",
+        });
+        return { outcome: "claude-blocked", task: getTask(db, task.id)!, reason: gate.reason };
+      }
+      claudeCall = { adapter: gate.adapter, reservationId: gate.reservationId };
+    }
+  }
+
   const attempt = createTaskAttempt(db, task.id);
-  const context = await buildTaskContext(db, task, role, { scenario: options.scenario, attemptNumber: attempt.attemptNumber });
 
   // Local multi-model routing: for a real Ollama project (and only when
   // the caller hasn't already injected a specific adapter, e.g. a test
@@ -443,6 +662,9 @@ export async function executeTask(
   if (options.provider) {
     adapter = options.provider;
     modelForRun = options.provider.model ?? null;
+  } else if (claudeCall) {
+    adapter = claudeCall.adapter;
+    modelForRun = claudeCall.adapter.model;
   } else if (project.provider === "ollama") {
     try {
       const availableModels = options.availableModelsOverride ?? (await listInstalledOllamaModels());
@@ -470,10 +692,24 @@ export async function executeTask(
   });
   agentRun = updateAgentRunStatus(db, agentRun.id, "RUNNING");
 
+  // Every provider-independent gate below (Part 16) must treat a real
+  // Claude call exactly like a real Ollama call — neither gets a weaker
+  // path just because of which real provider produced the output.
+  // `project.provider === "ollama"` alone (the pre-existing condition)
+  // stays exactly as it was — tests routinely inject a `SimulatedAdapter`
+  // test double for a specific attempt on an otherwise-real Ollama
+  // project purely for determinism, and that convention must keep
+  // meaning "this project is real" the same way it always has. `claudeCall`
+  // additionally covers a HYBRID project's per-role Claude routing, which
+  // the project's own base `provider` column can never reflect (a HYBRID
+  // project's base provider is typically "simulated"; only specific
+  // roles route to Claude).
+  const usedRealProvider = project.provider === "ollama" || claudeCall !== null;
+
   const releaseReadiness =
     !modelSelectionFailureReason && role.id === "release-agent" ? checkReleaseReadiness(db, project.id) : { ready: true as const };
   const planConsistency =
-    !modelSelectionFailureReason && releaseReadiness.ready && isDevelopmentRole(role) && project.provider === "ollama"
+    !modelSelectionFailureReason && releaseReadiness.ready && isDevelopmentRole(role) && usedRealProvider
       ? await checkPlanConsistencyBeforeDevelopment(context.authoritativeUserRequest, context.relevantArtifacts, options.intentCheckFetch)
       : { consistent: true as const };
 
@@ -574,14 +810,38 @@ export async function executeTask(
     );
   }
 
-  recordAiUsage(db, {
-    agentRunId: agentRun.id,
-    projectId: project.id,
-    provider: adapter?.name ?? project.provider,
-    inputTokens: result.usage.inputTokens,
-    outputTokens: result.usage.outputTokens,
-    costUsd: result.usage.costUsd,
-  });
+  if (claudeCall) {
+    // The ONLY place a Claude ai_usage row is ever inserted — via the
+    // real reservation created before this call in `prepareClaudeCall`.
+    // `recordAiUsage()` (the generic per-run path every other provider
+    // uses, below) is deliberately skipped here: calling both would
+    // double-count the same run's cost, once through reconciliation and
+    // once through the generic insert. A call that never actually
+    // reached the API (a pure network/timeout failure — zero real
+    // tokens) releases the held reservation instead of "reconciling"
+    // it with a cost that was never really incurred.
+    const incurredRealUsage = result.usage.inputTokens > 0 || result.usage.outputTokens > 0;
+    if (incurredRealUsage) {
+      reconcileReservationWithUsage(db, {
+        reservationId: claudeCall.reservationId,
+        agentRunId: agentRun.id,
+        actualCostUsd: result.usage.costUsd,
+        inputTokens: result.usage.inputTokens,
+        outputTokens: result.usage.outputTokens,
+      });
+    } else {
+      releaseReservation(db, claudeCall.reservationId);
+    }
+  } else {
+    recordAiUsage(db, {
+      agentRunId: agentRun.id,
+      projectId: project.id,
+      provider: adapter?.name ?? project.provider,
+      inputTokens: result.usage.inputTokens,
+      outputTokens: result.usage.outputTokens,
+      costUsd: result.usage.costUsd,
+    });
+  }
 
   // Intent-consistency gate, checkpoint 3 of 3: on a corrective attempt
   // (attemptNumber > 1) for a development role, a *proposed* write can
@@ -597,7 +857,7 @@ export async function executeTask(
   // correctness — real QA, checkpoint 2, remains the authoritative
   // gate); only a real "inconsistent" verdict rejects.
   const retryDrift =
-    result.status === "SUCCEEDED" && isDevelopmentRole(role) && project.provider === "ollama" && (attempt.attemptNumber ?? 1) > 1
+    result.status === "SUCCEEDED" && isDevelopmentRole(role) && usedRealProvider && (attempt.attemptNumber ?? 1) > 1
       ? await checkRetryDriftBeforeMaterialization(
           context.authoritativeUserRequest,
           context.remediationContext?.currentFiles ?? [],
@@ -680,7 +940,7 @@ export async function executeTask(
   // was actually elsewhere) — a task with no real file yet has nothing
   // that could possibly already satisfy it, so zero fileOperations there
   // is never legitimate.
-  if (result.status === "SUCCEEDED" && project.provider === "ollama" && isImplementationIntentTask(role, task) && result.output.fileOperations.length === 0) {
+  if (result.status === "SUCCEEDED" && usedRealProvider && isImplementationIntentTask(role, task) && result.output.fileOperations.length === 0) {
     const existingFiles = await listFiles(project.id);
     if (existingFiles.length === 0) {
       result = {
@@ -713,7 +973,7 @@ export async function executeTask(
   // SEMANTIC failure as the zero-fileOperations gate above, flowing
   // through the identical existing failure/retry/remediation/model-
   // escalation/attempt-ceiling pipeline.
-  if (result.status === "SUCCEEDED" && project.provider === "ollama" && isImplementationIntentTask(role, task)) {
+  if (result.status === "SUCCEEDED" && usedRealProvider && isImplementationIntentTask(role, task)) {
     const integrity = await validateWorkspaceIntegrity(project.id);
     if (integrity.status === "FAIL") {
       result = {
@@ -752,7 +1012,7 @@ export async function executeTask(
     // let a real outage rubber-stamp an unverified deliverable as
     // VERIFIED. Real providers only, same reasoning as checkpoint 1.
     let deliverableCheckUnavailable = false;
-    if (verification.status === "PASS" && project.provider === "ollama") {
+    if (verification.status === "PASS" && usedRealProvider) {
       const builtDescription = [verification.details.headingText, verification.details.bodyTextAfter]
         .filter((v): v is string => typeof v === "string" && v.length > 0)
         .join("\n");

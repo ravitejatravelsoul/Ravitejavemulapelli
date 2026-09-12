@@ -23,7 +23,15 @@ const newProjectSchema = z.object({
   title: z.string().trim().min(1, "Enter a project name.").max(120, "Keep the project name under 120 characters."),
   ideaText: z.string().trim().min(10, "Describe the idea in at least a sentence.").max(4000, "Keep the idea under 4000 characters."),
   provider: z.enum(["simulated", "ollama"]).default("simulated"),
+  // Controlled Claude LIVE pilot (Part 10) — deliberately defaults to
+  // LOCAL_ONLY, matching createProjectWithIdea's own default; the form
+  // never pre-selects HYBRID or CLAUDE_ONLY, so an owner must explicitly
+  // opt a project into paid AI.
+  aiPolicyMode: z.enum(["LOCAL_ONLY", "HYBRID", "CLAUDE_ONLY"]).default("LOCAL_ONLY"),
 });
+
+/** Fixed at $3.00 per Part 7 — every HYBRID/CLAUDE_ONLY project gets the same conservative default LIVE cap; a LOCAL_ONLY project gets no cap at all (it can never spend). Not owner-configurable from this form yet — raising it is a deliberate future action, never a silent default. */
+const DEFAULT_LIVE_PROJECT_BUDGET_CAP_USD = 3.0;
 
 export interface CreateProjectState {
   error?: string;
@@ -48,6 +56,7 @@ export async function createProjectAction(_prevState: CreateProjectState | undef
     title: formData.get("title"),
     ideaText: formData.get("ideaText"),
     provider: formData.get("provider") || undefined,
+    aiPolicyMode: formData.get("aiPolicyMode") || undefined,
   });
   if (!parsed.success) {
     return { error: parsed.error.issues[0]?.message ?? "Enter a project name and an idea." };
@@ -62,6 +71,8 @@ export async function createProjectAction(_prevState: CreateProjectState | undef
     rawIdeaText: parsed.data.ideaText,
     ownerId: owner.id,
     provider: parsed.data.provider,
+    aiPolicyMode: parsed.data.aiPolicyMode,
+    monthlyBudgetCapUsd: parsed.data.aiPolicyMode === "LOCAL_ONLY" ? null : DEFAULT_LIVE_PROJECT_BUDGET_CAP_USD,
   });
 
   try {

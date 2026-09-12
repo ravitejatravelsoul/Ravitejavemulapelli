@@ -18,6 +18,8 @@ import {
 import { listEventsForProject } from "../domain/events.ts";
 import { getProjectMemory } from "../domain/project-memory.ts";
 import { sumSimulatedCostForProject, sumLiveCostForProject } from "../domain/budget.ts";
+import { getBudgetSnapshot } from "../budget/budget-service.ts";
+import { isClaudeConfigured } from "../providers/claude/claude-adapter.ts";
 import { describeEvent, type ActivityEntry } from "./dashboard-data.ts";
 import { getWorkspace, listWorkspaceFileRecords, type DeliveryState, type WorkspaceFileRow } from "../domain/workspace.ts";
 import { getHonestStatusLabel, isUnverifiedCompletionClaim, isStalledWithNoDeliverable, STALLED_NO_DELIVERABLE_LABEL } from "./delivery-status.ts";
@@ -27,7 +29,25 @@ import { getHonestStatusLabel, isUnverifiedCompletionClaim, isStalledWithNoDeliv
 export interface TaskAttemptView {
   attemptNumber: number;
   status: string;
-  agentRun: { status: string; provider: string; startedAt: number; finishedAt: number | null } | null;
+  agentRun: { status: string; provider: string; model: string | null; startedAt: number; finishedAt: number | null } | null;
+}
+
+/** One row per role that has run at least once — the most recent attempt's real provider/model (Part 18: "Frontend Developer / CLAUDE / configured model"). Roles that haven't run yet are simply absent, not shown as a fabricated "LOCAL" guess. */
+export interface RoleProviderView {
+  roleId: string;
+  roleName: string;
+  provider: string;
+  model: string | null;
+}
+
+/** Controlled Claude LIVE pilot — the numbers Part 18's owner UI must show, computed here (not in a client component) so a real API key is never required to render this page. */
+export interface ProjectBudgetView {
+  projectLiveCapUsd: number | null;
+  projectLiveSpendUsd: number;
+  officeMonthlyCapUsd: number;
+  officeMonthlySpendUsd: number;
+  officeMonthlyRemainingUsd: number;
+  claudeConfigured: boolean;
 }
 
 export interface TaskDetailView {
@@ -77,6 +97,8 @@ export interface ProjectDetail {
   displayStatusLabel: string;
   isUnverifiedCompletion: boolean;
   isStalledWithNoDeliverable: boolean;
+  roleProviders: RoleProviderView[];
+  budget: ProjectBudgetView;
 }
 
 function truncate(text: string, max: number): string {
@@ -92,7 +114,7 @@ function buildTaskDetail(db: DatabaseSync, task: TaskRow): TaskDetailView {
       attemptNumber: attempt.attemptNumber,
       status: attempt.status,
       agentRun: agentRun
-        ? { status: agentRun.status, provider: agentRun.provider, startedAt: agentRun.startedAt, finishedAt: agentRun.finishedAt }
+        ? { status: agentRun.status, provider: agentRun.provider, model: agentRun.model, startedAt: agentRun.startedAt, finishedAt: agentRun.finishedAt }
         : null,
     };
   });
@@ -136,6 +158,28 @@ export function getProjectDetail(db: DatabaseSync, projectId: string): ProjectDe
     canPreview: deliveryState === "VERIFIED" && files.some((f) => f.path === "index.html"),
   };
 
+  // Most recent real attempt per role — a role can legitimately switch
+  // providers across attempts under HYBRID (e.g. an earlier attempt
+  // blocked on approval, a later one ran for real once approved), so
+  // this deliberately reflects only the latest, not "the" provider for
+  // the role's whole history.
+  const roleProviders: RoleProviderView[] = [];
+  for (const t of tasks) {
+    const latestAttempt = [...t.attempts].reverse().find((a) => a.agentRun);
+    if (!latestAttempt?.agentRun) continue;
+    roleProviders.push({ roleId: t.roleId, roleName: t.roleName, provider: latestAttempt.agentRun.provider, model: latestAttempt.agentRun.model });
+  }
+
+  const officeSnapshot = getBudgetSnapshot(db);
+  const budget: ProjectBudgetView = {
+    projectLiveCapUsd: project.monthlyBudgetCapUsd,
+    projectLiveSpendUsd: sumLiveCostForProject(db, projectId),
+    officeMonthlyCapUsd: officeSnapshot.capUsd,
+    officeMonthlySpendUsd: officeSnapshot.capUsd - officeSnapshot.remainingUsd,
+    officeMonthlyRemainingUsd: officeSnapshot.remainingUsd,
+    claudeConfigured: isClaudeConfigured(),
+  };
+
   const progress = { completed: rawTasks.filter((t) => t.status === "DONE").length, total: rawTasks.length };
   const stalled = isStalledWithNoDeliverable({
     status: project.status,
@@ -162,6 +206,8 @@ export function getProjectDetail(db: DatabaseSync, projectId: string): ProjectDe
     displayStatusLabel: stalled ? STALLED_NO_DELIVERABLE_LABEL : getHonestStatusLabel(project.status, workspace.hasWorkspace, deliveryState),
     isUnverifiedCompletion: isUnverifiedCompletionClaim(project.status, workspace.hasWorkspace, deliveryState),
     isStalledWithNoDeliverable: stalled,
+    roleProviders,
+    budget,
   };
 }
 

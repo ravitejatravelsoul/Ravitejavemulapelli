@@ -18,12 +18,28 @@ export type AiMode = "SIMULATED" | "LIVE";
 /** Which engine executes this project's (SIMULATED-authorized) work — orthogonal to `aiMode`, see migrations/003-add-project-provider.sql. */
 export type ProjectProvider = "simulated" | "ollama";
 
+/**
+ * Controlled Claude LIVE pilot — which providers a project's roles may
+ * ever be routed to, decided once per project, never silently changed.
+ * `LOCAL_ONLY` (the default for every existing and future project,
+ * preserving current behavior exactly) never invokes Claude regardless
+ * of capability evidence. `HYBRID` lets the provider router send a
+ * role to Claude only when local evidence says the role's capability
+ * has no qualified local model, and only after the owner has approved
+ * paid use for this specific project (see
+ * app/office/actions/ai-policy.ts). `CLAUDE_ONLY` is supported for
+ * completeness but is never the default and nothing in this codebase
+ * selects it automatically.
+ */
+export type AiPolicyMode = "LOCAL_ONLY" | "HYBRID" | "CLAUDE_ONLY";
+
 export interface ProjectRow {
   id: string;
   title: string;
   status: ProjectStatus;
   aiMode: AiMode;
   provider: ProjectProvider;
+  aiPolicyMode: AiPolicyMode;
   monthlyBudgetCapUsd: number | null;
   ownerId: string;
   createdAt: number;
@@ -46,20 +62,30 @@ export interface ProjectIdeaRow {
  */
 export function createProjectWithIdea(
   db: DatabaseSync,
-  input: { title: string; rawIdeaText: string; ownerId: string; aiMode?: AiMode; provider?: ProjectProvider },
+  input: {
+    title: string;
+    rawIdeaText: string;
+    ownerId: string;
+    aiMode?: AiMode;
+    provider?: ProjectProvider;
+    aiPolicyMode?: AiPolicyMode;
+    monthlyBudgetCapUsd?: number | null;
+  },
 ): { project: ProjectRow; idea: ProjectIdeaRow } {
   const now = Date.now();
   const projectId = randomUUID();
   const ideaId = randomUUID();
   const aiMode = input.aiMode ?? "SIMULATED";
   const provider = input.provider ?? "simulated";
+  const aiPolicyMode = input.aiPolicyMode ?? "LOCAL_ONLY";
+  const monthlyBudgetCapUsd = input.monthlyBudgetCapUsd ?? null;
 
   db.exec("BEGIN");
   try {
     db.prepare(
-      `INSERT INTO projects (id, title, status, aiMode, provider, monthlyBudgetCapUsd, ownerId, createdAt, updatedAt)
-       VALUES (?, ?, 'DRAFT', ?, ?, NULL, ?, ?, ?)`,
-    ).run(projectId, input.title, aiMode, provider, input.ownerId, now, now);
+      `INSERT INTO projects (id, title, status, aiMode, provider, aiPolicyMode, monthlyBudgetCapUsd, ownerId, createdAt, updatedAt)
+       VALUES (?, ?, 'DRAFT', ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(projectId, input.title, aiMode, provider, aiPolicyMode, monthlyBudgetCapUsd, input.ownerId, now, now);
 
     db.prepare(
       `INSERT INTO project_ideas (id, projectId, rawText, submittedAt, createdAt, updatedAt)

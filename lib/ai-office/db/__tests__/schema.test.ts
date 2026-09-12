@@ -24,15 +24,16 @@ describe("clean DB creation + migrations from zero", () => {
     const db = openDatabase(join(dir, "fresh.db"));
 
     const result = runMigrations(db);
-    assert.equal(result.version, 5);
+    assert.equal(result.version, 6);
     assert.deepEqual(result.applied, [
       "001-init.sql",
       "002-budget-and-approval-scope.sql",
       "003-add-project-provider.sql",
       "004-add-real-workspace.sql",
       "005-add-model-routing.sql",
+      "006-add-ai-policy.sql",
     ]);
-    assert.equal(getSchemaVersion(db), 5);
+    assert.equal(getSchemaVersion(db), 6);
 
     const tableCount = db
       .prepare("SELECT COUNT(*) as count FROM sqlite_master WHERE type = 'table' AND name != 'sqlite_sequence'")
@@ -49,11 +50,11 @@ describe("migrations are idempotent / safe to run repeatedly", () => {
     const t = createTestDb({ seed: false });
     const first = runMigrations(t.db); // no-op, createTestDb already migrated
     assert.deepEqual(first.applied, []);
-    assert.equal(first.version, 5);
+    assert.equal(first.version, 6);
 
     const second = runMigrations(t.db);
     assert.deepEqual(second.applied, []);
-    assert.equal(second.version, 5);
+    assert.equal(second.version, 6);
     t.close();
   });
 });
@@ -73,6 +74,7 @@ describe("schema version is inspectable", () => {
       { version: 3, name: "003-add-project-provider.sql" },
       { version: 4, name: "004-add-real-workspace.sql" },
       { version: 5, name: "005-add-model-routing.sql" },
+      { version: 6, name: "006-add-ai-policy.sql" },
     ]);
     t.close();
   });
@@ -114,8 +116,9 @@ describe("migrations 002+003+004+005 apply cleanly on top of an existing v1 data
       "003-add-project-provider.sql",
       "004-add-real-workspace.sql",
       "005-add-model-routing.sql",
+      "006-add-ai-policy.sql",
     ]);
-    assert.equal(getSchemaVersion(db), 5);
+    assert.equal(getSchemaVersion(db), 6);
 
     // The pre-existing rows survive, unmodified except for the new
     // columns now existing (and being NULL, since this data predates
@@ -174,6 +177,11 @@ describe("migrations 002+003+004+005 apply cleanly on top of an existing v1 data
       "INSERT INTO recommended_model_routing (capability, model, reason, generatedAt) VALUES ('CODING','gemma4:latest','best coding score',?)",
     ).run(now);
     assert.ok(db.prepare("SELECT * FROM recommended_model_routing WHERE capability = 'CODING'").get());
+
+    // Migration 006's new column is fully usable afterward too.
+    assert.ok(projectCols.includes("aiPolicyMode"));
+    const preExistingProjectAiPolicy = db.prepare("SELECT aiPolicyMode FROM projects WHERE id = 'p1'").get() as { aiPolicyMode: string };
+    assert.equal(preExistingProjectAiPolicy.aiPolicyMode, "LOCAL_ONLY", "pre-existing rows get backfilled with the NOT NULL DEFAULT");
 
     db.close();
     rmSync(dir, { recursive: true, force: true });
@@ -326,7 +334,7 @@ describe("DB survives reopen/reconnect", () => {
     t.db.close();
 
     const reopened = reopenTestDb(dir);
-    assert.equal(getSchemaVersion(reopened), 5);
+    assert.equal(getSchemaVersion(reopened), 6);
     const roles = reopened.prepare("SELECT COUNT(*) as count FROM agent_roles").get() as { count: number };
     assert.equal(roles.count, AGENT_ROLE_CATALOG.length);
     reopened.close();
