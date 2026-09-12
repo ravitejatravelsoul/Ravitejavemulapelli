@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createTestDb } from "../../db/test-helpers.ts";
 import { runBenchmarkScenario, runBenchmarkSuite } from "../benchmark-runner.ts";
 import { listBenchmarkResults } from "../../domain/model-routing.ts";
+import { countLocalRunsForOffice, sumLocalCostForOffice } from "../../domain/budget.ts";
 
 function fetchReturningStructuredOutput(output: Record<string, unknown>): typeof fetch {
   return (async () => ({ ok: true, status: 200, json: async () => ({ response: JSON.stringify(output) }) }) as unknown as Response) as unknown as typeof fetch;
@@ -106,6 +107,23 @@ describe("runBenchmarkSuite", () => {
 
     assert.equal(listBenchmarkResults(t.db, { model: "gemma4:latest" }).length, 2);
     assert.equal(listBenchmarkResults(t.db, { model: "qwen3.6:latest" }).length, 2);
+    t.close();
+  });
+});
+
+describe("benchmark runs never touch real budget/ai_usage history (Part U regression)", () => {
+  test("running a full benchmark suite leaves the office's LOCAL/LIVE usage ledger completely untouched", async () => {
+    const t = createTestDb();
+    const before = { runs: countLocalRunsForOffice(t.db), cost: sumLocalCostForOffice(t.db) };
+
+    await runBenchmarkSuite(t.db, {
+      models: ["gemma4:latest"],
+      scenarioIds: ["product-owner-basic", "frontend-bug-fix"],
+      fetchImpl: fetchReturningStructuredOutput(GOOD_HELLO_WORLD_OUTPUT),
+    });
+
+    assert.equal(countLocalRunsForOffice(t.db), before.runs, "a benchmark run must never be counted as a real local run");
+    assert.equal(sumLocalCostForOffice(t.db), before.cost, "a benchmark run must never contribute to real cost tracking, even though Ollama is $0");
     t.close();
   });
 });
