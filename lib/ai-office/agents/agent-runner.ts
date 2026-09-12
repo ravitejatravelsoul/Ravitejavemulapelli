@@ -45,6 +45,7 @@ import type { AIProviderAdapter } from "../providers/types.ts";
 import { LocalModelRouter, type ModelFailureContext } from "./model-router.ts";
 import { applyFileOperations } from "../workspace/apply-file-operations.ts";
 import { workspaceExists, listFiles } from "../workspace/workspace-service.ts";
+import { validateWorkspaceIntegrity, describeIntegrityFailure } from "../workspace/workspace-integrity.ts";
 import { runQABrowserVerification } from "../workspace/qa-browser-verification.ts";
 import { getWorkspace, listWorkspaceFileRecords, setDeliveryState } from "../domain/workspace.ts";
 
@@ -693,6 +694,36 @@ export async function executeTask(
         },
         usage: result.usage,
         raw: { zeroFileOperationsBlocked: true },
+      };
+    }
+  }
+
+  // Development deliverable contract, part 3 (deliverable integrity
+  // gate follow-up) — even when fileOperations ARE present, the result
+  // can still be broken in a mechanically-detectable way: a real
+  // acceptance run showed frontend-developer write an `index.html` that
+  // referenced `script.js`/`style.css`, neither of which was ever
+  // actually created. The task still completed because fileOperations
+  // was non-empty; only real (slow) Playwright QA eventually caught the
+  // broken button. `validateWorkspaceIntegrity` is a deterministic,
+  // non-AI check against the real materialized workspace — never a
+  // network request, never a path outside workspace-service.ts's own
+  // safe boundary — that catches this class of defect immediately,
+  // before QA ever needs to run. Converted to the same kind of normal
+  // SEMANTIC failure as the zero-fileOperations gate above, flowing
+  // through the identical existing failure/retry/remediation/model-
+  // escalation/attempt-ceiling pipeline.
+  if (result.status === "SUCCEEDED" && project.provider === "ollama" && isImplementationIntentTask(role, task)) {
+    const integrity = await validateWorkspaceIntegrity(project.id);
+    if (integrity.status === "FAIL") {
+      result = {
+        status: "FAILED",
+        output: {
+          ...result.output,
+          failure: { reason: describeIntegrityFailure(integrity) },
+        },
+        usage: result.usage,
+        raw: { workspaceIntegrityFailed: true, missingReferences: integrity.missingReferences },
       };
     }
   }

@@ -1003,6 +1003,315 @@ describe("development deliverable contract (local multi-model routing follow-up)
   });
 });
 
+describe("workspace integrity gate (deliverable integrity gate follow-up)", () => {
+  function setupOllamaDevProject(t: ReturnType<typeof createTestDb>) {
+    const owner = getOwner(t.db)!;
+    const { project } = createProjectWithIdea(t.db, {
+      title: "Integrity gate test",
+      rawIdeaText: "Create a simple Hello World webpage with a heading, description and a button.",
+      ownerId: owner.id,
+      provider: "ollama",
+    });
+    return project;
+  }
+
+  const fastFetch = (async () =>
+    ({ ok: true, status: 200, json: async () => ({ response: JSON.stringify({ consistent: true, reason: "ok" }) }) }) as unknown as Response) as unknown as typeof fetch;
+
+  function adapterWritingOnly(files: Array<{ path: string; content: string }>) {
+    return {
+      name: "ollama",
+      async runAgentTask() {
+        return {
+          status: "SUCCEEDED" as const,
+          output: {
+            summary: "Implemented.",
+            artifacts: [],
+            decisions: [],
+            testResults: [],
+            events: [],
+            fileOperations: files.map((f) => ({ kind: "file-operation" as const, action: "write" as const, path: f.path, content: f.content })),
+            recommendedNextActions: [],
+          },
+          usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+        };
+      },
+      estimateCost() {
+        return { estimatedInputTokens: 0, estimatedOutputTokens: 0, estimatedCostUsd: 0 };
+      },
+    };
+  }
+
+  const BROKEN_INDEX = '<!doctype html><html><body><h1>Hello, World!</h1><button id="btn">Click</button><script src="script.js"></script></body></html>';
+  const WORKING_INDEX =
+    '<!doctype html><html><body><h1>Hello, World!</h1><p id="msg">Hi</p><button id="btn">Click</button><script src="script.js"></script></body></html>';
+  const WORKING_SCRIPT = 'document.getElementById("btn").addEventListener("click", () => { document.getElementById("msg").textContent = "Clicked!"; });';
+
+  test("9. a development result that writes index.html referencing a missing script.js is converted to a semantic failure", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const project = setupOllamaDevProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+      const result = await executeTask(t.db, task.id, {
+        provider: adapterWritingOnly([{ path: "index.html", content: BROKEN_INDEX }]),
+        intentCheckFetch: fastFetch,
+      });
+
+      assert.equal(result.outcome, "retried");
+      const failures = listUnresolvedFailures(t.db, project.id);
+      assert.ok(failures.some((f) => f.taskId === task.id && /index\.html references script\.js/.test(f.reason)));
+
+      t.close();
+    });
+  });
+
+  test("the integrity failure is classified SEMANTIC, not operational — it consumes real retry budget", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const project = setupOllamaDevProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+      await executeTask(t.db, task.id, {
+        provider: adapterWritingOnly([{ path: "index.html", content: BROKEN_INDEX }]),
+        intentCheckFetch: fastFetch,
+      });
+
+      assert.equal(getTask(t.db, task.id)?.attemptCount, 1, "a real semantic failure consumes exactly one real attempt");
+      t.close();
+    });
+  });
+
+  test("10. the integrity semantic failure reopens the developer task correctly (not some other role)", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const project = setupOllamaDevProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+      await executeTask(t.db, task.id, {
+        provider: adapterWritingOnly([{ path: "index.html", content: BROKEN_INDEX }]),
+        intentCheckFetch: fastFetch,
+      });
+
+      assert.equal(getTask(t.db, task.id)?.status, "PENDING", "the developer's own task is reopened for a real retry");
+      t.close();
+    });
+  });
+
+  test("11. a corrective attempt receives the exact missing-reference failure via RemediationContext", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const project = setupOllamaDevProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+      await executeTask(t.db, task.id, {
+        provider: adapterWritingOnly([{ path: "index.html", content: BROKEN_INDEX }]),
+        intentCheckFetch: fastFetch,
+      });
+
+      let capturedInstructions: import("../../providers/types.ts").TaskContext | undefined;
+      const capturingAdapter = {
+        name: "ollama",
+        async runAgentTask(input: import("../../providers/types.ts").AgentTaskInput) {
+          capturedInstructions = input.task;
+          return {
+            status: "SUCCEEDED" as const,
+            output: {
+              summary: "Fixed.",
+              artifacts: [],
+              decisions: [],
+              testResults: [],
+              events: [],
+              fileOperations: [{ kind: "file-operation" as const, action: "write" as const, path: "script.js", content: "console.log('fixed');" }],
+              recommendedNextActions: [],
+            },
+            usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+          };
+        },
+        estimateCost() {
+          return { estimatedInputTokens: 0, estimatedOutputTokens: 0, estimatedCostUsd: 0 };
+        },
+      };
+      await executeTask(t.db, task.id, { provider: capturingAdapter, intentCheckFetch: fastFetch });
+
+      assert.ok(capturedInstructions?.remediationContext, "the corrective attempt must carry RemediationContext");
+      assert.match(
+        capturedInstructions!.remediationContext!.failureReason ?? "",
+        /index\.html references script\.js, but script\.js does not exist/,
+      );
+      assert.ok(
+        capturedInstructions!.remediationContext!.currentFiles.some((f) => f.path === "index.html"),
+        "the corrective attempt must see the real current workspace files",
+      );
+
+      t.close();
+    });
+  });
+
+  test("12. a corrective attempt that creates the missing file passes integrity and succeeds", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const project = setupOllamaDevProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+      await executeTask(t.db, task.id, {
+        provider: adapterWritingOnly([{ path: "index.html", content: BROKEN_INDEX }]),
+        intentCheckFetch: fastFetch,
+      });
+
+      const second = await executeTask(t.db, task.id, {
+        provider: adapterWritingOnly([{ path: "script.js", content: "console.log('fixed');" }]),
+        intentCheckFetch: fastFetch,
+      });
+
+      assert.equal(second.outcome, "succeeded");
+      assert.deepEqual((await listFiles(project.id)).sort(), ["index.html", "script.js"]);
+
+      t.close();
+    });
+  });
+
+  test("13. the existing zero-fileOperations contract remains intact alongside the new integrity gate", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const project = setupOllamaDevProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+      const result = await executeTask(t.db, task.id, { provider: adapterWritingOnly([]), intentCheckFetch: fastFetch });
+      assert.equal(result.outcome, "retried");
+      const failures = listUnresolvedFailures(t.db, project.id);
+      assert.ok(failures.some((f) => f.taskId === task.id && /did not provide any file operations/.test(f.reason)));
+
+      t.close();
+    });
+  });
+
+  test("14. real QA still runs, and can still PASS, once workspace integrity has already passed", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const project = setupOllamaDevProject(t);
+      const devTask = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+      const devResult = await executeTask(t.db, devTask.id, {
+        provider: adapterWritingOnly([
+          { path: "index.html", content: WORKING_INDEX },
+          { path: "script.js", content: WORKING_SCRIPT },
+        ]),
+        intentCheckFetch: fastFetch,
+      });
+      assert.equal(devResult.outcome, "succeeded");
+
+      const { task: qaTask } = createTaskWithDependencies(t.db, {
+        projectId: project.id,
+        roleId: "qa-agent",
+        title: "Test",
+        dependsOnTaskIds: [devTask.id],
+      });
+      const noopAdapter = {
+        name: "ollama",
+        async runAgentTask() {
+          return {
+            status: "SUCCEEDED" as const,
+            output: { summary: "", artifacts: [], decisions: [], testResults: [], events: [], fileOperations: [], recommendedNextActions: [] },
+            usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+          };
+        },
+        estimateCost() {
+          return { estimatedInputTokens: 0, estimatedOutputTokens: 0, estimatedCostUsd: 0 };
+        },
+      };
+      const qaResult = await executeTask(t.db, qaTask.id, { provider: noopAdapter, intentCheckFetch: fastFetch });
+
+      assert.equal(qaResult.outcome, "succeeded", "real browser QA — not the integrity gate — has the final say once integrity already passed");
+      assert.equal(getWorkspace(t.db, project.id)?.deliveryState, "VERIFIED");
+
+      t.close();
+    });
+  });
+
+  test("15. the integrity gate never bypasses workspace path safety — a project's own workspace stays confined to its own directory", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const project = setupOllamaDevProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+      await executeTask(t.db, task.id, {
+        provider: adapterWritingOnly([{ path: "index.html", content: '<html><body><script src="../../outside.js"></script></body></html>' }]),
+        intentCheckFetch: fastFetch,
+      });
+
+      // A reference escaping the workspace is skipped (never flagged, never resolved against the real filesystem) — proven by the task succeeding rather than failing on a path it has no safe way to check.
+      const files = await listFiles(project.id);
+      assert.deepEqual(files, ["index.html"]);
+
+      t.close();
+    });
+  });
+
+  test("16. the integrity gate does not interfere with local model routing — a semantic integrity failure still escalates the model on retry", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const project = setupOllamaDevProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+      const brokenFetch = (async () =>
+        ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            response: JSON.stringify({
+              summary: "Implemented.",
+              artifacts: [],
+              decisions: [],
+              testResults: [],
+              events: [],
+              fileOperations: [{ kind: "file-operation", action: "write", path: "index.html", content: BROKEN_INDEX }],
+              recommendedNextActions: [],
+            }),
+          }),
+        }) as unknown as Response) as unknown as typeof fetch;
+      const fixedFetch = (async () =>
+        ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            response: JSON.stringify({
+              summary: "Fixed.",
+              artifacts: [],
+              decisions: [],
+              testResults: [],
+              events: [],
+              fileOperations: [{ kind: "file-operation", action: "write", path: "script.js", content: "console.log('fixed');" }],
+              recommendedNextActions: [],
+            }),
+          }),
+        }) as unknown as Response) as unknown as typeof fetch;
+
+      const first = await executeTask(t.db, task.id, {
+        availableModelsOverride: ["gemma4:latest", "qwen3.6:latest"],
+        ollamaFetchImpl: brokenFetch,
+        intentCheckFetch: fastFetch,
+      });
+      assert.equal(first.outcome, "retried");
+      assert.equal(first.agentRun!.model, "gemma4:latest");
+
+      const second = await executeTask(t.db, task.id, {
+        availableModelsOverride: ["gemma4:latest", "qwen3.6:latest"],
+        ollamaFetchImpl: fixedFetch,
+        intentCheckFetch: fastFetch,
+      });
+      assert.equal(second.outcome, "succeeded");
+      assert.equal(
+        second.agentRun!.model,
+        "qwen3.6:latest",
+        "a real integrity semantic failure must escalate past the model that just produced it, since this isolated test DB has no benchmark evidence marking qwen3.6 unqualified",
+      );
+
+      t.close();
+    });
+  });
+});
+
 describe("Release Agent's real deliverable readiness gate (Phase 8 Part K)", () => {
   function releaseSpy() {
     let called = false;
