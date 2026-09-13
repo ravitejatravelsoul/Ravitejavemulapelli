@@ -16,6 +16,7 @@ import {
 import { recordEvent } from "../domain/events.ts";
 import { executeTask, type ExecuteTaskOptions } from "../agents/agent-runner.ts";
 import { findEligibleTasks, hasAnyPendingTask } from "./eligibility.ts";
+import { runOfficeEngineerCycle } from "../engineer/office-engineer.ts";
 
 /**
  * The Durable Local Execution Runner —
@@ -111,6 +112,15 @@ export async function runOneCycle(
     if (recovered.length > 0) {
       return { kind: "recovered", detail: { taskIds: recovered } };
     }
+
+    // Office Engineer's own health-check + safe auto-repair pass (Parts
+    // 9-11) — deterministic, free (never an AI call), and cheap enough
+    // to run every cycle: a handful of indexed SELECTs when nothing is
+    // wrong (the common case), at most one write per genuinely new
+    // incident. Run here, before `findEligibleTasks`, so a task it just
+    // auto-repaired can become eligible again in this very same cycle
+    // rather than waiting for the next poll tick.
+    runOfficeEngineerCycle(db, runnerId);
 
     const eligible = findEligibleTasks(db);
     if (eligible.length === 0) {

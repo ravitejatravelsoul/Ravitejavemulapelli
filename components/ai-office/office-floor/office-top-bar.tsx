@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { Plus, Power, Activity, Users, TrendingUp, DollarSign, Sliders } from "lucide-react";
+import { Plus, Power, Activity, Users, TrendingUp, DollarSign, Sliders, Wrench } from "lucide-react";
+import type { OfficeHealthStatus } from "@/lib/ai-office/engineer/office-engineer";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ActionButton } from "@/components/ai-office/action-button";
@@ -23,12 +24,14 @@ export function OfficeTopBar({
   floor,
   liveCostUsd,
   liveCapUsd,
+  engineerStatus,
 }: {
   officeState: OfficeState;
   runnerActivity: RunnerActivityView;
   floor: OfficeFloorView;
   liveCostUsd: number;
   liveCapUsd: number;
+  engineerStatus: OfficeHealthStatus;
 }) {
   const isOpen = officeState === "OPEN";
   const project = floor.selectedProject;
@@ -52,6 +55,13 @@ export function OfficeTopBar({
         {project && <Chip icon={Users} label={`${floor.activeAgentCount}/11 active`} tone="neutral" />}
         {percent !== null && <Chip icon={TrendingUp} label={`${percent}%`} tone="neutral" />}
         <Chip icon={DollarSign} label={`${liveCostUsd.toFixed(2)} / ${liveCapUsd.toFixed(2)}`} tone="neutral" />
+        <Chip
+          icon={Wrench}
+          label={`Engineer ${engineerStatus === "HEALTHY" ? "Healthy" : engineerStatus.charAt(0) + engineerStatus.slice(1).toLowerCase()}`}
+          tone={engineerStatus === "HEALTHY" ? "good" : engineerStatus === "ESCALATED" ? "bad" : "neutral"}
+          href="/office/engineer"
+          title="Office Engineer — self-healing maintenance agent. Click to view incident history."
+        />
 
         <div className="flex w-full items-center gap-2 sm:w-auto sm:ml-auto">
           <Button asChild size="sm">
@@ -94,11 +104,12 @@ const TONE_CLASS: Record<ChipTone, string> = {
   neutral: "text-muted-foreground",
 };
 
-function Chip({ icon: Icon, label, tone, title }: { icon: typeof Power; label: string; tone: ChipTone; title?: string }) {
-  return (
-    <span className={cn("flex min-w-0 items-center gap-1.5 font-medium", TONE_CLASS[tone])} title={title}>
+function Chip({ icon: Icon, label, tone, title, href }: { icon: typeof Power; label: string; tone: ChipTone; title?: string; href?: string }) {
+  const content = (
+    <span className={cn("flex min-w-0 items-center gap-1.5 font-medium", TONE_CLASS[tone], href && "transition-opacity hover:opacity-75")} title={title}>
       <Icon className="size-3.5 shrink-0" aria-hidden="true" />
       <span className="truncate">{label}</span>
     </span>
   );
+  return href ? <Link href={href}>{content}</Link> : content;
 }

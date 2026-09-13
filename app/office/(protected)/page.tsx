@@ -16,6 +16,7 @@ import { listAgentRoles } from "@/lib/ai-office/domain/agent-roles";
 import { readFile } from "@/lib/ai-office/workspace/workspace-service";
 import { highlightFileContent } from "@/lib/ai-office/workspace/code-highlight";
 import { OfficeTopBar } from "@/components/ai-office/office-floor/office-top-bar";
+import { computeOfficeHealthStatus } from "@/lib/ai-office/engineer/office-engineer";
 import { OfficeFloor } from "@/components/ai-office/office-floor/office-floor";
 import { OfficeProjectStrip } from "@/components/ai-office/office-floor/office-project-strip";
 import { AgentsList } from "@/components/ai-office/office-floor/agents-list";
@@ -121,7 +122,14 @@ export default async function OfficeHomePage({
       {overview.activeProjects > 0 && <AutoRefresh />}
       <div className="flex flex-wrap items-center gap-2">
         <div className="min-w-0 flex-1">
-          <OfficeTopBar officeState={overview.officeState} runnerActivity={runnerActivity} floor={floor} liveCostUsd={budget.liveSpendUsd} liveCapUsd={budget.capUsd} />
+          <OfficeTopBar
+            officeState={overview.officeState}
+            runnerActivity={runnerActivity}
+            floor={floor}
+            liveCostUsd={budget.liveSpendUsd}
+            liveCapUsd={budget.capUsd}
+            engineerStatus={computeOfficeHealthStatus(db)}
+          />
         </div>
         <SideCommandPanel sections={sections} pendingApprovalCount={approvals.length} />
       </div>
