@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
-import { LayoutGrid, FolderKanban, Users, FolderOpen, Cpu, BarChart3, Settings, Menu, LogOut, ShieldCheck, Wrench } from "lucide-react";
+import { LayoutGrid, FolderKanban, Users, FolderOpen, Cpu, BarChart3, Settings, Menu, LogOut, ShieldCheck, Wrench, MessageCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +23,7 @@ const NAV_ITEMS = [
   { href: "/office/local-models", label: "Models", icon: Cpu },
   { href: "/office/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/office/engineer", label: "Engineer", icon: Wrench },
+  { href: "/office/communications", label: "Communications", icon: MessageCircle },
   { href: "/office/settings", label: "Settings", icon: Settings },
 ] as const;
 
