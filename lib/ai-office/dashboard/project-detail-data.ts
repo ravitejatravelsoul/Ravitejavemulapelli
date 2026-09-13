@@ -311,6 +311,31 @@ export function getCollaborationFeed(db: DatabaseSync, projectId: string): Colla
   return entries.sort((a, b) => b.occurredAt - a.occurredAt).slice(0, 30);
 }
 
+/**
+ * The most recent real failure hand-off ("X: reason. Returning to Y.")
+ * still within its recency window, resolved to role ids — used to draw a
+ * brief connector on the office image (Section 9 of the visual-integration
+ * phase). Never a permanent or fabricated connection; `null` the moment
+ * nothing real has happened recently.
+ */
+export function getRecentHandoff(
+  agents: { roleId: string; roleName: string }[],
+  collaboration: CollaborationEntry[],
+  windowMs = 5 * 60 * 1000,
+): { from: string; to: string } | null {
+  const nameToRoleId = new Map(agents.map((a) => [a.roleName, a.roleId]));
+  const now = Date.now();
+  for (const entry of collaboration) {
+    if (now - entry.occurredAt > windowMs) continue;
+    const match = entry.message.match(/Returning to (.+)\.$/);
+    if (!match) continue;
+    const fromId = nameToRoleId.get(entry.fromRoleName);
+    const toId = nameToRoleId.get(match[1]);
+    if (fromId && toId) return { from: fromId, to: toId };
+  }
+  return null;
+}
+
 function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }

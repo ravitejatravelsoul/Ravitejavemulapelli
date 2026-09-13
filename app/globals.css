@@ -642,6 +642,15 @@
   .animate-flow-dot {
     animation: flow-dot 1.6s ease-in-out infinite;
   }
+  /* "Marching ants" for a real, recent office-image hand-off connector. */
+  @keyframes handoff-dash {
+    to {
+      stroke-dashoffset: -28;
+    }
+  }
+  .animate-handoff-dash {
+    animation: handoff-dash 1.1s linear infinite;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

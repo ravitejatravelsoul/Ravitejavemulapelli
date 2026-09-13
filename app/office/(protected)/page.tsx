@@ -9,7 +9,7 @@ import {
   getBudgetView,
 } from "@/lib/ai-office/dashboard/dashboard-data";
 import { getOfficeFloorView, getAgentDetail } from "@/lib/ai-office/dashboard/office-floor-data";
-import { getProjectDetail } from "@/lib/ai-office/dashboard/project-detail-data";
+import { getProjectDetail, getRecentHandoff } from "@/lib/ai-office/dashboard/project-detail-data";
 import { listAgentRoles } from "@/lib/ai-office/domain/agent-roles";
 import { OfficeTopBar } from "@/components/ai-office/office-floor/office-top-bar";
 import { OfficeFloor } from "@/components/ai-office/office-floor/office-floor";
@@ -34,8 +34,8 @@ import { AutoRefresh } from "@/components/ai-office/auto-refresh";
  * comes straight from `getOfficeFloorView()` — a read-only projection of
  * the same SQLite data the rest of this dashboard already reads.
  */
-export default async function OfficeHomePage({ searchParams }: { searchParams: Promise<{ project?: string }> }) {
-  const { project: selectedProjectId } = await searchParams;
+export default async function OfficeHomePage({ searchParams }: { searchParams: Promise<{ project?: string; officeDebug?: string }> }) {
+  const { project: selectedProjectId, officeDebug } = await searchParams;
   const db = getAppDatabase();
 
   const overview = getOfficeOverview(db);
@@ -49,7 +49,12 @@ export default async function OfficeHomePage({ searchParams }: { searchParams: P
   const projects = getProjectSummaries(db);
   const activity = getRecentActivity(db, 30);
   const approvals = getPendingApprovalsView(db);
-  const projectTasks = floor.selectedProject ? getProjectDetail(db, floor.selectedProject.id)?.tasks ?? [] : [];
+  const projectDetail = floor.selectedProject ? getProjectDetail(db, floor.selectedProject.id) : null;
+  const projectTasks = projectDetail?.tasks ?? [];
+
+  const recentHandoff = projectDetail ? getRecentHandoff(floor.agents, projectDetail.collaboration) : null;
+
+  const debugEnabled = process.env.NODE_ENV !== "production" && officeDebug === "1";
 
   const sections = {
     projects: (
@@ -91,7 +96,13 @@ export default async function OfficeHomePage({ searchParams }: { searchParams: P
       </div>
 
       <div className="hidden md:block">
-        <OfficeFloor floor={floor} agentDetails={agentDetails} officeState={overview.officeState} />
+        <OfficeFloor
+          floor={floor}
+          agentDetails={agentDetails}
+          officeState={overview.officeState}
+          recentHandoff={recentHandoff}
+          debugEnabled={debugEnabled}
+        />
       </div>
       <div className="md:hidden">
         <OfficeProjectStrip floor={floor} />
