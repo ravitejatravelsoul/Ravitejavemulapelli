@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test:ai-office": "node --conditions=react-server --test \"lib/ai-office/**/*.test.ts\"",
     "test:ai-office:e2e": "node --conditions=react-server --test lib/ai-office/e2e/office-navigation.e2e.ts",
-    "ai-office:runner": "node --conditions=react-server lib/ai-office/runner/start.ts",
+    "ai-office:runner": "node --env-file-if-exists=.env.local --conditions=react-server lib/ai-office/runner/start.ts",
     "ai-office:dev": "node scripts/ai-office-dev.mjs"
   },
   "dependencies": {

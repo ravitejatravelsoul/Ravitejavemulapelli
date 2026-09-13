@@ -55,7 +55,14 @@ function shutdown() {
 }
 
 spawnChild("next dev", [nextBin, "dev"]);
-spawnChild("ai-office runner", ["--conditions=react-server", runnerScript]);
+// `--env-file-if-exists`: unlike `next dev` (which loads `.env.local`
+// automatically), a plain `node` process has no built-in .env loading at
+// all — the runner would otherwise never see ANTHROPIC_API_KEY/pricing,
+// silently blocking every Claude-approved task forever with "no
+// ANTHROPIC_API_KEY/pricing configuration is set on the server" even
+// after the owner approved it. Real defect found and fixed during the
+// first genuine Claude LIVE pilot run.
+spawnChild("ai-office runner", ["--env-file-if-exists=" + join(repoRoot, ".env.local"), "--conditions=react-server", runnerScript]);
 
 process.on("SIGINT", () => {
   shutdown();

@@ -1,5 +1,7 @@
 import { ChevronRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { ActionButton } from "@/components/ai-office/action-button";
+import { retryTaskAction } from "@/app/office/actions/tasks";
 import type { TaskDetailView } from "@/lib/ai-office/dashboard/project-detail-data";
 
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
@@ -58,6 +60,18 @@ function TaskCard({ task, step }: { task: TaskDetailView; step: number }) {
         {task.testResults.length > 0 && ` · Latest test: ${task.testResults[task.testResults.length - 1].status}`}
       </p>
       {task.reopenedNote && <p className="mt-1.5 text-[0.65rem] font-medium text-amber-600 dark:text-amber-400">{task.reopenedNote}</p>}
+      {task.status === "BLOCKED" && (
+        <ActionButton
+          action={retryTaskAction.bind(null, task.id)}
+          variant="outline"
+          size="sm"
+          className="mt-2 h-7 w-full text-[0.65rem]"
+          confirmMessage="Retry this escalated task? It will get a fresh attempt window; every prior attempt stays in its history."
+          successMessage="Task retried — a fresh attempt is queued."
+        >
+          Retry
+        </ActionButton>
+      )}
     </div>
   );
 }

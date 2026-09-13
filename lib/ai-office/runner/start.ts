@@ -24,6 +24,15 @@ import { upsertRunnerHeartbeat } from "../domain/workspace.ts";
  * same `--conditions=react-server` flag the test suite uses is required
  * so the `server-only`-guarded imports throughout `lib/ai-office/**`
  * resolve; see the `ai-office:runner` script in package.json.
+ *
+ * Real defect found and fixed during the first genuine Claude LIVE pilot
+ * run: `next dev`/`next build`/`next start` all load `.env.local`
+ * automatically, but a plain `node` process does not — this process
+ * would otherwise never see `ANTHROPIC_API_KEY`/the pricing env vars,
+ * silently blocking every Claude-approved task forever (even after real
+ * owner approval) with "no ANTHROPIC_API_KEY/pricing configuration is
+ * set on the server." The `ai-office:runner` script now passes
+ * `--env-file-if-exists=.env.local` for exactly this reason.
  */
 
 function log(message: string, detail?: Record<string, unknown>) {

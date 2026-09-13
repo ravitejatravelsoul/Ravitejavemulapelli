@@ -1377,8 +1377,13 @@ function finishFailure(
     // diagram: "FAILED --> QUEUED: retries remain (attempt++ ≤
     // maxRetries)" / "FAILED --> ESCALATED: retries exhausted".
     // attempt.attemptNumber is already the post-increment count for
-    // this attempt.
-    const ceilingExceeded = attempt.attemptNumber > role.maxRetries;
+    // this attempt. Measured relative to `retryBaselineAttemptCount`
+    // (set by `retryEscalatedTask` at the moment an owner retries a
+    // previously-escalated task) rather than 0, so a retry grants a
+    // genuinely fresh ceiling window without ever resetting
+    // `attemptCount` itself — see task-transitions.ts's docblock for the
+    // real collision this fixed.
+    const ceilingExceeded = attempt.attemptNumber - (task.retryBaselineAttemptCount ?? 0) > role.maxRetries;
 
     if (!ceilingExceeded) {
       finishedRun = updateAgentRunStatus(db, agentRun.id, "FAILED", Date.now());

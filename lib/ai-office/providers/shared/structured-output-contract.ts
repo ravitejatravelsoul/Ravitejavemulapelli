@@ -217,6 +217,15 @@ export function buildPromptSegments(input: AgentTaskInput): { systemText: string
     "",
     "===== RESPONSE STYLE (required) =====",
     "Be concise. No essays, no restating the requirements back, no chain-of-thought or step-by-step reasoning narration, no unnecessary explanation. \"summary\" must be one or two short sentences. Return only the required StructuredAgentOutput JSON — real implementation work belongs in \"fileOperations\", never described in prose instead of written.",
+    // Real defect found and fixed during a Claude LIVE pilot: without
+    // this explicit carve-out, "Be concise" was observed causing Claude
+    // to truncate `fileOperations` file content mid-function on repeated
+    // corrective attempts — well under the output-token ceiling each
+    // time (ruling out a token-budget cause), and immediately after
+    // reading this same conciseness instruction. Brevity is exactly
+    // wrong for file content: a shortened file is a broken file, never
+    // a valid response.
+    "Conciseness applies ONLY to prose (\"summary\", explanations, decisions) — it never applies to \"fileOperations\" content. Every file you write via \"fileOperations\" must be the complete, syntactically valid file from start to finish, however long that requires; truncating, abbreviating, or stopping partway through a file is always wrong, even under this conciseness instruction.",
   ];
   const systemText = [...s.roleIntro, ...s.authoritativeRequest, ...s.responseFormat, ...concisenessInstructions].join("\n");
   const userText = [...s.correctiveAttempt, ...s.metadata, ...s.approvedPriorWork, ...s.relevantFilesSection].join("\n");

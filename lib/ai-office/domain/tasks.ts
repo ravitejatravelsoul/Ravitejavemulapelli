@@ -27,6 +27,17 @@ export interface TaskRow {
   leaseExpiresAt: number | null;
   createdAt: number;
   updatedAt: number;
+  /**
+   * Set by `retryEscalatedTask` (lib/ai-office/control/task-transitions.ts)
+   * to `attemptCount` at the moment of retry — never by anything else.
+   * `attemptCount` itself is never reset (it drives the next
+   * `task_attempts.attemptNumber`, which is UNIQUE per task and must
+   * never collide with already-existing history), so a retry's "fresh
+   * ceiling window" instead comes from comparing an attempt's number
+   * against this baseline — see agent-runner.ts's `ceilingExceeded`
+   * check.
+   */
+  retryBaselineAttemptCount: number | null;
 }
 
 export interface TaskDependencyRow {

@@ -74,7 +74,21 @@ export const GLOBAL_ABSOLUTE_MAX_ESTIMATED_INPUT_TOKENS = DEFAULT_GLOBAL_ABSOLUT
 const DEFAULTS: Record<ModelCapability, CapabilityContextBudget> = {
   GENERAL: { targetEstimatedInputTokens: 6_000, burstEstimatedInputTokens: 8_000, maxOutputTokens: 1_024, maxFiles: 0, maxTokensPerFile: 0, maxArtifacts: 3, maxDecisions: 10 },
   REASONING: { targetEstimatedInputTokens: 9_000, burstEstimatedInputTokens: 12_000, maxOutputTokens: 2_048, maxFiles: 4, maxTokensPerFile: 1_500, maxArtifacts: 4, maxDecisions: 15 },
-  CODING: { targetEstimatedInputTokens: 18_000, burstEstimatedInputTokens: 24_000, maxOutputTokens: 4_096, maxFiles: 12, maxTokensPerFile: 3_000, maxArtifacts: 3, maxDecisions: 10 },
+  // maxOutputTokens raised 4_096 -> 8_192 after a real Claude LIVE pilot
+  // repeatedly failed a 3-file remediation with "Claude's model output was
+  // not valid JSON" — every failure's `outputTokens` was exactly 4096
+  // (the old ceiling), confirming the response was truncated mid-JSON by
+  // `max_tokens`, not a real model formatting error. Re-emitting full file
+  // content as an escaped JSON string costs noticeably more tokens than
+  // the raw source (quotes/newlines escaped), and the structured-output
+  // envelope (summary/artifacts/decisions/testResults/events/
+  // recommendedNextActions) adds more on top — 4096 never had headroom
+  // for a genuinely multi-file CODING response. 8192 matches
+  // ClaudeAdapter's own pre-existing worst-case fallback
+  // (DEFAULT_MAX_OUTPUT_TOKENS), so this raises the common case up to
+  // the ceiling that already existed as the *unconfigured* fallback,
+  // rather than introducing a new, larger number.
+  CODING: { targetEstimatedInputTokens: 18_000, burstEstimatedInputTokens: 24_000, maxOutputTokens: 8_192, maxFiles: 12, maxTokensPerFile: 3_000, maxArtifacts: 3, maxDecisions: 10 },
   REVIEW: { targetEstimatedInputTokens: 10_000, burstEstimatedInputTokens: 14_000, maxOutputTokens: 1_536, maxFiles: 15, maxTokensPerFile: 2_000, maxArtifacts: 3, maxDecisions: 10 },
   FAST: { targetEstimatedInputTokens: 3_000, burstEstimatedInputTokens: 4_000, maxOutputTokens: 512, maxFiles: 0, maxTokensPerFile: 0, maxArtifacts: 2, maxDecisions: 5 },
 };

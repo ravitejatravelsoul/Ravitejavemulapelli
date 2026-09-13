@@ -90,6 +90,21 @@ const productOwner: Record<string, Fixture> = {
         {
           kind: "artifact",
           artifactType: "requirements",
+          // Real defect found during the first Claude LIVE pilot: this
+          // used to hardcode a "screenshot capture and report" scenario
+          // regardless of the actual submitted idea — harmless as long as
+          // every downstream role also came from SimulatedAdapter (which
+          // never compared this content against anything), but the moment
+          // a REAL provider (Claude) got involved for a later role, the
+          // plan-consistency check (agent-runner.ts's
+          // checkPlanConsistencyBeforeDevelopment) correctly flagged this
+          // artifact as contradicting the real request — and remediation
+          // could never resolve it, since re-running this same hardcoded
+          // fixture just reproduced the identical contradiction forever,
+          // exhausting retries and escalating. Deriving the acceptance
+          // criteria from the real idea text keeps this deterministic
+          // (same input, same output — never a general AI) while no
+          // longer contradicting whatever the real request actually is.
           content: [
             "# Requirements",
             "",
@@ -97,9 +112,9 @@ const productOwner: Record<string, Fixture> = {
             `Deliver: ${task.taskTitle}.`,
             "",
             "## Acceptance Criteria",
-            "- A tester can capture a screenshot.",
-            "- Captured screenshots are compiled into a report.",
-            "- The report is exportable in a shareable format.",
+            `- The delivered solution fulfills the request: ${task.authoritativeUserRequest}`,
+            "- The implementation is functional and can be verified by a real user.",
+            "- No functionality outside the request's own scope is included.",
           ].join("\n"),
         },
       ],
@@ -120,13 +135,12 @@ const productOwner: Record<string, Fixture> = {
 const researchAgent: Record<string, Fixture> = {
   [SUCCESS]: ({ task }) =>
     succeed(task, {
-      summary: "Reviewed prior art for screenshot-capture and report-generation tooling.",
+      summary: `Reviewed prior art relevant to: ${task.taskTitle}.`,
       artifacts: [
         {
           kind: "artifact",
           artifactType: "research-notes",
-          content:
-            "# Research Notes\n\nExisting tools in this space are typically CLI-driven with a simple file-based output. No unusual technical risk identified.",
+          content: `# Research Notes\n\nNo unusual technical risk identified for the requested scope: ${task.authoritativeUserRequest}`,
         },
       ],
       decisions: [],
@@ -144,8 +158,7 @@ const solutionArchitect: Record<string, Fixture> = {
         {
           kind: "artifact",
           artifactType: "architecture",
-          content:
-            "# Architecture\n\n- CLI entry point captures a screenshot to a local directory.\n- A report generator reads captured screenshots and renders an HTML report.\n- No external services required.",
+          content: `# Architecture\n\n- Implements: ${task.authoritativeUserRequest}\n- Kept as minimal as the requested scope allows.\n- No external services beyond what the request itself specifies.`,
         },
       ],
       decisions: [
@@ -169,7 +182,7 @@ const uiUxAgent: Record<string, Fixture> = {
         {
           kind: "artifact",
           artifactType: "ux-spec",
-          content: "# UX Spec\n\n1. Capture screen -> 2. Review captured screenshots -> 3. Generate report.",
+          content: `# UX Spec\n\n1. Present the interface needed to fulfill: ${task.authoritativeUserRequest}\n2. Keep interactions minimal and directly in service of that request.`,
         },
       ],
       decisions: [],
@@ -265,9 +278,7 @@ function developerFixtures(roleLabel: string, options: { writesFiles?: boolean }
               : [
                   "# Implementation Summary",
                   "",
-                  "Files planned:",
-                  "- capture.ts — takes a screenshot, saves to ./captures/",
-                  "- report.ts — reads ./captures/, renders report.html",
+                  `Planned implementation for: ${task.authoritativeUserRequest}`,
                   "",
                   "(Simulated — no real source files were created.)",
                 ].join("\n"),
@@ -298,8 +309,7 @@ function developerFixtures(roleLabel: string, options: { writesFiles?: boolean }
               : [
                   "# Implementation Summary (fix)",
                   "",
-                  "Fixed: report generation threw when the capture directory was empty.",
-                  "- report.ts — now validates capture count before rendering, returns a clear message if empty.",
+                  `Applied a fix for the QA-reported issue, still serving: ${task.authoritativeUserRequest}`,
                   "",
                   "(Simulated — no real source files were created.)",
                 ].join("\n"),
@@ -325,7 +335,7 @@ const qaAgent: Record<string, Fixture> = {
         {
           kind: "test-result",
           status: "PASS",
-          summary: "3/3 checks passed: capture, report generation, empty-input handling.",
+          summary: `3/3 checks passed for: ${task.taskTitle}.`,
         },
       ],
       recommendedNextActions: ["Proceed to Security Review"],
@@ -335,13 +345,13 @@ const qaAgent: Record<string, Fixture> = {
   // Definition of Done (passing tests) was not met. See the Phase 4
   // status note in docs/ai-office/11-implementation-phases.md for why.
   [FAILURE]: ({ task }) =>
-    fail(task, "report generation throws when the capture directory is empty", {
+    fail(task, "one test case failed", {
       testResults: [
         {
           kind: "test-result",
           status: "FAIL",
-          summary: "2/3 checks passed: capture OK, report generation OK, empty-input handling FAILED.",
-          details: { failedCases: ["report generation throws on empty capture directory"] },
+          summary: `2/3 checks passed for: ${task.taskTitle}.`,
+          details: { failedCases: ["an edge case was not handled correctly"] },
         },
       ],
     }),
