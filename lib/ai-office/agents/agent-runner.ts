@@ -60,6 +60,7 @@ import { workspaceExists, listFiles } from "../workspace/workspace-service.ts";
 import { validateWorkspaceIntegrity, describeIntegrityFailure } from "../workspace/workspace-integrity.ts";
 import { runQABrowserVerification } from "../workspace/qa-browser-verification.ts";
 import { getWorkspace, listWorkspaceFileRecords, setDeliveryState } from "../domain/workspace.ts";
+import { HumanEscalationService } from "../escalation/escalation-service.ts";
 
 /**
  * AgentRunner — the central execution boundary between a claimed Task
@@ -573,6 +574,14 @@ async function prepareClaudeCall(
         type: "approval.required",
         payload: { approvalId: approval.id, kind: CLAUDE_APPROVAL_KIND, provider: "claude", roleId: role.id, taskId: task.id },
         actor: "system",
+      });
+      await new HumanEscalationService().requestEscalation(db, {
+        projectId: project.id,
+        approvalId: approval.id,
+        agentRole: role.id,
+        type: CLAUDE_APPROVAL_KIND,
+        urgency: "ACTION_REQUIRED",
+        reason: `${role.name} needs paid Claude approval for "${project.title}."`,
       });
     }
     return {

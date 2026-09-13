@@ -9,6 +9,7 @@ import { recordEvent } from "../domain/events.ts";
 import { refreshProjectMemory } from "../domain/project-memory.ts";
 import { selectRoles, requiresOwnerApproval, requiresDeploymentApproval } from "./role-selection.ts";
 import { validateTaskGraph, type PlanTaskNode } from "./graph.ts";
+import { HumanEscalationService } from "../escalation/escalation-service.ts";
 
 /**
  * The real Phase 5 Orchestrator — deterministic orchestration
@@ -151,7 +152,7 @@ export function planProject(db: DatabaseSync, projectId: string): PlanProjectRes
     });
 
     if (approval.required) {
-      createApproval(db, {
+      const budgetApproval = createApproval(db, {
         projectId,
         kind: "paid_service_purchase",
         requestedBy: "orchestrator",
@@ -164,6 +165,16 @@ export function planProject(db: DatabaseSync, projectId: string): PlanProjectRes
         payload: { matchedSignal: approval.matchedSignal },
         actor: "orchestrator",
       });
+      // Fire-and-forget — planProject is synchronous (transactional) and
+      // must not block on an SMS/call round-trip; the escalation service
+      // records its own real outcome regardless.
+      void new HumanEscalationService().requestEscalation(db, {
+        projectId,
+        approvalId: budgetApproval.id,
+        type: "paid_service_purchase",
+        urgency: "ACTION_REQUIRED",
+        reason: `Project "${project.title}" is blocked pending a budget approval.`,
+      });
     } else {
       updateProjectStatus(db, projectId, "IN_PROGRESS");
     }
@@ -173,7 +184,7 @@ export function planProject(db: DatabaseSync, projectId: string): PlanProjectRes
     // this specific approval is decided; every other task keeps
     // running, including in the same project.
     if (deployApproval.required && releaseNode) {
-      createApproval(db, {
+      const deployApprovalRow = createApproval(db, {
         projectId,
         taskId: releaseNode.id,
         kind: "production_deploy",
@@ -185,6 +196,14 @@ export function planProject(db: DatabaseSync, projectId: string): PlanProjectRes
         type: "approval.required",
         payload: { matchedSignal: deployApproval.matchedSignal, taskId: releaseNode.id, kind: "production_deploy" },
         actor: "orchestrator",
+      });
+      void new HumanEscalationService().requestEscalation(db, {
+        projectId,
+        approvalId: deployApprovalRow.id,
+        agentRole: "release-agent",
+        type: "production_deploy",
+        urgency: "URGENT",
+        reason: `Project "${project.title}" needs your deployment approval.`,
       });
     }
 

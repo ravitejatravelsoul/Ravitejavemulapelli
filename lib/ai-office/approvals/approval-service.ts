@@ -12,6 +12,7 @@ import { getProject, updateProjectStatus } from "../domain/projects.ts";
 import { updateTaskStatus } from "../domain/tasks.ts";
 import { recordEvent, recordAuditEntry } from "../domain/events.ts";
 import { updateOfficeBudgetCap, startOfCurrentMonthUtc } from "../domain/budget.ts";
+import { HumanEscalationService } from "../escalation/escalation-service.ts";
 
 /**
  * The real owner approval workflow — Phase 5 only created the PENDING
@@ -175,6 +176,13 @@ export function requestBudgetIncreaseApproval(
     actor: input.requestedBy,
   });
   recordAuditEntry(db, { actor: input.requestedBy, action: "budget.increase_requested", targetType: "approval", targetId: approval.id });
+
+  void new HumanEscalationService().requestEscalation(db, {
+    approvalId: approval.id,
+    type: kind,
+    urgency: "ACTION_REQUIRED",
+    reason: `Budget increase requested: $${input.currentCapUsd.toFixed(2)} to $${input.requestedCapUsd.toFixed(2)}.`,
+  });
 
   return approval;
 }

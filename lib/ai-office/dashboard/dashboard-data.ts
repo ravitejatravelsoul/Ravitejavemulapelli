@@ -10,6 +10,7 @@ import { sumSimulatedCostForProject, sumLiveCostForProject } from "../domain/bud
 import { getBudgetSnapshot, type BudgetSnapshot } from "../budget/budget-service.ts";
 import { getWorkspace, listWorkspaceFileRecords, getMostRecentRunnerHeartbeat, type DeliveryState } from "../domain/workspace.ts";
 import { getHonestStatusLabel, isUnverifiedCompletionClaim, isStalledWithNoDeliverable, STALLED_NO_DELIVERABLE_LABEL } from "./delivery-status.ts";
+import { findLatestEscalationForApproval } from "../domain/escalations.ts";
 
 /**
  * Read-only aggregation for the private dashboard
@@ -241,11 +242,38 @@ export interface PendingApprovalView {
   createdAt: number;
   scopeLabel: string;
   reason: string | null;
+  /** A human-readable line describing the real external-escalation state for this approval, if any has ever been raised — Section O's "External escalation: SMS sent / waiting for response" convergence. */
+  escalationStatus: string | null;
+}
+
+function describeEscalationStatus(escalation: { status: string; channelAttempted: string | null }): string | null {
+  const channels = escalation.channelAttempted ? (JSON.parse(escalation.channelAttempted) as string[]) : [];
+  const channelLabel = channels.length > 0 ? channels.join(" → ") : "in-app";
+  switch (escalation.status) {
+    case "CALLING":
+      return "External escalation: calling…";
+    case "SMS_SENT":
+      return "External escalation: SMS sent, waiting for response";
+    case "WAITING_FOR_RESPONSE":
+      return `External escalation: waiting for response (${channelLabel})`;
+    case "APPROVED":
+      return `Owner approved by ${channelLabel}`;
+    case "REJECTED":
+      return `Owner rejected by ${channelLabel}`;
+    case "FAILED":
+      return "External escalation failed to send";
+    case "EXPIRED":
+      return "External escalation expired";
+    default:
+      return null;
+  }
 }
 
 export function getPendingApprovalsView(db: DatabaseSync): PendingApprovalView[] {
   const pending = listPendingApprovals(db);
   return pending.map((approval) => {
+    const escalation = findLatestEscalationForApproval(db, approval.id);
+    const escalationStatus = escalation ? describeEscalationStatus(escalation) : null;
     const project = approval.projectId ? listProjects(db).find((p) => p.id === approval.projectId) : undefined;
     const task = approval.taskId
       ? (db.prepare("SELECT title FROM tasks WHERE id = ?").get(approval.taskId) as { title: string } | undefined)
@@ -269,6 +297,7 @@ export function getPendingApprovalsView(db: DatabaseSync): PendingApprovalView[]
       createdAt: approval.createdAt,
       scopeLabel: approval.taskId ? "This task only" : approval.projectId ? "Entire project" : "Office-wide",
       reason,
+      escalationStatus,
     };
   });
 }

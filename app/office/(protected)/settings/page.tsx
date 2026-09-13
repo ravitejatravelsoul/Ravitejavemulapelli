@@ -3,10 +3,14 @@ import { getAppDatabase } from "@/lib/ai-office/db/client";
 import { getOfficeStatus } from "@/lib/ai-office/domain/office";
 import { getBudgetSnapshot } from "@/lib/ai-office/budget/budget-service";
 import { isClaudeConfigured } from "@/lib/ai-office/providers/claude/claude-adapter";
+import { getEffectiveNotificationPolicy } from "@/lib/ai-office/domain/notification-policy";
+import { listRecentEscalations } from "@/lib/ai-office/domain/escalations";
 import { GlassCard } from "@/components/common/glass-card";
 import { Badge } from "@/components/ui/badge";
 import { ActionButton } from "@/components/ai-office/action-button";
 import { openOfficeAction, closeOfficeAction } from "@/app/office/actions/office";
+import { NotificationPolicyForm } from "@/components/ai-office/escalation/notification-policy-form";
+import { EscalationHistory } from "@/components/ai-office/escalation/escalation-history";
 
 export const metadata: Metadata = { title: "Settings" };
 
@@ -24,6 +28,11 @@ export default async function SettingsPage() {
   const isOpen = officeStatus?.state === "OPEN";
   const budget = getBudgetSnapshot(db);
   const claudeConfigured = isClaudeConfigured();
+  const notificationPolicy = getEffectiveNotificationPolicy(db);
+  const escalations = listRecentEscalations(db, 30);
+  const phoneConfigured = !!process.env.OWNER_PHONE_NUMBER;
+  const communicationProviderName = process.env.COMMUNICATION_PROVIDER === "twilio" ? "Twilio" : "Mock (no real telephony)";
+  const communicationProviderConfigured = process.env.COMMUNICATION_PROVIDER === "twilio";
 
   return (
     <div className="flex flex-col gap-4">
@@ -85,6 +94,30 @@ export default async function SettingsPage() {
           No credential value is ever displayed here, logged, or returned by any API — this is a configuration-presence check only, and never
           makes a billable request.
         </p>
+      </GlassCard>
+
+      <GlassCard>
+        <h2 className="text-sm font-semibold tracking-tight">Human Escalation</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          When the Office needs your action, it can reach you by call or SMS through this policy. No external message is ever sent unless a
+          mode below is explicitly selected — the default is fully in-app.
+        </p>
+        <div className="mt-4">
+          <NotificationPolicyForm
+            policy={notificationPolicy}
+            phoneConfigured={phoneConfigured}
+            providerConfigured={communicationProviderConfigured}
+            providerName={communicationProviderName}
+          />
+        </div>
+      </GlassCard>
+
+      <GlassCard>
+        <h2 className="text-sm font-semibold tracking-tight">Escalation History</h2>
+        <p className="mt-1 text-xs text-muted-foreground">Every real escalation this office has raised, regardless of channel.</p>
+        <div className="mt-4">
+          <EscalationHistory escalations={escalations} />
+        </div>
       </GlassCard>
     </div>
   );

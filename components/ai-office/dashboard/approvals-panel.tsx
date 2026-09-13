@@ -43,6 +43,9 @@ export function ApprovalsPanel({ approvals }: { approvals: PendingApprovalView[]
               </p>
               {approval.reason && <p className="mt-1 text-xs text-muted-foreground">{approval.reason}</p>}
               <p className="mt-1 text-[0.65rem] text-muted-foreground">Requested by {approval.requestedBy}</p>
+              {approval.escalationStatus && (
+                <p className="mt-1 font-mono text-[0.65rem] tracking-wide text-primary uppercase">{approval.escalationStatus}</p>
+              )}
 
               <div className="mt-3 flex gap-2">
                 <ActionButton
