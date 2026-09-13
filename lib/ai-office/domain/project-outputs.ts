@@ -92,8 +92,19 @@ export interface ApprovalRow {
   decidedAt: number | null;
   decidedBy: string | null;
   decisionNote: string | null;
+  /** Set only when an APPROVED decision was later revoked — see `revokeApproval()` in approval-service.ts. `decidedAt`/`decidedBy`/`decisionNote` are never touched by a revocation; they always keep recording the original decision. */
+  revokedAt: number | null;
+  revokedBy: string | null;
+  revocationNote: string | null;
   createdAt: number;
   updatedAt: number;
+}
+
+/** The status an owner should actually see — `ApprovalStatus` alone can't distinguish a revoked approval from an original owner rejection (both are stored as the same raw `'REJECTED'`, deliberately — see migration 010's docblock for why the schema itself was never widened with a real 'REVOKED' enum value). Every UI/report surface should read status through this, never `approval.status` directly, once an approval might have been revoked. */
+export type EffectiveApprovalStatus = ApprovalStatus | "REVOKED";
+
+export function getEffectiveApprovalStatus(approval: Pick<ApprovalRow, "status" | "revokedAt">): EffectiveApprovalStatus {
+  return approval.status === "REJECTED" && approval.revokedAt != null ? "REVOKED" : approval.status;
 }
 
 // ---- project_decisions ------------------------------------------------
@@ -217,8 +228,8 @@ export function createApproval(
   const id = randomUUID();
   const now = Date.now();
   db.prepare(
-    `INSERT INTO approvals (id, projectId, taskId, kind, status, requestedBy, context, decidedAt, decidedBy, decisionNote, createdAt, updatedAt)
-     VALUES (?, ?, ?, ?, 'PENDING', ?, ?, NULL, NULL, NULL, ?, ?)`,
+    `INSERT INTO approvals (id, projectId, taskId, kind, status, requestedBy, context, decidedAt, decidedBy, decisionNote, revokedAt, revokedBy, revocationNote, createdAt, updatedAt)
+     VALUES (?, ?, ?, ?, 'PENDING', ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)`,
   ).run(id, input.projectId ?? null, input.taskId ?? null, input.kind, input.requestedBy, JSON.stringify(input.context), now, now);
   return getApproval(db, id) as unknown as ApprovalRow;
 }

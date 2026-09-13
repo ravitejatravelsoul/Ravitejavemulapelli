@@ -24,7 +24,7 @@ describe("clean DB creation + migrations from zero", () => {
     const db = openDatabase(join(dir, "fresh.db"));
 
     const result = runMigrations(db);
-    assert.equal(result.version, 9);
+    assert.equal(result.version, 10);
     assert.deepEqual(result.applied, [
       "001-init.sql",
       "002-budget-and-approval-scope.sql",
@@ -35,8 +35,9 @@ describe("clean DB creation + migrations from zero", () => {
       "007-add-claude-cache-usage.sql",
       "008-add-human-escalation.sql",
       "009-strengthen-human-escalation.sql",
+      "010-add-approval-revocation.sql",
     ]);
-    assert.equal(getSchemaVersion(db), 9);
+    assert.equal(getSchemaVersion(db), 10);
 
     const tableCount = db
       .prepare("SELECT COUNT(*) as count FROM sqlite_master WHERE type = 'table' AND name != 'sqlite_sequence'")
@@ -53,11 +54,11 @@ describe("migrations are idempotent / safe to run repeatedly", () => {
     const t = createTestDb({ seed: false });
     const first = runMigrations(t.db); // no-op, createTestDb already migrated
     assert.deepEqual(first.applied, []);
-    assert.equal(first.version, 9);
+    assert.equal(first.version, 10);
 
     const second = runMigrations(t.db);
     assert.deepEqual(second.applied, []);
-    assert.equal(second.version, 9);
+    assert.equal(second.version, 10);
     t.close();
   });
 });
@@ -81,6 +82,7 @@ describe("schema version is inspectable", () => {
       { version: 7, name: "007-add-claude-cache-usage.sql" },
       { version: 8, name: "008-add-human-escalation.sql" },
       { version: 9, name: "009-strengthen-human-escalation.sql" },
+      { version: 10, name: "010-add-approval-revocation.sql" },
     ]);
     t.close();
   });
@@ -126,8 +128,9 @@ describe("migrations 002+003+004+005 apply cleanly on top of an existing v1 data
       "007-add-claude-cache-usage.sql",
       "008-add-human-escalation.sql",
       "009-strengthen-human-escalation.sql",
+      "010-add-approval-revocation.sql",
     ]);
-    assert.equal(getSchemaVersion(db), 9);
+    assert.equal(getSchemaVersion(db), 10);
 
     // The pre-existing rows survive, unmodified except for the new
     // columns now existing (and being NULL, since this data predates
@@ -363,7 +366,7 @@ describe("DB survives reopen/reconnect", () => {
     t.db.close();
 
     const reopened = reopenTestDb(dir);
-    assert.equal(getSchemaVersion(reopened), 9);
+    assert.equal(getSchemaVersion(reopened), 10);
     const roles = reopened.prepare("SELECT COUNT(*) as count FROM agent_roles").get() as { count: number };
     assert.equal(roles.count, AGENT_ROLE_CATALOG.length);
     reopened.close();

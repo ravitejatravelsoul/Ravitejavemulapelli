@@ -318,6 +318,39 @@ export function resolveProjectIdForAgentRun(db: DatabaseSync, agentRunId: string
   return row?.projectId;
 }
 
+/**
+ * Revoke-approval safety check (Section 2) — true if *any* task in this
+ * project has ever had a real `agent_runs` row for the given provider,
+ * regardless of that run's outcome (SUCCEEDED/FAILED/etc. all mean a
+ * real paid attempt genuinely started). Walks the same forward chain as
+ * `resolveProjectIdForAgentRun`, in the opposite direction.
+ */
+export function hasAgentRunWithProviderForProject(db: DatabaseSync, projectId: string, provider: string): boolean {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) as c
+       FROM agent_runs ar
+       JOIN task_attempts ta ON ta.id = ar.taskAttemptId
+       JOIN tasks t ON t.id = ta.taskId
+       WHERE t.projectId = ? AND ar.provider = ?`,
+    )
+    .get(projectId, provider) as { c: number };
+  return row.c > 0;
+}
+
+/** Same check, scoped to one task — used when the approval being revoked is task-scoped rather than project-wide. */
+export function hasAgentRunWithProviderForTask(db: DatabaseSync, taskId: string, provider: string): boolean {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) as c
+       FROM agent_runs ar
+       JOIN task_attempts ta ON ta.id = ar.taskAttemptId
+       WHERE ta.taskId = ? AND ar.provider = ?`,
+    )
+    .get(taskId, provider) as { c: number };
+  return row.c > 0;
+}
+
 export function updateAgentRunStatus(
   db: DatabaseSync,
   id: string,

@@ -12,7 +12,9 @@ import { GlassCard } from "@/components/common/glass-card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ActionButton } from "@/components/ai-office/action-button";
-import { approveApprovalAction, rejectApprovalAction } from "@/app/office/actions/approvals";
+import { approveApprovalAction, rejectApprovalAction, revokeApprovalAction } from "@/app/office/actions/approvals";
+import { checkRevokeEligibility } from "@/lib/ai-office/approvals/approval-service";
+import { getEffectiveApprovalStatus } from "@/lib/ai-office/domain/project-outputs";
 import { TaskFlow } from "@/components/ai-office/dashboard/task-flow";
 import { AutoRefresh } from "@/components/ai-office/auto-refresh";
 import { ProjectPipeline } from "@/components/ai-office/dashboard/project-pipeline";
@@ -78,6 +80,14 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
   const pendingApprovalsForProject = getPendingApprovalsView(db).filter((a) => a.projectId === project.id);
   const waitingForOwnerApproval = pendingApprovalsForProject.length > 0;
 
+  // Revoke-approval capability (second Claude LIVE pilot safety gap): an
+  // APPROVED decision can be undone, but only for as long as nothing real
+  // has happened under it yet — `checkRevokeEligibility` is the single
+  // real-state check the Revoke button itself is gated on too, so this
+  // page can never offer a control it wouldn't actually be allowed to act on.
+  const revocableApprovalIds = new Set(approvals.filter((a) => a.status === "APPROVED" && checkRevokeEligibility(db, a).eligible).map((a) => a.id));
+  const hasRevocableApproval = revocableApprovalIds.size > 0;
+
   // Real system-reliability fix (found during the first Claude LIVE pilot):
   // a project can sit IN_PROGRESS with no pending approval while the
   // standalone runner process simply isn't running — previously this page
@@ -139,6 +149,11 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
               {runnerOfflineBlockingProgress && (
                 <Badge variant="destructive" className="font-mono text-[0.6rem] uppercase">
                   Runner offline
+                </Badge>
+              )}
+              {hasRevocableApproval && (
+                <Badge variant="outline" className="font-mono text-[0.6rem] uppercase">
+                  Claude authorized — revocable
                 </Badge>
               )}
             </div>
@@ -315,20 +330,35 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
             <GlassCard>
               <h2 className="text-sm font-semibold tracking-tight">Approvals</h2>
               <ul className="mt-3 flex flex-col gap-2 text-xs">
-                {approvals.map((approval) => (
-                  <li key={approval.id} className="flex flex-wrap items-center gap-2 border-b border-border/40 pb-2 last:border-0">
-                    <Badge variant={approval.status === "PENDING" ? "default" : approval.status === "APPROVED" ? "secondary" : "destructive"}>
-                      {approval.status}
-                    </Badge>
-                    {approval.kind === "paid_service_purchase" && (
-                      <Badge variant="outline" className="font-mono text-[0.55rem] uppercase">
-                        Paid AI
+                {approvals.map((approval) => {
+                  const effectiveStatus = getEffectiveApprovalStatus(approval);
+                  const revocable = revocableApprovalIds.has(approval.id);
+                  return (
+                    <li key={approval.id} className="flex flex-wrap items-center gap-2 border-b border-border/40 pb-2 last:border-0">
+                      <Badge variant={effectiveStatus === "PENDING" ? "default" : effectiveStatus === "APPROVED" ? "secondary" : "destructive"}>
+                        {effectiveStatus}
                       </Badge>
-                    )}
-                    <span>{approval.kind.replace(/_/g, " ")}</span>
-                    <span className="text-muted-foreground">{approval.taskId ? "task-scoped" : "project-wide"}</span>
-                  </li>
-                ))}
+                      {approval.kind === "paid_service_purchase" && (
+                        <Badge variant="outline" className="font-mono text-[0.55rem] uppercase">
+                          Paid AI
+                        </Badge>
+                      )}
+                      <span>{approval.kind.replace(/_/g, " ")}</span>
+                      <span className="text-muted-foreground">{approval.taskId ? "task-scoped" : "project-wide"}</span>
+                      {revocable && (
+                        <ActionButton
+                          action={revokeApprovalAction.bind(null, approval.id)}
+                          variant="outline"
+                          size="sm"
+                          successMessage="Approval revoked."
+                          confirmMessage="Revoke this approval? The paid action will remain blocked until you approve a new request."
+                        >
+                          Revoke
+                        </ActionButton>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </GlassCard>
           </TabsContent>

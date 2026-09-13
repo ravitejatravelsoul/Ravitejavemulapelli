@@ -1,5 +1,6 @@
 import { describe, test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import type { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,9 +8,15 @@ import { createTestDb } from "../../db/test-helpers.ts";
 import { getOwner } from "../../domain/users.ts";
 import { createProjectWithIdea } from "../../domain/projects.ts";
 import { createTask, getTask, listTaskAttempts } from "../../domain/tasks.ts";
-import { listApprovalsForProject, recordFailure } from "../../domain/project-outputs.ts";
-import { approveApproval, rejectApproval } from "../../approvals/approval-service.ts";
-import { listAiUsageForProject } from "../../domain/budget.ts";
+import { listApprovalsForProject, recordFailure, getEffectiveApprovalStatus, createApproval, type ApprovalRow } from "../../domain/project-outputs.ts";
+import { approveApproval, rejectApproval, revokeApproval, checkRevokeEligibility } from "../../approvals/approval-service.ts";
+import {
+  listAiUsageForProject,
+  createBudgetReservation,
+  reconcileBudgetReservation,
+  releaseBudgetReservation,
+  startOfCurrentMonthUtc,
+} from "../../domain/budget.ts";
 import { upsertRecommendedRouting, applyRecommendedRouting } from "../../domain/model-routing.ts";
 import { listFiles, writeFile } from "../../workspace/workspace-service.ts";
 import { upsertWorkspaceFileRecord } from "../../domain/workspace.ts";
@@ -513,3 +520,188 @@ describe("controlled Claude LIVE pilot — real routing/approval/budget integrat
     });
   });
 });
+
+describe("Revoke-approval capability — second Claude LIVE pilot safety gap", () => {
+  test("revoking an untouched APPROVED approval preserves the original decision and records a real, auditable revocation", async () => {
+    const t = createTestDb();
+    const owner = getOwner(t.db)!;
+    const { project } = setupHybridProject(t);
+    const task = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+    await executeTask(t.db, task.id);
+    const requested = listApprovalsForProject(t.db, project.id)[0];
+    const approved = approveApproval(t.db, { approvalId: requested.id, decidedByUserId: owner.id });
+    assert.equal(approved.ok, true);
+    if (!approved.ok) return;
+    const approval = approved.approval; // the real, post-decision row — not the stale pre-approval one
+    const originalDecidedAt = approval.decidedAt;
+
+    const eligibility = checkRevokeEligibility(t.db, approval);
+    assert.equal(eligibility.eligible, true);
+
+    const result = revokeApproval(t.db, { approvalId: approval.id, revokedByUserId: owner.id, note: "Changed my mind before it ran." });
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+
+    // Raw status stays within the existing schema (never widened) —
+    // REJECTED under the hood — but the effective, owner-facing status is REVOKED.
+    assert.equal(result.approval.status, "REJECTED");
+    assert.equal(getEffectiveApprovalStatus(result.approval), "REVOKED");
+
+    // History preserved exactly — nothing about the original decision was touched.
+    assert.equal(result.approval.decidedAt, originalDecidedAt);
+    assert.equal(result.approval.decidedBy, owner.id);
+
+    // The revocation itself is separately, explicitly recorded.
+    assert.equal(result.approval.revokedBy, owner.id);
+    assert.ok(result.approval.revokedAt);
+    assert.equal(result.approval.revocationNote, "Changed my mind before it ran.");
+
+    const events = listEventsForProject(t.db, project.id).filter((e) => e.type === "approval.revoked");
+    assert.equal(events.length, 1);
+    assert.equal(JSON.parse(events[0].payload).approvalId, approval.id);
+
+    t.close();
+  });
+
+  test("once revoked, the runner treats it as NOT authorized and creates a fresh PENDING approval on the next encounter — never a permanent block", async () => {
+    const t = createTestDb();
+    const owner = getOwner(t.db)!;
+    const { project } = setupHybridProject(t);
+    const task = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+    await executeTask(t.db, task.id);
+    const firstApproval = listApprovalsForProject(t.db, project.id)[0];
+    approveApproval(t.db, { approvalId: firstApproval.id, decidedByUserId: owner.id });
+    revokeApproval(t.db, { approvalId: firstApproval.id, revokedByUserId: owner.id });
+
+    // Not authorized: a paid call must not be reachable using the revoked approval.
+    process.env.ANTHROPIC_API_KEY = "sk-ant-test-key-not-real";
+    const blockedResult = await executeTask(t.db, task.id, { claudeClientOverride: claudeClient(() => claudeTextMessage(GOOD_HTML_ONLY_OUTPUT)) });
+    assert.equal(blockedResult.outcome, "claude-blocked");
+    assert.match(blockedResult.reason ?? "", /PAID AI APPROVAL REQUIRED/, "must ask again from scratch, not report a permanent rejection");
+
+    const approvals = listApprovalsForProject(t.db, project.id);
+    assert.equal(approvals.length, 2, "a fresh approval was created — the old one was never reused or resurrected");
+    const newApproval = approvals.find((a) => a.id !== firstApproval.id)!;
+    assert.equal(newApproval.status, "PENDING");
+    assert.equal(listAiUsageForProject(t.db, project.id).length, 0, "still zero real usage — nothing was ever authorized under the revoked approval");
+
+    t.close();
+  });
+
+  test("revocation is refused once a real (mocked) Claude call already recorded usage", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const owner = getOwner(t.db)!;
+      const { project } = setupHybridProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+      await executeTask(t.db, task.id);
+      const requested = listApprovalsForProject(t.db, project.id)[0];
+      approveApproval(t.db, { approvalId: requested.id, decidedByUserId: owner.id });
+      process.env.ANTHROPIC_API_KEY = "sk-ant-test-key-not-real";
+      await executeTask(t.db, task.id, { claudeClientOverride: claudeClient(() => claudeTextMessage(GOOD_HTML_ONLY_OUTPUT)) });
+      assert.equal(listAiUsageForProject(t.db, project.id).length, 1, "sanity: the mocked call really did record usage");
+
+      const approval = listApprovalsForProject(t.db, project.id)[0]; // the real, current (still APPROVED) row
+      const eligibility = checkRevokeEligibility(t.db, approval);
+      assert.equal(eligibility.eligible, false);
+      assert.match(eligibility.reason ?? "", /already/i);
+
+      const result = revokeApproval(t.db, { approvalId: approval.id, revokedByUserId: owner.id });
+      assert.equal(result.ok, false);
+      assert.equal(getApprovalStatusFor(t.db, approval.id), "APPROVED", "must remain APPROVED — revocation must not silently succeed after real usage");
+
+      t.close();
+    });
+  });
+
+  test("revocation is refused while a budget reservation for this provider is still RESERVED (in flight) or RECONCILED (settled), but allowed once it's only RELEASED", async () => {
+    const t = createTestDb();
+    const owner = getOwner(t.db)!;
+    const { project } = setupHybridProject(t);
+    const task = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+    await executeTask(t.db, task.id);
+    const approval = listApprovalsForProject(t.db, project.id)[0];
+    approveApproval(t.db, { approvalId: approval.id, decidedByUserId: owner.id });
+
+    const reservation = createBudgetReservation(t.db, { projectId: project.id, provider: "claude", estimatedCostUsd: 0.02, periodStart: startOfCurrentMonthUtc() });
+
+    let result = revokeApproval(t.db, { approvalId: approval.id, revokedByUserId: owner.id });
+    assert.equal(result.ok, false, "RESERVED (a call may be in flight right now) must block revocation");
+
+    reconcileBudgetReservation(t.db, reservation.id, 0.015);
+    result = revokeApproval(t.db, { approvalId: approval.id, revokedByUserId: owner.id });
+    assert.equal(result.ok, false, "RECONCILED (real money was spent) must block revocation");
+
+    t.close();
+  });
+
+  test("revocation is allowed once the only reservation for this provider was safely RELEASED, never consumed", async () => {
+    const t = createTestDb();
+    const owner = getOwner(t.db)!;
+    const { project } = setupHybridProject(t);
+    const task = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+    await executeTask(t.db, task.id);
+    const approval = listApprovalsForProject(t.db, project.id)[0];
+    approveApproval(t.db, { approvalId: approval.id, decidedByUserId: owner.id });
+
+    const reservation = createBudgetReservation(t.db, { projectId: project.id, provider: "claude", estimatedCostUsd: 0.02, periodStart: startOfCurrentMonthUtc() });
+    releaseBudgetReservation(t.db, reservation.id);
+
+    const result = revokeApproval(t.db, { approvalId: approval.id, revokedByUserId: owner.id });
+    assert.equal(result.ok, true, "a cleanly-released reservation carries no live claim and must not block revocation");
+
+    t.close();
+  });
+
+  test("only a currently APPROVED approval can be revoked — PENDING, REJECTED, and already-revoked all refuse with a clear reason", async () => {
+    const t = createTestDb();
+    const owner = getOwner(t.db)!;
+    const { project } = setupHybridProject(t);
+
+    const pendingTask = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+    await executeTask(t.db, pendingTask.id);
+    const pendingApproval = listApprovalsForProject(t.db, project.id)[0];
+    assert.equal(revokeApproval(t.db, { approvalId: pendingApproval.id, revokedByUserId: owner.id }).ok, false);
+
+    rejectApproval(t.db, { approvalId: pendingApproval.id, decidedByUserId: owner.id });
+    assert.equal(revokeApproval(t.db, { approvalId: pendingApproval.id, revokedByUserId: owner.id }).ok, false, "a real rejection is not revocable — it's already terminal");
+
+    const { project: project2 } = setupHybridProject(t, { monthlyBudgetCapUsd: 3.0 });
+    const task2 = createTask(t.db, { projectId: project2.id, roleId: "frontend-developer", title: "Implement frontend" });
+    await executeTask(t.db, task2.id);
+    const approval2 = listApprovalsForProject(t.db, project2.id)[0];
+    approveApproval(t.db, { approvalId: approval2.id, decidedByUserId: owner.id });
+    const first = revokeApproval(t.db, { approvalId: approval2.id, revokedByUserId: owner.id });
+    assert.equal(first.ok, true);
+    const second = revokeApproval(t.db, { approvalId: approval2.id, revokedByUserId: owner.id });
+    assert.equal(second.ok, false, "revoking an already-revoked approval is a safe no-op refusal, never a double-decrement or crash");
+
+    t.close();
+  });
+
+  test("revoking a non-Claude approval kind with no provider in its context is allowed unconditionally (nothing to check)", async () => {
+    const t = createTestDb();
+    const owner = getOwner(t.db)!;
+    const { project } = setupHybridProject(t);
+
+    const approval = createApproval(t.db, {
+      projectId: project.id,
+      kind: "production_deploy",
+      requestedBy: "system",
+      context: { reason: "Ship it." },
+    });
+    approveApproval(t.db, { approvalId: approval.id, decidedByUserId: owner.id });
+
+    const approved: ApprovalRow = { ...approval, status: "APPROVED" };
+    assert.equal(checkRevokeEligibility(t.db, approved).eligible, true);
+
+    t.close();
+  });
+});
+
+function getApprovalStatusFor(db: DatabaseSync, approvalId: string): string | undefined {
+  return (db.prepare("SELECT status FROM approvals WHERE id = ?").get(approvalId) as { status: string } | undefined)?.status;
+}

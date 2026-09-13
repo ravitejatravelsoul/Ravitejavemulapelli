@@ -427,8 +427,17 @@ function hasPendingClaudeApproval(db: DatabaseSync, projectId: string): boolean 
   return claudeApprovalsForProject(db, projectId).some((a) => a.status === "PENDING");
 }
 
+/**
+ * A revoked approval is stored as `status === 'REJECTED'` with
+ * `revokedAt` set (see migration 010's docblock — no new CHECK-constraint
+ * value was added to the schema) but must NOT be treated the same as a
+ * real owner rejection here: an owner revoking their own earlier approval
+ * before anything ran means "ask me again," not "never ask again." A
+ * genuine rejection permanently blocks the role; a revocation only
+ * clears the way for a fresh PENDING approval on the next poll.
+ */
 function hasRejectedClaudeApproval(db: DatabaseSync, projectId: string): boolean {
-  return claudeApprovalsForProject(db, projectId).some((a) => a.status === "REJECTED");
+  return claudeApprovalsForProject(db, projectId).some((a) => a.status === "REJECTED" && !a.revokedAt);
 }
 
 export interface PreparedClaudeCall {

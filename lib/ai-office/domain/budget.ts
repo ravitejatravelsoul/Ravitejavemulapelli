@@ -424,3 +424,18 @@ export function releaseBudgetReservation(db: DatabaseSync, id: string): BudgetRe
   db.prepare("UPDATE budget_reservations SET status = 'RELEASED', updatedAt = ? WHERE id = ? AND status = 'RESERVED'").run(Date.now(), id);
   return getBudgetReservation(db, id) as unknown as BudgetReservationRow;
 }
+
+/**
+ * Revoke-approval safety check (Section 2 of the revocation feature) —
+ * true whenever this provider has any reservation for this project that
+ * is either actively held (`RESERVED`, a call may be in flight right
+ * now) or already settled (`RECONCILED`, real money was actually spent).
+ * `RELEASED` reservations don't count — those already walked back
+ * cleanly and represent no live claim on the budget or the provider.
+ */
+export function hasUnsettledOrConsumedReservation(db: DatabaseSync, projectId: string, provider: string): boolean {
+  const row = db
+    .prepare("SELECT COUNT(*) as c FROM budget_reservations WHERE projectId = ? AND provider = ? AND status IN ('RESERVED', 'RECONCILED')")
+    .get(projectId, provider) as { c: number };
+  return row.c > 0;
+}

@@ -9,9 +9,9 @@ import {
   type ApprovalKind,
 } from "../domain/project-outputs.ts";
 import { getProject, updateProjectStatus } from "../domain/projects.ts";
-import { updateTaskStatus } from "../domain/tasks.ts";
+import { updateTaskStatus, hasAgentRunWithProviderForProject, hasAgentRunWithProviderForTask } from "../domain/tasks.ts";
 import { recordEvent, recordAuditEntry } from "../domain/events.ts";
-import { updateOfficeBudgetCap, startOfCurrentMonthUtc } from "../domain/budget.ts";
+import { updateOfficeBudgetCap, startOfCurrentMonthUtc, listAiUsageForProject, hasUnsettledOrConsumedReservation } from "../domain/budget.ts";
 import { HumanEscalationService } from "../escalation/escalation-service.ts";
 
 /**
@@ -123,6 +123,116 @@ export function rejectApproval(
   recordAuditEntry(db, { actor: input.decidedByUserId, action: "approval.rejected", targetType: "approval", targetId: decided.id });
 
   return { ok: true, approval: decided };
+}
+
+export interface RevokeEligibility {
+  eligible: boolean;
+  reason?: string;
+}
+
+/**
+ * Real system-safety fix (the first Claude LIVE pilot's second incident):
+ * an owner must be able to undo an APPROVED decision — but only while it
+ * still means nothing has actually happened yet. Every check here is a
+ * real, current-state query, never a guess or a time-based heuristic:
+ * a provider is only ever "safe" once none of these three independent
+ * signals show any trace of the underlying paid action having started.
+ * All three are checked at *project* scope for a project-wide approval
+ * (`taskId === null`, this codebase's existing "blocks the whole
+ * project" shape — see `ApprovalRow.taskId`'s docblock), which is
+ * deliberately the more conservative direction: a project-wide Claude
+ * approval could in principle authorize more than one task, so a single
+ * task looking untouched is not enough to call the whole approval safe.
+ */
+export function checkRevokeEligibility(db: DatabaseSync, approval: ApprovalRow): RevokeEligibility {
+  if (approval.status !== "APPROVED") {
+    return { eligible: false, reason: "Only a currently APPROVED approval can be revoked." };
+  }
+
+  let provider: string | undefined;
+  try {
+    provider = (JSON.parse(approval.context) as { provider?: string }).provider;
+  } catch {
+    provider = undefined;
+  }
+  // An approval kind with no real provider behind it (e.g. a production
+  // deploy or a destructive DB action) has nothing to check here — there
+  // is no ai_usage/reservation/agent_run trail to look for at all.
+  if (!provider) return { eligible: true };
+
+  if (approval.taskId) {
+    if (hasAgentRunWithProviderForTask(db, approval.taskId, provider)) {
+      return { eligible: false, reason: "A paid provider attempt has already started for this task and can no longer be revoked." };
+    }
+  } else if (approval.projectId) {
+    if (hasAgentRunWithProviderForProject(db, approval.projectId, provider)) {
+      return { eligible: false, reason: "A paid provider attempt has already started under this approval and can no longer be revoked." };
+    }
+    if (listAiUsageForProject(db, approval.projectId).some((u) => u.provider === provider)) {
+      return { eligible: false, reason: "Real usage has already been recorded for this provider and can no longer be revoked." };
+    }
+  }
+
+  if (approval.projectId && hasUnsettledOrConsumedReservation(db, approval.projectId, provider)) {
+    return { eligible: false, reason: "A budget reservation for this provider has already been made or settled and can no longer be revoked." };
+  }
+
+  return { eligible: true };
+}
+
+/**
+ * Revokes an APPROVED decision — never by touching `status` back to
+ * `'PENDING'` (Section 5's "not silently"), and never by deleting or
+ * overwriting the original decision: `decidedAt`/`decidedBy`/
+ * `decisionNote` are left exactly as they were. The raw `status` moves
+ * to the existing `'REJECTED'` value (no new CHECK-constraint value was
+ * added to the schema — see migration 010's docblock for the real,
+ * empirically-verified reason), which for free reuses every already-
+ * correct "not authorized" code path (`hasApprovedClaudeUse` in
+ * agent-runner.ts simply stops finding an APPROVED row). The new
+ * `revokedAt`/`revokedBy`/`revocationNote` columns are what actually
+ * distinguish this from an original owner rejection — read status
+ * through `getEffectiveApprovalStatus()` (project-outputs.ts) to see the
+ * real "REVOKED" label. `agent-runner.ts`'s `hasRejectedClaudeApproval`
+ * is updated alongside this to specifically exclude a revoked row, so a
+ * revoked project is *not* treated as permanently rejected — the next
+ * poll cycle creates a fresh PENDING approval exactly like the first
+ * time, requiring the owner's explicit consent again.
+ */
+export function revokeApproval(
+  db: DatabaseSync,
+  input: { approvalId: string; revokedByUserId: string; note?: string },
+): ApprovalDecisionResult {
+  const approval = getApproval(db, input.approvalId);
+  if (!approval) return { ok: false, reason: "Approval not found." };
+
+  const eligibility = checkRevokeEligibility(db, approval);
+  if (!eligibility.eligible) return { ok: false, reason: eligibility.reason! };
+
+  const now = Date.now();
+  const result = db
+    .prepare(
+      `UPDATE approvals SET status = 'REJECTED', revokedAt = ?, revokedBy = ?, revocationNote = ?, updatedAt = ?
+       WHERE id = ? AND status = 'APPROVED'`,
+    )
+    .run(now, input.revokedByUserId, input.note?.trim() || null, now, input.approvalId);
+  if (Number(result.changes) === 0) {
+    // Lost a race — the approval stopped being APPROVED between the
+    // eligibility check above and this write (e.g. a paid attempt just
+    // started, or it was already revoked by another request).
+    return { ok: false, reason: "This approval is no longer APPROVED — it may have already been revoked or acted on." };
+  }
+  const revoked = getApproval(db, input.approvalId)!;
+
+  recordEvent(db, {
+    projectId: revoked.projectId,
+    type: "approval.revoked",
+    payload: { approvalId: revoked.id, kind: revoked.kind, taskId: revoked.taskId, reason: input.note?.trim() || null },
+    actor: input.revokedByUserId,
+  });
+  recordAuditEntry(db, { actor: input.revokedByUserId, action: "approval.revoked", targetType: "approval", targetId: revoked.id });
+
+  return { ok: true, approval: revoked };
 }
 
 function applyApprovedBudgetIncrease(db: DatabaseSync, approval: ApprovalRow, decidedByUserId: string): void {
