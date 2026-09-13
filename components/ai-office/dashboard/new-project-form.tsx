@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState, useTransition } from "react";
+import { useActionState, useEffect, useState, useTransition } from "react";
 import { GlassCard } from "@/components/common/glass-card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,7 +19,15 @@ type AiPolicyMode = "LOCAL_ONLY" | "HYBRID" | "CLAUDE_ONLY";
 
 export function NewProjectForm() {
   const [state, formAction, isPending] = useActionState(createProjectAction, initialState);
-  const [provider, setProvider] = useState<Provider>("simulated");
+  // Platform-hardening phase, Part 6/8 — a real owner submitting a real
+  // idea without noticing this toggle used to silently get SIMULATED
+  // (deterministic test fixtures, no real reasoning at all), not because
+  // they chose it but because it happened to be the pre-selected default.
+  // "Simulation" is for deliberately testing the platform itself; a real
+  // project run defaults to a real, free, local reasoning provider
+  // instead — Simulation remains one click away for anyone who really
+  // does just want to exercise the Office's own plumbing.
+  const [provider, setProvider] = useState<Provider>("ollama");
   const [health, setHealth] = useState<OllamaHealth | null>(null);
   const [checking, startChecking] = useTransition();
   const [aiPolicyMode, setAiPolicyMode] = useState<AiPolicyMode>("LOCAL_ONLY");
@@ -34,6 +42,18 @@ export function NewProjectForm() {
       });
     }
   }
+
+  // Ollama is now the default selection (not just a click-to-select
+  // option), so its health must be checked on mount too — otherwise the
+  // owner would see no status at all unless they happened to click the
+  // already-selected button again. Checks health directly (not via
+  // `selectProvider`, which would also redundantly call `setProvider`
+  // with the value it's already initialized to).
+  useEffect(() => {
+    startChecking(async () => {
+      setHealth(await checkOllamaHealthAction());
+    });
+  }, []);
 
   function selectAiPolicyMode(next: AiPolicyMode) {
     setAiPolicyMode(next);
@@ -82,7 +102,7 @@ export function NewProjectForm() {
               )}
             >
               Simulation
-              <p className="text-xs font-normal text-muted-foreground">Deterministic fixtures · $0 · no LLM</p>
+              <p className="text-xs font-normal text-muted-foreground">For testing the Office itself — scripted, deterministic output. No AI model is ever called; nothing here reasons about your idea.</p>
             </button>
             <button
               type="button"

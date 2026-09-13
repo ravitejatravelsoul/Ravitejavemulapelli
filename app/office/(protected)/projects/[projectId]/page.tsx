@@ -454,7 +454,83 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
                     </Badge>
                   )}
                 </div>
-                <div className="mt-3 overflow-x-auto">
+
+                {/* Cost dashboard improvement (Part 16) — why the project cost what it did, at a glance. */}
+                <div className="mt-4 grid grid-cols-2 gap-3 border-t border-border/40 pt-4 text-xs sm:grid-cols-4">
+                  <div>
+                    <p className="text-muted-foreground">Successful calls</p>
+                    <p className="mt-0.5 font-semibold text-foreground">{claudeCosts.successfulCalls}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Failed calls</p>
+                    <p className="mt-0.5 font-semibold text-destructive">
+                      {claudeCosts.failedCalls} (${claudeCosts.failedCallsCostUsd.toFixed(4)})
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Retry/remediation cost</p>
+                    <p className="mt-0.5 font-semibold text-foreground">${claudeCosts.retryCostUsd.toFixed(4)}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Est. clean-run cost</p>
+                    <p className="mt-0.5 font-semibold text-foreground">
+                      {claudeCosts.estimatedCleanRunCostUsd !== null ? `$${claudeCosts.estimatedCleanRunCostUsd.toFixed(4)}` : "N/A"}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Input tokens</p>
+                    <p className="mt-0.5 font-semibold text-foreground">{claudeCosts.totalInputTokens.toLocaleString()}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Output tokens</p>
+                    <p className="mt-0.5 font-semibold text-foreground">{claudeCosts.totalOutputTokens.toLocaleString()}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Cache creation tokens</p>
+                    <p className="mt-0.5 font-semibold text-foreground">{claudeCosts.totalCacheCreationInputTokens.toLocaleString()}</p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground">Cache read tokens</p>
+                    <p className="mt-0.5 font-semibold text-foreground">{claudeCosts.totalCacheReadInputTokens.toLocaleString()}</p>
+                  </div>
+                </div>
+
+                {(claudeCosts.costByRole.length > 0 || claudeCosts.costByModel.length > 0) && (
+                  <div className="mt-4 grid grid-cols-1 gap-4 border-t border-border/40 pt-4 sm:grid-cols-2">
+                    {claudeCosts.costByRole.length > 0 && (
+                      <div>
+                        <p className="mb-1.5 text-xs font-medium text-muted-foreground">Cost by role</p>
+                        <ul className="flex flex-col gap-1 text-xs">
+                          {claudeCosts.costByRole.map((r) => (
+                            <li key={r.roleId} className="flex items-center justify-between gap-2">
+                              <span>{r.roleName}</span>
+                              <span className="font-mono">
+                                ${r.costUsd.toFixed(4)} ({r.calls})
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {claudeCosts.costByModel.length > 0 && (
+                      <div>
+                        <p className="mb-1.5 text-xs font-medium text-muted-foreground">Cost by model</p>
+                        <ul className="flex flex-col gap-1 text-xs">
+                          {claudeCosts.costByModel.map((m) => (
+                            <li key={m.model} className="flex items-center justify-between gap-2">
+                              <span className="font-mono">{m.model}</span>
+                              <span className="font-mono">
+                                ${m.costUsd.toFixed(4)} ({m.calls})
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="mt-4 overflow-x-auto">
                   <table className="w-full min-w-[640px] text-left text-xs">
                     <thead className="text-muted-foreground">
                       <tr>

@@ -61,13 +61,26 @@ describe("buildPrompt (OllamaAdapter's exact, unaffected contract)", () => {
 });
 
 describe("buildPromptSegments (Claude-only system/user split for prompt caching)", () => {
-  test("systemText contains the stable role contract and authoritative request; userText contains the volatile metadata/prior-work", () => {
+  // Cost-audit fix — a real Claude LIVE pilot recorded zero cache-creation/
+  // cache-read tokens across 14 calls, including several retries of the
+  // same task seconds apart. Root cause: `metadata` (task title/role
+  // instructions) and `approvedPriorWork` (prior artifacts/decisions) used
+  // to live in the never-cached `userText`, on the theory that they
+  // "vary call-to-call" — they don't, *within a single task's own
+  // retries* (a task is never retitled mid-flight; its scoped artifacts
+  // only change if an upstream task is genuinely reworked). Moving them
+  // into `systemText` gives Anthropic's cache a real, large-enough stable
+  // prefix to actually match against on a retry — see the docblock on
+  // `buildPromptSegments` for the full "why."
+  test("systemText contains the stable role contract, authoritative request, task metadata, and prior work — only the corrective-attempt/current-files content that can change between a task's own retries stays in userText", () => {
     const { systemText, userText } = buildPromptSegments(input());
     assert.ok(systemText.includes('You are the "frontend-developer" role'));
     assert.ok(systemText.includes("Create a simple Hello World webpage."));
     assert.ok(systemText.includes("Respond with ONLY a single JSON object"));
-    assert.ok(userText.includes("===== PROJECT METADATA"));
-    assert.ok(userText.includes("===== APPROVED PRIOR WORK"));
+    assert.ok(systemText.includes("===== PROJECT METADATA"));
+    assert.ok(systemText.includes("===== APPROVED PRIOR WORK"));
+    assert.ok(!userText.includes("===== PROJECT METADATA"));
+    assert.ok(!userText.includes("===== APPROVED PRIOR WORK"));
   });
 
   test("systemText includes the paid-provider-only conciseness instructions that buildPrompt() never gets", () => {
@@ -79,13 +92,28 @@ describe("buildPromptSegments (Claude-only system/user split for prompt caching)
   test("the same underlying data drives both — a change to relevantArtifacts appears in both buildPrompt and buildPromptSegments identically", () => {
     const withArtifact = input({ relevantArtifacts: [{ type: "architecture", content: "Use a single index.html file." }] });
     const flat = buildPrompt(withArtifact);
-    const { userText } = buildPromptSegments(withArtifact);
+    const { systemText } = buildPromptSegments(withArtifact);
     assert.ok(flat.includes("Use a single index.html file."));
-    assert.ok(userText.includes("Use a single index.html file."));
+    assert.ok(systemText.includes("Use a single index.html file."));
   });
 
-  test("systemText never duplicates the volatile task title/metadata that userText carries", () => {
+  test("systemText includes the task's own title/metadata — stable across that task's own retries, exactly the property caching needs", () => {
     const { systemText } = buildPromptSegments(input({ taskTitle: "A very specific tracking label" }));
-    assert.ok(!systemText.includes("A very specific tracking label"));
+    assert.ok(systemText.includes("A very specific tracking label"));
+  });
+
+  test("userText carries only what can genuinely change between retries of the same task: corrective-attempt detail and current files", () => {
+    const withRemediation = input({
+      remediationContext: {
+        attemptNumber: 2,
+        failingChecks: ["Button click did not update the message."],
+        failureReason: "QA failed.",
+        preserveRequirements: "Preserve everything except what the failure implicates.",
+        currentFiles: [{ path: "script.js", content: "// current real file content" }],
+      },
+    });
+    const { userText } = buildPromptSegments(withRemediation);
+    assert.ok(userText.includes("CORRECTIVE ATTEMPT"));
+    assert.ok(userText.includes("// current real file content"));
   });
 });

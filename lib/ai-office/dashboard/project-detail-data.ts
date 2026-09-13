@@ -128,6 +128,8 @@ export interface ClaudeCallView {
   contextTargetEstimatedInputTokens: number | null;
   contextBurstEstimatedInputTokens: number | null;
   createdAt: number;
+  /** The real `agent_runs.status` this call ended in — cost dashboard improvement (Part 16): a call can incur real, billed tokens and still fail (e.g. malformed JSON, an intent-consistency rejection) — `ai_usage` alone can't distinguish "paid and worked" from "paid and wasted," this can. */
+  agentRunStatus: string | null;
 }
 
 export interface ClaudeCostSummary {
@@ -143,6 +145,27 @@ export interface ClaudeCostSummary {
   costPerCompletedPaidTask: number;
   /** How many calls needed their capability's burst allowance — a real, owner-visible signal that context is running hotter than the normal target, even though none of them were blocked. */
   callsUsingBurstAllowance: number;
+  // ---- cost dashboard improvement (platform-hardening phase, Part 16) ----
+  successfulCalls: number;
+  failedCalls: number;
+  /** Total real cost of calls whose agent run did NOT succeed — money spent on a malformed response, an intent-consistency rejection, or any other failure, never recovering real work. */
+  failedCallsCostUsd: number;
+  /** Total real cost of every call beyond the first per task (`paidRetries`' own cost) — retries/remediation spend, whether or not the retry itself succeeded. */
+  retryCostUsd: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCacheCreationInputTokens: number;
+  totalCacheReadInputTokens: number;
+  costByRole: Array<{ roleId: string; roleName: string; costUsd: number; calls: number }>;
+  costByModel: Array<{ model: string; costUsd: number; calls: number }>;
+  /**
+   * Sum of only the FIRST successful call per task — an honest "what
+   * this would cost if every call succeeded on its first attempt,"
+   * derived purely from this project's own real evidence. `null` (never
+   * a guess) whenever no task in this project has ever had a successful
+   * Claude call to derive one from.
+   */
+  estimatedCleanRunCostUsd: number | null;
 }
 
 function buildClaudeCostSummary(db: DatabaseSync, projectId: string): ClaudeCostSummary {
@@ -196,6 +219,7 @@ function buildClaudeCostSummary(db: DatabaseSync, projectId: string): ClaudeCost
       contextTargetEstimatedInputTokens: contextEvent?.targetEstimatedInputTokens ?? null,
       contextBurstEstimatedInputTokens: contextEvent?.burstEstimatedInputTokens ?? null,
       createdAt: usage.createdAt,
+      agentRunStatus: agentRun?.status ?? null,
     };
   });
 
@@ -209,6 +233,52 @@ function buildClaudeCostSummary(db: DatabaseSync, projectId: string): ClaudeCost
   const completedTaskIds = new Set([...seenTaskIds].filter((id) => getTask(db, id)?.status === "DONE"));
   const totalCostUsd = calls.reduce((sum, c) => sum + c.costUsd, 0);
 
+  const successfulCalls = calls.filter((c) => c.agentRunStatus === "SUCCEEDED");
+  const failedCalls = calls.filter((c) => c.agentRunStatus !== "SUCCEEDED");
+
+  // Retry cost: every call beyond the first (by createdAt) for a given
+  // task, regardless of whether the retry itself succeeded — the same
+  // "beyond the first" definition `paidRetries` already uses, just
+  // summing cost instead of counting calls.
+  const seenForRetryCost = new Set<string>();
+  let retryCostUsd = 0;
+  for (const call of [...calls].sort((a, b) => a.createdAt - b.createdAt)) {
+    if (!call.taskId) continue;
+    if (seenForRetryCost.has(call.taskId)) retryCostUsd += call.costUsd;
+    else seenForRetryCost.add(call.taskId);
+  }
+
+  function groupCost<K extends string>(keyOf: (c: ClaudeCallView) => K | null): Array<{ key: K; costUsd: number; calls: number }> {
+    const byKey = new Map<K, { costUsd: number; calls: number }>();
+    for (const call of calls) {
+      const key = keyOf(call);
+      if (key === null) continue;
+      const existing = byKey.get(key) ?? { costUsd: 0, calls: 0 };
+      existing.costUsd += call.costUsd;
+      existing.calls += 1;
+      byKey.set(key, existing);
+    }
+    return [...byKey.entries()].map(([key, v]) => ({ key, ...v })).sort((a, b) => b.costUsd - a.costUsd);
+  }
+
+  const costByRole = groupCost((c) => c.roleId).map((r) => ({
+    roleId: r.key,
+    roleName: calls.find((c) => c.roleId === r.key)?.roleName ?? r.key,
+    costUsd: r.costUsd,
+    calls: r.calls,
+  }));
+  const costByModel = groupCost((c) => c.model).map((m) => ({ model: m.key, costUsd: m.costUsd, calls: m.calls }));
+
+  // First successful call per task, oldest first — the honest "if this
+  // had worked first try" baseline. Never fabricated: null whenever no
+  // task in this project has ever had a real successful Claude call.
+  const firstSuccessByTask = new Map<string, ClaudeCallView>();
+  for (const call of [...successfulCalls].sort((a, b) => a.createdAt - b.createdAt)) {
+    if (!call.taskId) continue;
+    if (!firstSuccessByTask.has(call.taskId)) firstSuccessByTask.set(call.taskId, call);
+  }
+  const estimatedCleanRunCostUsd = firstSuccessByTask.size > 0 ? [...firstSuccessByTask.values()].reduce((sum, c) => sum + c.costUsd, 0) : null;
+
   return {
     calls: calls.sort((a, b) => b.createdAt - a.createdAt),
     totalCostUsd,
@@ -219,6 +289,17 @@ function buildClaudeCostSummary(db: DatabaseSync, projectId: string): ClaudeCost
     averageCallCostUsd: calls.length > 0 ? totalCostUsd / calls.length : 0,
     costPerCompletedPaidTask: completedTaskIds.size > 0 ? totalCostUsd / completedTaskIds.size : 0,
     callsUsingBurstAllowance: calls.filter((c) => c.contextBurstWarning).length,
+    successfulCalls: successfulCalls.length,
+    failedCalls: failedCalls.length,
+    failedCallsCostUsd: failedCalls.reduce((sum, c) => sum + c.costUsd, 0),
+    retryCostUsd,
+    totalInputTokens: calls.reduce((sum, c) => sum + c.inputTokens, 0),
+    totalOutputTokens: calls.reduce((sum, c) => sum + c.outputTokens, 0),
+    totalCacheCreationInputTokens: calls.reduce((sum, c) => sum + (c.cacheCreationInputTokens ?? 0), 0),
+    totalCacheReadInputTokens: calls.reduce((sum, c) => sum + (c.cacheReadInputTokens ?? 0), 0),
+    costByRole,
+    costByModel,
+    estimatedCleanRunCostUsd,
   };
 }
 

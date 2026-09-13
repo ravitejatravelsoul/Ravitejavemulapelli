@@ -198,18 +198,39 @@ export function buildPrompt(input: AgentTaskInput): string {
 
 /**
  * Token economics phase, Part 9 — Claude's system/user split for real
- * Anthropic prompt caching. `systemText` carries only what's genuinely
- * stable ACROSS repeated calls for the same role on the same project (the
- * fixed role contract/response-format instructions, which never change,
- * plus the authoritative user request, which is fixed for the life of a
- * project) — exactly the content a cache breakpoint benefits from, since a
- * project's retries/multiple-role calls repeat it verbatim. `userText`
- * carries everything that legitimately varies call-to-call (corrective-
- * attempt/failure detail, task metadata, prior artifacts/decisions,
- * relevant files) and is never cached. `concisenessInstructions` is
- * additional, paid-provider-only guidance (Part 8) — deliberately never
- * added to `buildPrompt()`'s shared output, so OllamaAdapter's exact
- * prompt text is completely unaffected by this phase (Part 12).
+ * Anthropic prompt caching. `userText` carries only what can genuinely
+ * change from one call to the next FOR THE SAME TASK: the corrective-
+ * attempt/failure detail (a retry's whole reason for existing) and the
+ * current real workspace files it must preserve. Everything else is, in
+ * practice, identical across every retry of one task — the fixed role
+ * contract/response-format instructions, the authoritative request
+ * (fixed for the project's life), the task's own title/instructions
+ * metadata, and the upstream artifacts/decisions it was scoped to see —
+ * so all of it lives in `systemText`, behind the one `cache_control`
+ * breakpoint, to actually give Anthropic's prompt cache a large enough
+ * stable prefix to match against on a real retry.
+ *
+ * Real defect found during a cost audit after the first genuine Claude
+ * LIVE pilot: every one of 14 real calls recorded zero cache-creation
+ * and zero cache-read tokens, even across several retries of the exact
+ * same task seconds apart (well inside Anthropic's ~5-minute ephemeral
+ * cache TTL). Root cause — `metadata`/`approvedPriorWork` used to live
+ * in `userText` instead of here, on the theory that they "legitimately
+ * vary call-to-call"; in fact neither does *within a single task's own
+ * retries* (a task is never retitled mid-flight, and its scoped
+ * artifacts/decisions only change if an upstream task is genuinely
+ * reworked — a real, occasional cache miss, never a correctness issue,
+ * exactly how caching is supposed to degrade). Moving them here doesn't
+ * guarantee a cache hit on every retry, but it removes the structural
+ * reason caching could never engage at all for a small project, where
+ * the previously Claude-only stable prefix (role contract + a short
+ * idea) routinely fell under Anthropic's minimum cacheable-prefix
+ * length.
+ *
+ * `concisenessInstructions` is additional, paid-provider-only guidance
+ * (Part 8) — deliberately never added to `buildPrompt()`'s shared
+ * output, so OllamaAdapter's exact prompt text is completely unaffected
+ * by this phase (Part 12).
  */
 export function buildPromptSegments(input: AgentTaskInput): { systemText: string; userText: string } {
   const s = buildPromptSections(input);
@@ -227,8 +248,8 @@ export function buildPromptSegments(input: AgentTaskInput): { systemText: string
     // a valid response.
     "Conciseness applies ONLY to prose (\"summary\", explanations, decisions) — it never applies to \"fileOperations\" content. Every file you write via \"fileOperations\" must be the complete, syntactically valid file from start to finish, however long that requires; truncating, abbreviating, or stopping partway through a file is always wrong, even under this conciseness instruction.",
   ];
-  const systemText = [...s.roleIntro, ...s.authoritativeRequest, ...s.responseFormat, ...concisenessInstructions].join("\n");
-  const userText = [...s.correctiveAttempt, ...s.metadata, ...s.approvedPriorWork, ...s.relevantFilesSection].join("\n");
+  const systemText = [...s.roleIntro, ...s.authoritativeRequest, ...s.metadata, ...s.approvedPriorWork, ...s.responseFormat, ...concisenessInstructions].join("\n");
+  const userText = [...s.correctiveAttempt, ...s.relevantFilesSection].join("\n");
   return { systemText, userText };
 }
 
