@@ -14,8 +14,8 @@ const STATUS_MAP: Record<string, "answered" | "no-answer" | "busy" | "failed"> =
 /**
  * Twilio's call-status callback — fires once the call itself resolves
  * (answered, no answer, busy, failed), independent of and prior to any
- * DTMF response (that arrives via `inbound-sms` instead). Drives the
- * real call→SMS fallback (Section D/E) through the exact same
+ * DTMF response (that arrives via `inbound-call-response` instead).
+ * Drives the real call→SMS fallback (Section D/E) through the exact same
  * `handleCallStatusUpdate` a test can call directly.
  *
  * Same security-hardening gate as `inbound-sms`: a 404 unless a real

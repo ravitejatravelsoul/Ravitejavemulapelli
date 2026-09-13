@@ -1,6 +1,6 @@
 import "server-only";
 import { createHmac } from "node:crypto";
-import type { CommunicationProvider, SendSmsResult, PlaceCallResult, InboundResponse } from "./communication-provider.ts";
+import type { CommunicationProvider, SendSmsResult, PlaceCallResult, InboundResponse, InboundCallResponse } from "./communication-provider.ts";
 
 /**
  * A real (if minimal) Twilio REST implementation — plain `fetch` against
@@ -43,8 +43,16 @@ export class TwilioCommunicationProvider implements CommunicationProvider {
     return { providerMessageId: data.sid };
   }
 
-  async placeCall(to: string, voiceMessage: string): Promise<PlaceCallResult> {
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Gather numDigits="1" action="${this.config.publicBaseUrl ?? ""}/api/escalation/inbound-call-response" method="POST"><Say>${escapeXml(voiceMessage)}</Say></Gather><Say>No response received. Goodbye.</Say></Response>`;
+  async placeCall(to: string, voiceMessage: string, callbackToken: string): Promise<PlaceCallResult> {
+    // Requiring a real public base URL here (rather than defaulting to
+    // "") is deliberate: a call placed with a broken callback URL would
+    // let the owner press 1/2/3 with no way to ever act on it — far
+    // worse than simply not placing the call. `placeCallForEscalation`
+    // in the escalation service already catches any `placeCall` failure
+    // and falls back to SMS, so throwing here degrades gracefully.
+    if (!this.config.publicBaseUrl) throw new Error("OFFICE_PUBLIC_BASE_URL must be configured to place a real call.");
+    const callbackUrl = `${this.config.publicBaseUrl}/api/escalation/inbound-call-response?token=${encodeURIComponent(callbackToken)}`;
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Gather numDigits="1" action="${escapeXmlAttr(callbackUrl)}" method="POST"><Say>${escapeXml(voiceMessage)}</Say></Gather><Say>No response received. Goodbye.</Say></Response>`;
     const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${this.config.accountSid}/Calls.json`, {
       method: "POST",
       headers: { Authorization: this.authHeader(), "Content-Type": "application/x-www-form-urlencoded" },
@@ -67,20 +75,25 @@ export class TwilioCommunicationProvider implements CommunicationProvider {
     return timingSafeEqualString(expected, signature);
   }
 
+  /** Inbound SMS only — call DTMF now arrives at a dedicated route/token and is parsed by `parseInboundCallResponse` instead (Defect 1: the two channels carry very different trust models and must not share a parser). */
   parseInboundResponse(rawBody: string): InboundResponse {
     const params = new URLSearchParams(rawBody);
-    const from = params.get("From") ?? "unknown";
-    const digits = params.get("Digits");
-    if (digits) {
-      const menu: Record<string, string> = { "1": "APPROVE", "2": "REJECT", "3": "DETAILS" };
-      return { from, body: menu[digits] ?? digits };
-    }
-    return { from, body: (params.get("Body") ?? "").trim() };
+    return { from: params.get("From") ?? "unknown", body: (params.get("Body") ?? "").trim() };
+  }
+
+  parseInboundCallResponse(rawBody: string): InboundCallResponse {
+    const params = new URLSearchParams(rawBody);
+    return { from: params.get("From") ?? "unknown", to: params.get("To") ?? "unknown", digit: params.get("Digits") };
   }
 }
 
 function escapeXml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/** Same escaping as `escapeXml` plus single-quote, since this text is interpolated into a double-quoted XML attribute that itself sits inside a template literal — a callback token could in principle contain characters needing both. */
+function escapeXmlAttr(text: string): string {
+  return escapeXml(text).replace(/'/g, "&apos;");
 }
 
 function timingSafeEqualString(a: string, b: string): boolean {

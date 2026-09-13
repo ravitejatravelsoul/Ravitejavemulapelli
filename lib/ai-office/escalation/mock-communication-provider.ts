@@ -1,6 +1,6 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import type { CommunicationProvider, SendSmsResult, PlaceCallResult, InboundResponse } from "./communication-provider.ts";
+import type { CommunicationProvider, SendSmsResult, PlaceCallResult, InboundResponse, InboundCallResponse } from "./communication-provider.ts";
 
 export interface MockSentSms {
   to: string;
@@ -11,6 +11,7 @@ export interface MockPlacedCall {
   to: string;
   voiceMessage: string;
   providerCallId: string;
+  callbackToken: string;
 }
 
 /**
@@ -31,9 +32,9 @@ export class MockCommunicationProvider implements CommunicationProvider {
     return { providerMessageId };
   }
 
-  async placeCall(to: string, voiceMessage: string): Promise<PlaceCallResult> {
+  async placeCall(to: string, voiceMessage: string, callbackToken: string): Promise<PlaceCallResult> {
     const providerCallId = `mock-call-${randomUUID()}`;
-    this.placedCalls.push({ to, voiceMessage, providerCallId });
+    this.placedCalls.push({ to, voiceMessage, providerCallId, callbackToken });
     return { providerCallId };
   }
 
@@ -45,6 +46,11 @@ export class MockCommunicationProvider implements CommunicationProvider {
   parseInboundResponse(rawBody: string): InboundResponse {
     const params = new URLSearchParams(rawBody);
     return { from: params.get("From") ?? "unknown", body: (params.get("Body") ?? "").trim() };
+  }
+
+  parseInboundCallResponse(rawBody: string): InboundCallResponse {
+    const params = new URLSearchParams(rawBody);
+    return { from: params.get("From") ?? "unknown", to: params.get("To") ?? "unknown", digit: params.get("Digits") };
   }
 
   reset(): void {
