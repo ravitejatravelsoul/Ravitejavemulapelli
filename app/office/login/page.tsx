@@ -17,7 +17,7 @@ export const metadata: Metadata = {
  */
 export default function OfficeLoginPage() {
   return (
-    <Container className="flex min-h-[calc(100vh-8rem)] max-w-md items-center py-16">
+    <Container className="flex min-h-screen max-w-md items-center py-16">
       <GlassCard className="w-full">
         <div className="flex flex-col items-center text-center">
           <div className="flex size-11 items-center justify-center rounded-full border border-border bg-secondary text-muted-foreground">

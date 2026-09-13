@@ -13,6 +13,7 @@ import { getProjectDetail } from "@/lib/ai-office/dashboard/project-detail-data"
 import { listAgentRoles } from "@/lib/ai-office/domain/agent-roles";
 import { OfficeTopBar } from "@/components/ai-office/office-floor/office-top-bar";
 import { OfficeFloor } from "@/components/ai-office/office-floor/office-floor";
+import { OfficeProjectStrip } from "@/components/ai-office/office-floor/office-project-strip";
 import { AgentsList } from "@/components/ai-office/office-floor/agents-list";
 import { SideCommandPanel } from "@/components/ai-office/office-floor/side-command-panel";
 import { OverviewCards } from "@/components/ai-office/dashboard/overview-cards";
@@ -57,7 +58,7 @@ export default async function OfficeHomePage({ searchParams }: { searchParams: P
         <ProjectList projects={projects} />
       </div>
     ),
-    agents: <AgentsList floor={floor} />,
+    agents: <AgentsList floor={floor} agentDetails={agentDetails} />,
     tasks: floor.selectedProject ? (
       <TaskFlow tasks={projectTasks} />
     ) : (
@@ -89,11 +90,14 @@ export default async function OfficeHomePage({ searchParams }: { searchParams: P
         <SideCommandPanel sections={sections} />
       </div>
 
-      <div className="hidden lg:block">
+      <div className="hidden md:block">
         <OfficeFloor floor={floor} agentDetails={agentDetails} officeState={overview.officeState} />
       </div>
-      <div className="lg:hidden">
-        <AgentsList floor={floor} />
+      <div className="md:hidden">
+        <OfficeProjectStrip floor={floor} />
+        <div className="mt-3">
+          <AgentsList floor={floor} agentDetails={agentDetails} />
+        </div>
       </div>
     </div>
   );

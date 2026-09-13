@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter, usePathname } from "next/navigation";
+import { cn } from "@/lib/utils";
 import type { OfficeFloorView } from "@/lib/ai-office/dashboard/office-floor-data";
 
 /**
@@ -27,41 +28,36 @@ export function OfficeProjectStrip({ floor }: { floor: OfficeFloorView }) {
   const percent = progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0;
   const workingAgent = floor.agents.find((a) => a.status === "WORKING" || a.status === "THINKING" || a.status === "REVIEWING");
   const waitingCount = floor.agents.filter((a) => a.status === "WAITING").length;
+  const activityLine = workingAgent
+    ? `${workingAgent.roleName}${workingAgent.currentTaskTitle ? ` — ${workingAgent.currentTaskTitle}` : " is on it"}`
+    : waitingCount > 0
+      ? "Waiting on the runner"
+      : "Nothing currently running";
 
   return (
-    <div className="glass flex flex-col gap-2 rounded-2xl px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <p className="truncate text-sm font-semibold tracking-tight">{title}</p>
-          <span
-            className={
-              isStalledWithNoDeliverable
-                ? "font-mono text-[0.6rem] tracking-widest text-destructive uppercase"
-                : "font-mono text-[0.6rem] tracking-widest text-muted-foreground uppercase"
-            }
-          >
-            {displayStatusLabel}
-          </span>
-          <span className="rounded-full bg-muted px-1.5 py-0.5 font-mono text-[0.6rem] tracking-widest text-muted-foreground uppercase">{provider}</span>
+    <div className="glass flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-xl px-3.5 py-2">
+      <p className="truncate text-sm font-semibold tracking-tight">{title}</p>
+      <span className={cn("font-mono text-[0.6rem] tracking-widest uppercase", isStalledWithNoDeliverable ? "text-destructive" : "text-muted-foreground")}>
+        {displayStatusLabel}
+      </span>
+      <span className="hidden rounded-full bg-muted px-1.5 py-0.5 font-mono text-[0.6rem] tracking-widest text-muted-foreground uppercase sm:inline">
+        {provider}
+      </span>
+
+      <div className="flex min-w-0 basis-full items-center gap-2 sm:basis-auto sm:flex-1">
+        <div className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-muted">
+          <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${percent}%` }} />
         </div>
-        <div className="mt-1.5 flex items-center gap-2">
-          <div className="h-1.5 w-32 overflow-hidden rounded-full bg-muted">
-            <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${percent}%` }} />
-          </div>
-          <span className="text-[0.65rem] text-muted-foreground">
-            {progress.completed}/{progress.total} tasks
-          </span>
-        </div>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {workingAgent ? `${workingAgent.roleName} is on it` : waitingCount > 0 ? "Waiting on the runner" : "Nothing currently running"}
-          {workingAgent?.currentTaskTitle ? ` — ${workingAgent.currentTaskTitle}` : ""}
-        </p>
+        <span className="shrink-0 text-[0.65rem] text-muted-foreground">
+          {progress.completed}/{progress.total}
+        </span>
+        <span className="min-w-0 truncate text-xs text-muted-foreground">· {activityLine}</span>
       </div>
 
       {floor.projects.length > 1 && (
         <select
           aria-label="Select project to visualize"
-          className="w-full shrink-0 rounded-md border border-border bg-background px-2 py-1.5 text-xs sm:w-auto"
+          className="w-full shrink-0 rounded-md border border-border bg-background px-2 py-1 text-xs sm:w-auto"
           value={floor.selectedProject.id}
           onChange={(e) => {
             const params = new URLSearchParams();

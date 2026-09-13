@@ -5,6 +5,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
 import { Navbar } from "@/components/layout/navbar";
 import { Footer } from "@/components/layout/footer";
+import { SiteChrome } from "@/components/layout/site-chrome";
 import { PageTransition } from "@/components/motion/page-transition";
 import { CursorGlow } from "@/components/motion/cursor-glow";
 import { RouteProgressBar } from "@/components/motion/route-progress-bar";
@@ -93,11 +94,15 @@ export default function RootLayout({
           <CursorGlow />
           <RouteProgressBar />
           <TooltipProvider delayDuration={150}>
-            <Navbar />
+            <SiteChrome>
+              <Navbar />
+            </SiteChrome>
             <main id="main-content" tabIndex={-1} className="flex-1 focus:outline-none">
               <PageTransition>{children}</PageTransition>
             </main>
-            <Footer />
+            <SiteChrome>
+              <Footer />
+            </SiteChrome>
             <Toaster />
           </TooltipProvider>
         </ThemeProvider>

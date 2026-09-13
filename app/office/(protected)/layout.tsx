@@ -40,7 +40,7 @@ export default async function OfficeProtectedLayout({ children }: { children: Re
   const officeStatus = getOfficeStatus(db);
 
   return (
-    <div className="flex min-h-[calc(100vh-8rem)] flex-col bg-background md:flex-row">
+    <div className="flex min-h-screen flex-col bg-background md:flex-row">
       <OfficeSidebarNav ownerEmail={owner?.email ?? "owner"} officeState={officeStatus?.state ?? "CLOSED"} signOut={logout} />
       <main className="min-w-0 flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
         <div className="mx-auto w-full max-w-[1600px]">{children}</div>

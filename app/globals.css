@@ -597,6 +597,36 @@
     }
   }
 
+  /* Opacity-only pulse so the glow's *color* can come from each workstation's
+     own --role-accent custom property instead of being baked into the
+     keyframe (unlike glow-pulse above, which hardcodes --primary). */
+  @keyframes accent-glow-pulse {
+    0%,
+    100% {
+      opacity: 0.45;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+  /* A small dot traveling along a department connector — only shown while
+     that connector is real (driven by actual in-progress work), never a
+     permanent decoration. */
+  @keyframes flow-dot {
+    0% {
+      transform: translateY(-8px);
+      opacity: 0;
+    }
+    20%,
+    80% {
+      opacity: 1;
+    }
+    100% {
+      transform: translateY(8px);
+      opacity: 0;
+    }
+  }
+
   .animate-typing-bounce {
     animation: typing-bounce 0.6s ease-in-out infinite;
   }
@@ -605,6 +635,12 @@
   }
   .animate-done-pulse {
     animation: done-pulse 1.4s ease-out 1;
+  }
+  .animate-accent-glow-pulse {
+    animation: accent-glow-pulse 2.6s ease-in-out infinite;
+  }
+  .animate-flow-dot {
+    animation: flow-dot 1.6s ease-in-out infinite;
   }
 }
 

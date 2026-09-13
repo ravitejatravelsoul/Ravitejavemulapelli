@@ -1,7 +1,6 @@
 import Link from "next/link";
-import { Plus } from "lucide-react";
+import { Plus, Power, Activity, Users, TrendingUp, DollarSign, Sliders } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ActionButton } from "@/components/ai-office/action-button";
 import { openOfficeAction, closeOfficeAction } from "@/app/office/actions/office";
@@ -10,17 +9,13 @@ import type { RunnerActivityView } from "@/lib/ai-office/dashboard/dashboard-dat
 import type { OfficeFloorView } from "@/lib/ai-office/dashboard/office-floor-data";
 
 /**
- * The compact operational bar for the office-floor page (Section 2) —
- * three genuinely distinct concepts, kept visually and textually separate
- * (Section 30's "OFFICE OPEN / PROJECT RUNNING / RUNNER ACTIVE" — these
- * were previously easy to conflate):
- *  - Office state: whether new model calls are allowed at all.
- *  - Project status: this one project's own lifecycle state.
- *  - Runner liveness: whether the standalone poller process is actually
- *    alive and reachable right now, independent of both of the above —
- *    a project can have real pending work while the runner itself is
- *    offline, which is exactly the confusing case this bar must make
- *    obvious rather than hide.
+ * The compact operational bar (Section 15) — scannable icon+value chips
+ * instead of "LABEL: BADGE" pairs, so it stays out of the way of the
+ * Living Office below it while still keeping three genuinely distinct
+ * concepts separate (Section 30's "OFFICE OPEN / PROJECT RUNNING / RUNNER
+ * ACTIVE"): Office state (are new model calls allowed at all), Project
+ * status (this one project's lifecycle), and Runner liveness (is the
+ * standalone poller actually alive right now, independent of both).
  */
 export function OfficeTopBar({
   officeState,
@@ -41,26 +36,22 @@ export function OfficeTopBar({
 
   const runnerLabel =
     runnerActivity.runnerStatus === "ONLINE_WORKING" ? "Working" : runnerActivity.runnerStatus === "ONLINE_IDLE" ? "Idle" : "Offline";
+  const runnerTone: ChipTone = runnerActivity.runnerStatus === "OFFLINE" ? "bad" : runnerActivity.runnerStatus === "ONLINE_WORKING" ? "good" : "neutral";
 
   return (
-    <div className={cn("glass flex flex-col gap-2.5 rounded-2xl px-4 py-3 text-xs transition-opacity", !isOpen && "opacity-80")}>
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
-        <StatusField label="Office" value={isOpen ? "OPEN" : "CLOSED"} tone={isOpen ? "default" : "outline"} />
-        <StatusField
-          label="Project"
-          value={project ? project.displayStatusLabel : "None selected"}
-          tone={project?.isStalledWithNoDeliverable ? "destructive" : "secondary"}
+    <div className={cn("glass flex flex-col gap-2 rounded-xl px-3.5 py-2.5 text-xs transition-opacity", !isOpen && "opacity-80")}>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+        <Chip icon={Power} label={isOpen ? "Office open" : "Office closed"} tone={isOpen ? "good" : "bad"} />
+        <Chip
+          icon={Activity}
+          label={project ? project.displayStatusLabel : "No project"}
+          tone={project?.isStalledWithNoDeliverable ? "bad" : "neutral"}
         />
-        <StatusField
-          label="Runner"
-          value={runnerLabel}
-          tone={runnerActivity.runnerStatus === "OFFLINE" ? "destructive" : runnerActivity.runnerStatus === "ONLINE_WORKING" ? "default" : "outline"}
-          title={runnerActivity.message}
-        />
-        {project && <StatusField label="Policy" value={project.aiPolicyMode.replace("_", " ")} tone="outline" />}
-        {project && <StatusField label="Active agents" value={`${floor.activeAgentCount}/11`} tone="outline" />}
-        {percent !== null && <StatusField label="Progress" value={`${percent}%`} tone="outline" />}
-        <StatusField label="LIVE spend" value={`$${liveCostUsd.toFixed(2)} / $${liveCapUsd.toFixed(2)}`} tone="outline" />
+        <Chip icon={Activity} label={`Runner ${runnerLabel}`} tone={runnerTone} title={runnerActivity.message} />
+        {project && <Chip icon={Sliders} label={project.aiPolicyMode.replace("_", " ")} tone="neutral" />}
+        {project && <Chip icon={Users} label={`${floor.activeAgentCount}/11 active`} tone="neutral" />}
+        {percent !== null && <Chip icon={TrendingUp} label={`${percent}%`} tone="neutral" />}
+        <Chip icon={DollarSign} label={`${liveCostUsd.toFixed(2)} / ${liveCapUsd.toFixed(2)}`} tone="neutral" />
 
         <div className="flex w-full items-center gap-2 sm:w-auto sm:ml-auto">
           <Button asChild size="sm">
@@ -81,8 +72,6 @@ export function OfficeTopBar({
         </div>
       </div>
 
-      {project && <p className="truncate text-[0.7rem] text-muted-foreground">{project.title}</p>}
-
       {!isOpen && (
         <p className="rounded-lg bg-muted/60 px-2.5 py-1.5 text-[0.7rem] text-muted-foreground">
           OFFICE CLOSED — all work preserved, no new agent or model execution will start until reopened.
@@ -97,23 +86,19 @@ export function OfficeTopBar({
   );
 }
 
-function StatusField({
-  label,
-  value,
-  tone,
-  title,
-}: {
-  label: string;
-  value: string;
-  tone: "default" | "secondary" | "outline" | "destructive";
-  title?: string;
-}) {
+type ChipTone = "good" | "bad" | "neutral";
+
+const TONE_CLASS: Record<ChipTone, string> = {
+  good: "text-primary",
+  bad: "text-destructive",
+  neutral: "text-muted-foreground",
+};
+
+function Chip({ icon: Icon, label, tone, title }: { icon: typeof Power; label: string; tone: ChipTone; title?: string }) {
   return (
-    <div className="flex min-w-0 max-w-full items-center gap-1.5" title={title}>
-      <span className="shrink-0 font-mono text-[0.6rem] tracking-widest text-muted-foreground uppercase">{label}</span>
-      <Badge variant={tone} className="h-auto min-w-0 max-w-full font-mono text-[0.65rem] break-words whitespace-normal uppercase">
-        {value}
-      </Badge>
-    </div>
+    <span className={cn("flex min-w-0 items-center gap-1.5 font-medium", TONE_CLASS[tone])} title={title}>
+      <Icon className="size-3.5 shrink-0" aria-hidden="true" />
+      <span className="truncate">{label}</span>
+    </span>
   );
 }

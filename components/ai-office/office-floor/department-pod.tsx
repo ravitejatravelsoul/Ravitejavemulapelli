@@ -3,42 +3,46 @@ import { Workstation } from "./workstation";
 import type { OfficeAgentView } from "@/lib/ai-office/dashboard/office-floor-data";
 
 /**
- * One work-zone — an organic glass "pod" (oversized, asymmetric corner
- * radii rather than a plain rectangle) holding one or more workstations.
- * Deliberately not a dashboard card: no border-all-four-sides-equal, no
- * uniform box shadow — a soft glow instead, consistent with the site's
- * `.glass`/glow-field language.
+ * One work-zone — a soft-lit glass panel holding one or more workstations,
+ * with a warm floor-lighting glow that brightens when anyone inside it is
+ * actively working. Deliberately not a plain bordered rectangle: a subtle
+ * radial light pool anchors it to the "office floor" rather than reading
+ * as a generic dashboard card.
  */
 export function DepartmentPod({
   title,
   agents,
   onSelectAgent,
   className,
-  emphasis = false,
+  columns = 1,
+  hasProject = true,
 }: {
   title: string;
   agents: OfficeAgentView[];
   onSelectAgent: (roleId: string) => void;
   className?: string;
-  emphasis?: boolean;
+  columns?: 1 | 2;
+  hasProject?: boolean;
 }) {
   const active = agents.some((a) => a.status === "WORKING" || a.status === "THINKING" || a.status === "REVIEWING");
 
   return (
     <div
       className={cn(
-        "glass relative flex flex-col gap-2 rounded-[2rem] p-3 transition-shadow",
-        emphasis && "rounded-[3rem] border-primary/30",
-        active && "shadow-[0_0_28px_-8px_var(--primary)]",
+        "relative flex h-full flex-col gap-2.5 rounded-[1.75rem] border border-border/40 bg-gradient-to-b from-white/[0.04] to-transparent p-3 transition-shadow duration-300",
+        active && "border-primary/30 shadow-[0_0_36px_-14px_var(--primary)]",
         className,
       )}
     >
-      <p className="px-1 text-[0.65rem] font-semibold tracking-widest text-muted-foreground uppercase">{title}</p>
-      <div className="flex flex-1 flex-wrap items-start justify-center gap-2">
+      <div
+        className="pointer-events-none absolute inset-x-4 top-0 h-16 rounded-full bg-primary/10 opacity-0 blur-2xl transition-opacity duration-500"
+        style={{ opacity: active ? 0.7 : 0.15 }}
+        aria-hidden="true"
+      />
+      <p className="relative px-1 font-mono text-[0.62rem] font-semibold tracking-[0.18em] text-muted-foreground uppercase">{title}</p>
+      <div className={cn("relative grid flex-1 content-start gap-2.5", columns === 2 ? "grid-cols-2" : "grid-cols-1")}>
         {agents.map((agent) => (
-          <div key={agent.roleId} className="w-[5.5rem]">
-            <Workstation agent={agent} onSelect={onSelectAgent} />
-          </div>
+          <Workstation key={agent.roleId} agent={agent} onSelect={onSelectAgent} hasProject={hasProject} />
         ))}
       </div>
     </div>
