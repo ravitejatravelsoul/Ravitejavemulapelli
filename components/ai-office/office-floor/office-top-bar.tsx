@@ -62,7 +62,7 @@ export function OfficeTopBar({
         {percent !== null && <StatusField label="Progress" value={`${percent}%`} tone="outline" />}
         <StatusField label="LIVE spend" value={`$${liveCostUsd.toFixed(2)} / $${liveCapUsd.toFixed(2)}`} tone="outline" />
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="flex w-full items-center gap-2 sm:w-auto sm:ml-auto">
           <Button asChild size="sm">
             <Link href="/office/projects/new">
               <Plus className="size-3.5" />
@@ -109,9 +109,9 @@ function StatusField({
   title?: string;
 }) {
   return (
-    <div className="flex items-center gap-1.5" title={title}>
-      <span className="font-mono text-[0.6rem] tracking-widest text-muted-foreground uppercase">{label}</span>
-      <Badge variant={tone} className="font-mono text-[0.65rem] uppercase">
+    <div className="flex min-w-0 max-w-full items-center gap-1.5" title={title}>
+      <span className="shrink-0 font-mono text-[0.6rem] tracking-widest text-muted-foreground uppercase">{label}</span>
+      <Badge variant={tone} className="h-auto min-w-0 max-w-full font-mono text-[0.65rem] break-words whitespace-normal uppercase">
         {value}
       </Badge>
     </div>
