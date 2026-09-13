@@ -203,6 +203,11 @@ export function listUnresolvedFailures(db: DatabaseSync, projectId: string): Fai
     .all(projectId) as unknown as FailureRow[];
 }
 
+/** Full failure history for one task — resolved and unresolved — oldest first. Living AI Office UI transformation, Part 11: the Agent Room's Progress tab needs a real retry timeline, not just what's currently blocking. */
+export function listFailuresForTask(db: DatabaseSync, taskId: string): FailureRow[] {
+  return db.prepare("SELECT * FROM failures WHERE taskId = ? ORDER BY createdAt").all(taskId) as unknown as FailureRow[];
+}
+
 // ---- approvals --------------------------------------------------------------
 
 export function createApproval(

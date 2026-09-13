@@ -8,7 +8,7 @@ import { listPendingApprovals } from "../domain/project-outputs.ts";
 import { listRecentEvents, type MessageEventRow } from "../domain/events.ts";
 import { sumSimulatedCostForProject, sumLiveCostForProject } from "../domain/budget.ts";
 import { getBudgetSnapshot, type BudgetSnapshot } from "../budget/budget-service.ts";
-import { getWorkspace, getMostRecentRunnerHeartbeat, type DeliveryState } from "../domain/workspace.ts";
+import { getWorkspace, listWorkspaceFileRecords, getMostRecentRunnerHeartbeat, type DeliveryState } from "../domain/workspace.ts";
 import { getHonestStatusLabel, isUnverifiedCompletionClaim, isStalledWithNoDeliverable, STALLED_NO_DELIVERABLE_LABEL } from "./delivery-status.ts";
 
 /**
@@ -111,6 +111,10 @@ export interface ProjectSummary {
   displayStatusLabel: string;
   isUnverifiedCompletion: boolean;
   isStalledWithNoDeliverable: boolean;
+  updatedAt: number;
+  aiPolicyMode: import("../domain/projects.ts").AiPolicyMode;
+  deliveryState: DeliveryState | null;
+  canPreview: boolean;
 }
 
 function truncate(text: string, max: number): string {
@@ -160,6 +164,10 @@ function summarizeProject(db: DatabaseSync, project: ProjectRow): ProjectSummary
     displayStatusLabel: stalled ? STALLED_NO_DELIVERABLE_LABEL : getHonestStatusLabel(project.status, workspace !== undefined, deliveryState),
     isUnverifiedCompletion: isUnverifiedCompletionClaim(project.status, workspace !== undefined, deliveryState),
     isStalledWithNoDeliverable: stalled,
+    updatedAt: project.updatedAt,
+    aiPolicyMode: project.aiPolicyMode,
+    deliveryState,
+    canPreview: deliveryState === "VERIFIED" && listWorkspaceFileRecords(db, project.id).some((f) => f.path === "index.html"),
   };
 }
 

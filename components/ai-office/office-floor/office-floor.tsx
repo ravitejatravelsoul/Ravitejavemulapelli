@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { cn } from "@/lib/utils";
 import { DepartmentPod } from "./department-pod";
 import { Connector } from "./connector";
 import { OfficeProjectStrip } from "./office-project-strip";
@@ -23,18 +24,32 @@ function isDeptActive(agents: OfficeFloorView["agents"], roleIds: string[]): boo
   return agents.some((a) => roleIds.includes(a.roleId) && (a.status === "WORKING" || a.status === "THINKING" || a.status === "REVIEWING"));
 }
 
-export function OfficeFloor({ floor, agentDetails }: { floor: OfficeFloorView; agentDetails: Record<string, AgentDetailView> }) {
+export function OfficeFloor({
+  floor,
+  agentDetails,
+  officeState = "OPEN",
+}: {
+  floor: OfficeFloorView;
+  agentDetails: Record<string, AgentDetailView>;
+  officeState?: "OPEN" | "CLOSED";
+}) {
   const [selectedRoleId, setSelectedRoleId] = useState<string | null>(null);
+  const isClosed = officeState === "CLOSED";
 
   const byDept = new Map(DEPARTMENTS.map((d) => [d.key, floor.agents.filter((a) => d.roleIds.includes(a.roleId))]));
   const dept = (key: DeptKey) => byDept.get(key) ?? [];
-  const active = (key: DeptKey) => isDeptActive(floor.agents, DEPARTMENTS.find((d) => d.key === key)!.roleIds);
+  const active = (key: DeptKey) => !isClosed && isDeptActive(floor.agents, DEPARTMENTS.find((d) => d.key === key)!.roleIds);
 
   return (
     <div className="flex flex-col gap-3">
       <OfficeProjectStrip floor={floor} />
 
-      <div className="glass-strong relative overflow-hidden rounded-[2.5rem] p-4 sm:p-6">
+      <div className={cn("glass-strong relative overflow-hidden rounded-[2.5rem] p-4 transition-[filter,opacity] sm:p-6", isClosed && "opacity-70 grayscale-[0.6]")}>
+        {isClosed && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/40" aria-hidden="true">
+            <span className="glass-strong rounded-full px-4 py-1.5 font-mono text-xs tracking-widest text-muted-foreground uppercase">Office closed</span>
+          </div>
+        )}
         <div className="grid-pattern grid-fade-mask pointer-events-none absolute inset-0 opacity-40" aria-hidden="true" />
 
         <div className="relative flex flex-col gap-0">

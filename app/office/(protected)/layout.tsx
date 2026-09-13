@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
-import { LogOut, ShieldCheck } from "lucide-react";
 import { verifySession } from "@/lib/ai-office/auth/dal";
 import { logout } from "@/app/office/actions/auth";
-import { Button } from "@/components/ui/button";
-import { Container } from "@/components/common/container";
+import { getAppDatabase } from "@/lib/ai-office/db/client";
+import { getOwner } from "@/lib/ai-office/domain/users";
+import { getOfficeStatus } from "@/lib/ai-office/domain/office";
+import { OfficeSidebarNav } from "@/components/ai-office/shell/office-sidebar-nav";
 
 export const metadata: Metadata = {
   title: {
@@ -21,6 +22,12 @@ export const metadata: Metadata = {
  * docs/ai-office/08-security-plan.md §5, any Server Action or Route
  * Handler reachable from here must still call `verifySession()` itself
  * rather than relying on this check alone.
+ *
+ * Living AI Office UI transformation — replaces the old single-row header
+ * with a persistent sidebar shell (Section 1) shared by every page under
+ * this group, so navigation between Office/Projects/Agents/Workspaces/
+ * Models/Analytics/Settings never requires re-deriving the same auth/owner
+ * lookups on each page.
  */
 export default async function OfficeProtectedLayout({ children }: { children: React.ReactNode }) {
   const session = await verifySession();
@@ -28,32 +35,16 @@ export default async function OfficeProtectedLayout({ children }: { children: Re
     redirect("/office/login");
   }
 
+  const db = getAppDatabase();
+  const owner = getOwner(db);
+  const officeStatus = getOfficeStatus(db);
+
   return (
-    <div className="min-h-[calc(100vh-8rem)] bg-background">
-      <header className="border-b border-border/60">
-        <Container className="flex items-center justify-between gap-4 py-4">
-          <div className="flex items-center gap-2.5">
-            <div className="flex size-8 items-center justify-center rounded-full bg-primary/10 text-primary">
-              <ShieldCheck className="size-4" />
-            </div>
-            <div className="leading-tight">
-              <p className="text-sm font-semibold tracking-tight">Teja&apos;s AI Office</p>
-              <p className="font-mono text-[0.65rem] tracking-widest text-muted-foreground uppercase">
-                Private Workspace
-              </p>
-            </div>
-          </div>
-
-          <form action={logout}>
-            <Button type="submit" variant="outline" size="sm">
-              <LogOut className="size-3.5" />
-              Sign out
-            </Button>
-          </form>
-        </Container>
-      </header>
-
-      <Container className="py-12">{children}</Container>
+    <div className="flex min-h-[calc(100vh-8rem)] bg-background md:flex-row">
+      <OfficeSidebarNav ownerEmail={owner?.email ?? "owner"} officeState={officeStatus?.state ?? "CLOSED"} signOut={logout} />
+      <main className="min-w-0 flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
+        <div className="mx-auto w-full max-w-[1600px]">{children}</div>
+      </main>
     </div>
   );
 }

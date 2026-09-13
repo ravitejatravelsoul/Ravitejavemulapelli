@@ -68,6 +68,11 @@ export function isClaudeConfigured(): boolean {
   return Boolean(process.env.ANTHROPIC_API_KEY) && getClaudePricingConfig() !== null;
 }
 
+/** The model name a real Claude call would use right now (`ANTHROPIC_MODEL` or the built-in default) — never a secret, safe to display in the owner UI (Living AI Office UI transformation, Section 25). Does not require a credential to be configured. */
+export function getConfiguredClaudeModel(): string {
+  return process.env.ANTHROPIC_MODEL ?? DEFAULT_MODEL;
+}
+
 export interface ClaudeAdapterOptions {
   apiKey?: string;
   model?: string;

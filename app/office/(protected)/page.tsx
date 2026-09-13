@@ -90,7 +90,7 @@ export default async function OfficeHomePage({ searchParams }: { searchParams: P
       </div>
 
       <div className="hidden lg:block">
-        <OfficeFloor floor={floor} agentDetails={agentDetails} />
+        <OfficeFloor floor={floor} agentDetails={agentDetails} officeState={overview.officeState} />
       </div>
       <div className="lg:hidden">
         <AgentsList floor={floor} />

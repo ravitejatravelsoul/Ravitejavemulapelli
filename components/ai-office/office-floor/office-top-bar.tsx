@@ -10,9 +10,17 @@ import type { RunnerActivityView } from "@/lib/ai-office/dashboard/dashboard-dat
 import type { OfficeFloorView } from "@/lib/ai-office/dashboard/office-floor-data";
 
 /**
- * Compact top bar for the office-floor page — everything the old
- * CommandBar showed, in one dense row rather than a full-width card, so
- * the office floor below gets the majority of the viewport.
+ * The compact operational bar for the office-floor page (Section 2) —
+ * three genuinely distinct concepts, kept visually and textually separate
+ * (Section 30's "OFFICE OPEN / PROJECT RUNNING / RUNNER ACTIVE" — these
+ * were previously easy to conflate):
+ *  - Office state: whether new model calls are allowed at all.
+ *  - Project status: this one project's own lifecycle state.
+ *  - Runner liveness: whether the standalone poller process is actually
+ *    alive and reachable right now, independent of both of the above —
+ *    a project can have real pending work while the runner itself is
+ *    offline, which is exactly the confusing case this bar must make
+ *    obvious rather than hide.
  */
 export function OfficeTopBar({
   officeState,
@@ -28,40 +36,84 @@ export function OfficeTopBar({
   liveCapUsd: number;
 }) {
   const isOpen = officeState === "OPEN";
-  const providerLabel = floor.selectedProject?.provider ?? "simulated";
+  const project = floor.selectedProject;
+  const percent = project && project.progress.total > 0 ? Math.round((project.progress.completed / project.progress.total) * 100) : null;
+
+  const runnerLabel =
+    runnerActivity.runnerStatus === "ONLINE_WORKING" ? "Working" : runnerActivity.runnerStatus === "ONLINE_IDLE" ? "Idle" : "Offline";
 
   return (
-    <div className="glass flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl px-4 py-2.5 text-xs">
-      <p className="text-sm font-semibold tracking-tight whitespace-nowrap">Teja&apos;s AI Office</p>
-      <Badge variant={isOpen ? "default" : "outline"}>{isOpen ? "OPEN" : "CLOSED"}</Badge>
-      <span className={cn("hidden sm:inline", runnerActivity.runnerStatus === "OFFLINE" ? "text-destructive" : "text-muted-foreground")} title={runnerActivity.message}>
-        {runnerActivity.runnerStatus === "ONLINE_WORKING" && "Runner online · working"}
-        {runnerActivity.runnerStatus === "ONLINE_IDLE" && "Runner online · idle"}
-        {runnerActivity.runnerStatus === "OFFLINE" && "Runner offline"}
-      </span>
-      <span className="rounded-full bg-muted px-2 py-0.5 font-mono text-[0.65rem] tracking-widest uppercase">Mode: {providerLabel}</span>
-      {floor.selectedProject && <span className="hidden truncate font-medium text-foreground sm:inline">{floor.selectedProject.title}</span>}
-      <span className="font-mono text-[0.65rem] text-muted-foreground">
-        LIVE ${liveCostUsd.toFixed(2)} / ${liveCapUsd.toFixed(2)}
-      </span>
+    <div className={cn("glass flex flex-col gap-2.5 rounded-2xl px-4 py-3 text-xs transition-opacity", !isOpen && "opacity-80")}>
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
+        <StatusField label="Office" value={isOpen ? "OPEN" : "CLOSED"} tone={isOpen ? "default" : "outline"} />
+        <StatusField
+          label="Project"
+          value={project ? project.displayStatusLabel : "None selected"}
+          tone={project?.isStalledWithNoDeliverable ? "destructive" : "secondary"}
+        />
+        <StatusField
+          label="Runner"
+          value={runnerLabel}
+          tone={runnerActivity.runnerStatus === "OFFLINE" ? "destructive" : runnerActivity.runnerStatus === "ONLINE_WORKING" ? "default" : "outline"}
+          title={runnerActivity.message}
+        />
+        {project && <StatusField label="Policy" value={project.aiPolicyMode.replace("_", " ")} tone="outline" />}
+        {project && <StatusField label="Active agents" value={`${floor.activeAgentCount}/11`} tone="outline" />}
+        {percent !== null && <StatusField label="Progress" value={`${percent}%`} tone="outline" />}
+        <StatusField label="LIVE spend" value={`$${liveCostUsd.toFixed(2)} / $${liveCapUsd.toFixed(2)}`} tone="outline" />
 
-      <div className="ml-auto flex items-center gap-2">
-        <Button asChild size="sm">
-          <Link href="/office/projects/new">
-            <Plus className="size-3.5" />
-            New Project
-          </Link>
-        </Button>
-        {isOpen ? (
-          <ActionButton action={closeOfficeAction} variant="outline" size="sm">
-            Close Office
-          </ActionButton>
-        ) : (
-          <ActionButton action={openOfficeAction} variant="outline" size="sm">
-            Open Office
-          </ActionButton>
-        )}
+        <div className="ml-auto flex items-center gap-2">
+          <Button asChild size="sm">
+            <Link href="/office/projects/new">
+              <Plus className="size-3.5" />
+              New Project
+            </Link>
+          </Button>
+          {isOpen ? (
+            <ActionButton action={closeOfficeAction} variant="outline" size="sm">
+              Close Office
+            </ActionButton>
+          ) : (
+            <ActionButton action={openOfficeAction} variant="outline" size="sm">
+              Open Office
+            </ActionButton>
+          )}
+        </div>
       </div>
+
+      {project && <p className="truncate text-[0.7rem] text-muted-foreground">{project.title}</p>}
+
+      {!isOpen && (
+        <p className="rounded-lg bg-muted/60 px-2.5 py-1.5 text-[0.7rem] text-muted-foreground">
+          OFFICE CLOSED — all work preserved, no new agent or model execution will start until reopened.
+        </p>
+      )}
+      {isOpen && runnerActivity.runnerStatus === "OFFLINE" && project && project.progress.completed < project.progress.total && (
+        <p className="rounded-lg bg-muted/60 px-2.5 py-1.5 text-[0.7rem] text-muted-foreground">
+          This project has pending work, but no runner is currently processing it.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function StatusField({
+  label,
+  value,
+  tone,
+  title,
+}: {
+  label: string;
+  value: string;
+  tone: "default" | "secondary" | "outline" | "destructive";
+  title?: string;
+}) {
+  return (
+    <div className="flex items-center gap-1.5" title={title}>
+      <span className="font-mono text-[0.6rem] tracking-widest text-muted-foreground uppercase">{label}</span>
+      <Badge variant={tone} className="font-mono text-[0.65rem] uppercase">
+        {value}
+      </Badge>
     </div>
   );
 }

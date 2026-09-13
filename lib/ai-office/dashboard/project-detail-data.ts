@@ -7,6 +7,7 @@ import {
   listArtifactsForProject,
   listDecisionsForProject,
   listUnresolvedFailures,
+  listFailuresForTask,
   listTestResultsForTask,
   listApprovalsForProject,
   type ArtifactRow,
@@ -100,6 +101,8 @@ export interface ProjectDetail {
   roleProviders: RoleProviderView[];
   budget: ProjectBudgetView;
   claudeCosts: ClaudeCostSummary;
+  pipeline: PipelineStageView[];
+  collaboration: CollaborationEntry[];
 }
 
 /** Token economics phase, Part 10 — one row per real Claude call, joined from `ai_usage` (never guessed) through `agent_runs -> task_attempts -> tasks -> agent_roles`, most recent first. Context-selection detail (files/estimate) comes from the matching `claude.context_prepared` telemetry event for the same task, when one exists — best-effort, never blocking the row if it doesn't (an older row from before this phase, for instance). */
@@ -217,6 +220,97 @@ function buildClaudeCostSummary(db: DatabaseSync, projectId: string): ClaudeCost
   };
 }
 
+// ---- project pipeline (Section 13) -------------------------------------
+
+export type PipelineStageState = "COMPLETE" | "ACTIVE" | "BLOCKED" | "PENDING" | "SKIPPED";
+
+export interface PipelineStageView {
+  key: string;
+  label: string;
+  state: PipelineStageState;
+}
+
+/** Which catalog role(s) correspond to each pipeline stage — a stage with none of its roles selected for this project (Orchestrator legitimately didn't pick them) is SKIPPED, never shown as incomplete. */
+const PIPELINE_STAGE_ROLES: Array<{ key: string; label: string; roleIds: string[] }> = [
+  { key: "requirements", label: "Requirements", roleIds: ["product-owner"] },
+  { key: "architecture", label: "Architecture", roleIds: ["solution-architect"] },
+  { key: "design", label: "Design", roleIds: ["ui-ux-agent"] },
+  { key: "build", label: "Build", roleIds: ["frontend-developer", "backend-developer"] },
+  { key: "qa", label: "QA", roleIds: ["qa-agent"] },
+  { key: "review", label: "Review", roleIds: ["security-reviewer", "code-reviewer"] },
+  { key: "release", label: "Release", roleIds: ["release-agent"] },
+];
+
+function stageStateFor(tasks: TaskRow[], roleIds: string[]): PipelineStageState {
+  const stageTasks = tasks.filter((t) => roleIds.includes(t.roleId));
+  if (stageTasks.length === 0) return "SKIPPED";
+  if (stageTasks.some((t) => t.status === "BLOCKED")) return "BLOCKED";
+  if (stageTasks.some((t) => t.status === "IN_PROGRESS")) return "ACTIVE";
+  if (stageTasks.every((t) => t.status === "DONE")) return "COMPLETE";
+  return "PENDING";
+}
+
+/** IDEA is always complete by the time a project exists; every later stage is derived purely from the real tasks the Orchestrator actually planned — a stage the Orchestrator legitimately didn't select (e.g. Design for a project with no UI/UX task) reads SKIPPED, never as an incomplete step blocking the pipeline (Section 13's explicit "simple projects should not appear incomplete"). */
+export function getProjectPipeline(db: DatabaseSync, projectId: string): PipelineStageView[] {
+  const tasks = listTasksForProject(db, projectId);
+  return [
+    { key: "idea", label: "Idea", state: "COMPLETE" as const },
+    ...PIPELINE_STAGE_ROLES.map((stage) => ({ key: stage.key, label: stage.label, state: stageStateFor(tasks, stage.roleIds) })),
+  ];
+}
+
+// ---- agent collaboration (Section 14) ----------------------------------
+
+export interface CollaborationEntry {
+  id: string;
+  occurredAt: number;
+  fromRoleName: string;
+  message: string;
+}
+
+/**
+ * Derives concise, human-readable "who told whom what" entries purely
+ * from already-persisted structured data (task completions and real
+ * failure/remediation records) — never a fabricated chat transcript. A
+ * failure row's `taskId` is the task that must redo the work (the
+ * hand-off target); the reviewer who actually detected it is resolved
+ * through `agentRunId -> task_attempts -> tasks`, the same real chain
+ * `office-floor-data.ts` already uses for per-role activity.
+ */
+export function getCollaborationFeed(db: DatabaseSync, projectId: string): CollaborationEntry[] {
+  const tasks = listTasksForProject(db, projectId);
+  const roleNameById = new Map(tasks.map((t) => [t.roleId, getAgentRole(db, t.roleId)?.name ?? t.roleId]));
+  const taskById = new Map(tasks.map((t) => [t.id, t]));
+  const entries: CollaborationEntry[] = [];
+
+  for (const task of tasks) {
+    if (task.status !== "DONE") continue;
+    const roleName = roleNameById.get(task.roleId) ?? task.roleId;
+    entries.push({ id: `done-${task.id}`, occurredAt: task.updatedAt, fromRoleName: roleName, message: `${roleName}: Completed "${task.title}."` });
+  }
+
+  for (const task of tasks) {
+    for (const failure of listFailuresForTask(db, task.id)) {
+      const targetRoleName = roleNameById.get(task.roleId) ?? task.roleId;
+      let detectingRoleName = "A reviewer";
+      if (failure.agentRunId) {
+        const run = getAgentRun(db, failure.agentRunId);
+        const attempt = run ? getTaskAttempt(db, run.taskAttemptId) : undefined;
+        const detectingTask = attempt ? taskById.get(attempt.taskId) : undefined;
+        if (detectingTask) detectingRoleName = roleNameById.get(detectingTask.roleId) ?? detectingTask.roleId;
+      }
+      entries.push({
+        id: `failure-${failure.id}`,
+        occurredAt: failure.createdAt,
+        fromRoleName: detectingRoleName,
+        message: `${detectingRoleName}: ${failure.reason} Returning to ${targetRoleName}.`,
+      });
+    }
+  }
+
+  return entries.sort((a, b) => b.occurredAt - a.occurredAt).slice(0, 30);
+}
+
 function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
@@ -325,6 +419,8 @@ export function getProjectDetail(db: DatabaseSync, projectId: string): ProjectDe
     roleProviders,
     budget,
     claudeCosts: buildClaudeCostSummary(db, projectId),
+    pipeline: getProjectPipeline(db, projectId),
+    collaboration: getCollaborationFeed(db, projectId),
   };
 }
 

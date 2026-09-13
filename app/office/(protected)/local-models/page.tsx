@@ -5,11 +5,13 @@ import { listBenchmarkResults, listRecommendedRouting, getAppliedRouting } from 
 import { buildComparisonTable } from "@/lib/ai-office/benchmark/comparison-table";
 import { BENCHMARK_SCENARIOS } from "@/lib/ai-office/benchmark/scenarios";
 import { NO_QUALIFIED_MODEL } from "@/lib/ai-office/benchmark/routing-recommendation";
+import { MODEL_CAPABILITIES } from "@/lib/ai-office/agents/model-router";
+import { isClaudeConfigured, getConfiguredClaudeModel } from "@/lib/ai-office/providers/claude/claude-adapter";
 import { GlassCard } from "@/components/common/glass-card";
 import { Badge } from "@/components/ui/badge";
 import { BenchmarkControls } from "@/components/ai-office/benchmark/benchmark-controls";
 
-export const metadata: Metadata = { title: "Local Models" };
+export const metadata: Metadata = { title: "AI Models & Routing" };
 
 function formatDate(ms: number): string {
   return new Date(ms).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
@@ -25,11 +27,14 @@ export default async function LocalModelsPage() {
   const recommendations = listRecommendedRouting(db);
   const applied = getAppliedRouting(db);
   const appliedCapabilities = new Set(applied.map((r) => r.capability));
+  const appliedModelByCapability = new Map(applied.map((r) => [r.capability, r.model]));
+  const claudeConfigured = isClaudeConfigured();
+  const claudeModel = getConfiguredClaudeModel();
 
   return (
     <div className="flex flex-col gap-6">
       <GlassCard>
-        <h1 className="text-lg font-semibold tracking-tight">Local Models</h1>
+        <h1 className="text-lg font-semibold tracking-tight">AI Models &amp; Routing</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Diagnostic benchmarking for locally-installed Ollama models — never affects a real project until you explicitly apply a recommendation.
         </p>
@@ -47,6 +52,50 @@ export default async function LocalModelsPage() {
         <div className="mt-4">
           <BenchmarkControls hasResults={results.length > 0} />
         </div>
+      </GlassCard>
+
+      <GlassCard>
+        <h2 className="text-sm font-semibold tracking-tight">Claude</h2>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Badge variant={claudeConfigured ? "secondary" : "destructive"} className="font-mono text-[0.65rem] uppercase">
+            {claudeConfigured ? "Configured" : "Not configured"}
+          </Badge>
+          <span className="font-mono text-xs text-muted-foreground">{claudeModel}</span>
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          No API key is ever shown here, and viewing this page never makes a billable request — this reflects only whether a credential and
+          pricing configuration are present on the server.
+        </p>
+      </GlassCard>
+
+      <GlassCard>
+        <h2 className="text-sm font-semibold tracking-tight">Routing</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          What a HYBRID-policy project would route each capability to, based on real benchmark evidence — LOCAL_ONLY projects always stay
+          local regardless; CLAUDE_ONLY projects always route to Claude regardless.
+        </p>
+        <ul className="mt-3 flex flex-col gap-1.5 text-xs">
+          {MODEL_CAPABILITIES.map((capability) => {
+            const appliedModel = appliedModelByCapability.get(capability);
+            const requiresClaudePaid = appliedModel === NO_QUALIFIED_MODEL;
+            return (
+              <li key={capability} className="flex flex-wrap items-center gap-2 border-b border-border/30 pb-1.5 last:border-0">
+                <Badge variant="outline" className="w-24 justify-center font-mono">
+                  {capability}
+                </Badge>
+                {requiresClaudePaid ? (
+                  claudeConfigured ? (
+                    <span className="font-mono">CLAUDE · {claudeModel}</span>
+                  ) : (
+                    <span className="font-mono text-destructive">CLAUDE REQUIRED · NOT CONFIGURED</span>
+                  )
+                ) : (
+                  <span className="font-mono">LOCAL{appliedModel ? ` · ${appliedModel}` : ""}</span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
       </GlassCard>
 
       <GlassCard>
