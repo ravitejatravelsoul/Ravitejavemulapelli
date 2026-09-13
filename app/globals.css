@@ -651,6 +651,21 @@
   .animate-handoff-dash {
     animation: handoff-dash 1.1s linear infinite;
   }
+  /* The Agent Workspace's entrance — a premium but lightweight fade + rise,
+     never a heavy library. Respects the blanket reduced-motion rule above. */
+  @keyframes workspace-enter {
+    from {
+      opacity: 0;
+      transform: translateY(14px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  .animate-workspace-enter {
+    animation: workspace-enter 0.45s ease-out;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

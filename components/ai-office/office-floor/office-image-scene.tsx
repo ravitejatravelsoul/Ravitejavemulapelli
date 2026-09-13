@@ -2,12 +2,12 @@
 
 import { useState } from "react";
 import Image from "next/image";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getRoleVisual } from "./role-visuals";
-import { AgentDetailDrawer } from "./agent-detail-drawer";
+import { useAgentSelection } from "./use-agent-selection";
 import { OFFICE_HOTSPOTS, OFFICE_IMAGE_WIDTH, OFFICE_IMAGE_HEIGHT, getHotspotPercent } from "@/lib/ai-office/office-hotspots";
-import type { OfficeFloorView, AgentDetailView, OfficeAgentView } from "@/lib/ai-office/dashboard/office-floor-data";
+import type { OfficeFloorView, OfficeAgentView } from "@/lib/ai-office/dashboard/office-floor-data";
 
 const STATUS_LABEL: Record<OfficeAgentView["status"], string> = {
   IDLE: "Idle",
@@ -27,26 +27,26 @@ function isActive(status: OfficeAgentView["status"]): boolean {
 }
 
 /**
- * The approved master office illustration IS the visual (Section 3 of this
- * phase — do not recreate it). Every operational signal is a transparent
- * HTML overlay positioned from `OFFICE_HOTSPOTS`' percentages, so the image
- * itself never needs to change, and hotspots stay aligned at every
- * breakpoint the image is rendered at.
+ * The approved master office illustration IS the visual — every
+ * operational signal is a transparent HTML overlay positioned from
+ * `OFFICE_HOTSPOTS`' percentages, so the image itself never needs to
+ * change. Selection lives in the URL (`useAgentSelection`) rather than
+ * local state, so the selected workstation stays highlighted and the
+ * expanded Agent Workspace (mounted by the caller, not here) survives a
+ * refresh or a direct link.
  */
 export function OfficeImageScene({
   floor,
-  agentDetails,
   officeState = "OPEN",
   recentHandoff,
   debugEnabled = false,
 }: {
   floor: OfficeFloorView;
-  agentDetails: Record<string, AgentDetailView>;
   officeState?: "OPEN" | "CLOSED";
   recentHandoff?: { from: string; to: string } | null;
   debugEnabled?: boolean;
 }) {
-  const [selectedRoleId, setSelectedRoleId] = useState<string | null>(null);
+  const { selectedRoleId, selectRole } = useAgentSelection();
   const [labelsAlwaysOn, setLabelsAlwaysOn] = useState(false);
   const isClosed = officeState === "CLOSED";
   const byRole = new Map(floor.agents.map((a) => [a.roleId, a]));
@@ -54,6 +54,8 @@ export function OfficeImageScene({
 
   const handoffFrom = recentHandoff ? getHotspotPercent(recentHandoff.from) : null;
   const handoffTo = recentHandoff ? getHotspotPercent(recentHandoff.to) : null;
+  const selectedPct = selectedRoleId ? getHotspotPercent(selectedRoleId) : null;
+  const selectedAgent = selectedRoleId ? byRole.get(selectedRoleId) : undefined;
 
   return (
     <div className="flex flex-col gap-2">
@@ -112,6 +114,18 @@ export function OfficeImageScene({
           </svg>
         )}
 
+        {/* A downward connector cue from the selected workstation toward the
+            Agent Workspace expanding below (Section 1/22's transition cue). */}
+        {!isClosed && selectedPct && (
+          <div
+            className="pointer-events-none absolute z-[16] flex flex-col items-center"
+            style={{ left: `${selectedPct.left + selectedPct.width / 2}%`, top: `${selectedPct.top + selectedPct.height}%`, transform: "translateX(-50%)" }}
+          >
+            <span className="h-6 w-0.5 bg-gradient-to-b from-white/70 to-transparent" aria-hidden="true" />
+            <ChevronDown className="size-4 animate-bounce text-white/80" aria-hidden="true" />
+          </div>
+        )}
+
         {!isClosed &&
           ROLE_ORDER.map((roleId) => {
             const agent = byRole.get(roleId);
@@ -119,23 +133,34 @@ export function OfficeImageScene({
             const pct = getHotspotPercent(roleId)!;
             const accent = getRoleVisual(roleId).accent;
             const active = isActive(agent.status);
+            const isSelected = selectedRoleId === roleId;
+            const dimmed = selectedRoleId !== null && !isSelected;
 
             return (
               <div
                 key={roleId}
-                className="group absolute z-10"
+                className={cn("group absolute z-10 transition-opacity duration-300", dimmed && "opacity-40")}
                 style={{ left: `${pct.left}%`, top: `${pct.top}%`, width: `${pct.width}%`, height: `${pct.height}%` }}
               >
                 <button
                   type="button"
-                  onClick={() => setSelectedRoleId(roleId)}
+                  onClick={() => selectRole(roleId)}
                   aria-label={`${agent.roleName}, ${STATUS_LABEL[agent.status]}${agent.currentTaskTitle ? `: ${agent.currentTaskTitle}` : ""}`}
+                  aria-pressed={isSelected}
                   className={cn(
                     "relative h-full w-full rounded-xl outline-2 -outline-offset-2 outline-transparent transition-all",
                     "hover:outline-white/50 focus-visible:outline-primary",
+                    isSelected && "scale-[1.04] outline-4 -outline-offset-4",
                     agent.status === "PAUSED" && "backdrop-brightness-75 backdrop-saturate-50",
                   )}
-                  style={active ? { boxShadow: `inset 0 0 0 2px ${accent}, 0 0 26px 2px color-mix(in oklch, ${accent} 65%, transparent)` } : undefined}
+                  style={{
+                    outlineColor: isSelected ? "white" : undefined,
+                    boxShadow: isSelected
+                      ? `inset 0 0 0 2px white, 0 0 34px 4px color-mix(in oklch, ${accent} 80%, transparent)`
+                      : active
+                        ? `inset 0 0 0 2px ${accent}, 0 0 26px 2px color-mix(in oklch, ${accent} 65%, transparent)`
+                        : undefined,
+                  }}
                 >
                   {agent.status === "WAITING" && (
                     <span className="absolute top-1 right-1 size-2.5 rounded-full bg-[oklch(0.78_0.14_75)] shadow-[0_0_6px_1px_oklch(0.78_0.14_75)]" aria-hidden="true" />
@@ -151,7 +176,7 @@ export function OfficeImageScene({
                 <div
                   className={cn(
                     "pointer-events-none absolute inset-x-0 bottom-1 flex justify-center transition-opacity duration-150",
-                    labelsAlwaysOn ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
+                    labelsAlwaysOn || isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
                   )}
                 >
                   <span className="flex items-center gap-1.5 rounded-full bg-black/75 px-2 py-0.5 text-[0.6rem] whitespace-nowrap text-white shadow-lg">
@@ -174,8 +199,12 @@ export function OfficeImageScene({
           })}
       </div>
 
+      {selectedRoleId && selectedAgent && (
+        <p className="text-center text-xs text-muted-foreground">Opening {selectedAgent.roleName} workspace…</p>
+      )}
+
       {/* Active-work focus panel (Section 10/11) — real data only. */}
-      {!isClosed && activeAgents.length === 1 && (
+      {!isClosed && !selectedRoleId && activeAgents.length === 1 && (
         <div className="flex items-center gap-3 rounded-xl border border-border/50 bg-background/60 px-3.5 py-2 text-xs">
           <span className="font-mono text-[0.6rem] tracking-widest text-primary uppercase">Currently working</span>
           <span className="font-semibold">{activeAgents[0].roleName}</span>
@@ -183,14 +212,12 @@ export function OfficeImageScene({
           {activeAgents[0].provider && <span className="ml-auto shrink-0 font-mono text-[0.6rem] text-muted-foreground uppercase">{activeAgents[0].provider}</span>}
         </div>
       )}
-      {!isClosed && activeAgents.length > 1 && (
+      {!isClosed && !selectedRoleId && activeAgents.length > 1 && (
         <div className="flex items-center gap-2 rounded-xl border border-border/50 bg-background/60 px-3.5 py-2 text-xs">
           <span className="font-mono text-[0.6rem] tracking-widest text-primary uppercase">{activeAgents.length} agents active</span>
           <span className="truncate text-muted-foreground">{activeAgents.map((a) => a.roleName).join(", ")}</span>
         </div>
       )}
-
-      <AgentDetailDrawer detail={selectedRoleId ? (agentDetails[selectedRoleId] ?? null) : null} onOpenChange={(open) => !open && setSelectedRoleId(null)} />
     </div>
   );
 }

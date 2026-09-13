@@ -10,11 +10,16 @@ import {
 } from "@/lib/ai-office/dashboard/dashboard-data";
 import { getOfficeFloorView, getAgentDetail } from "@/lib/ai-office/dashboard/office-floor-data";
 import { getProjectDetail, getRecentHandoff } from "@/lib/ai-office/dashboard/project-detail-data";
+import { getRolePerformance, deriveNextSteps } from "@/lib/ai-office/dashboard/agent-workspace-data";
+import { getRoleSpecialization } from "@/lib/ai-office/agents/role-specializations";
 import { listAgentRoles } from "@/lib/ai-office/domain/agent-roles";
+import { readFile } from "@/lib/ai-office/workspace/workspace-service";
+import { highlightFileContent } from "@/lib/ai-office/workspace/code-highlight";
 import { OfficeTopBar } from "@/components/ai-office/office-floor/office-top-bar";
 import { OfficeFloor } from "@/components/ai-office/office-floor/office-floor";
 import { OfficeProjectStrip } from "@/components/ai-office/office-floor/office-project-strip";
 import { AgentsList } from "@/components/ai-office/office-floor/agents-list";
+import { AgentWorkspace } from "@/components/ai-office/office-floor/agent-workspace";
 import { SideCommandPanel } from "@/components/ai-office/office-floor/side-command-panel";
 import { OverviewCards } from "@/components/ai-office/dashboard/overview-cards";
 import { ProjectList } from "@/components/ai-office/dashboard/project-list";
@@ -24,6 +29,7 @@ import { BudgetPanel } from "@/components/ai-office/dashboard/budget-panel";
 import { TaskFlow } from "@/components/ai-office/dashboard/task-flow";
 import { GlassCard } from "@/components/common/glass-card";
 import { AutoRefresh } from "@/components/ai-office/auto-refresh";
+import type { WorkspaceFileEntry } from "@/components/ai-office/workspace/file-browser";
 
 /**
  * "Teja's AI Engineering Headquarters" — the living office floor is the
@@ -33,9 +39,18 @@ import { AutoRefresh } from "@/components/ai-office/auto-refresh";
  * instead of stacked on the main canvas. Every visual state on the floor
  * comes straight from `getOfficeFloorView()` — a read-only projection of
  * the same SQLite data the rest of this dashboard already reads.
+ *
+ * `?agent=<roleId>` (Section 24 of the Agent Workspace phase) drives the
+ * expanded Agent Workspace mounted once below — a direct link or a
+ * refresh both preserve the open workspace, and browser back/forward
+ * closes/reopens it naturally.
  */
-export default async function OfficeHomePage({ searchParams }: { searchParams: Promise<{ project?: string; officeDebug?: string }> }) {
-  const { project: selectedProjectId, officeDebug } = await searchParams;
+export default async function OfficeHomePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ project?: string; officeDebug?: string; agent?: string }>;
+}) {
+  const { project: selectedProjectId, officeDebug, agent: selectedRoleId } = await searchParams;
   const db = getAppDatabase();
 
   const overview = getOfficeOverview(db);
@@ -44,7 +59,6 @@ export default async function OfficeHomePage({ searchParams }: { searchParams: P
   const floor = getOfficeFloorView(db, selectedProjectId);
 
   const roles = listAgentRoles(db);
-  const agentDetails = Object.fromEntries(roles.map((role) => [role.id, getAgentDetail(db, role.id, floor.selectedProject?.id)!]));
 
   const projects = getProjectSummaries(db);
   const activity = getRecentActivity(db, 30);
@@ -56,6 +70,23 @@ export default async function OfficeHomePage({ searchParams }: { searchParams: P
 
   const debugEnabled = process.env.NODE_ENV !== "production" && officeDebug === "1";
 
+  // The expanded Agent Workspace's real data — computed only for the one
+  // selected role (not eagerly for all 11) since it's real DB/filesystem
+  // work (file reads + syntax highlighting), not just a projection.
+  const selectedRole = selectedRoleId ? roles.find((r) => r.id === selectedRoleId) : undefined;
+  const agentDetail = selectedRole ? getAgentDetail(db, selectedRole.id, floor.selectedProject?.id) : undefined;
+  let fileEntries: WorkspaceFileEntry[] = [];
+  if (agentDetail && floor.selectedProject) {
+    fileEntries = await Promise.all(
+      agentDetail.filesChanged.map(async (file) => ({
+        path: file.path,
+        sizeBytes: file.sizeBytes,
+        lastModifiedByRoleId: file.lastModifiedByRoleId,
+        html: await highlightFileContent(file.path, await readFile(floor.selectedProject!.id, file.path)),
+      })),
+    );
+  }
+
   const sections = {
     projects: (
       <div className="flex flex-col gap-4">
@@ -63,7 +94,7 @@ export default async function OfficeHomePage({ searchParams }: { searchParams: P
         <ProjectList projects={projects} />
       </div>
     ),
-    agents: <AgentsList floor={floor} agentDetails={agentDetails} />,
+    agents: <AgentsList floor={floor} />,
     tasks: floor.selectedProject ? (
       <TaskFlow tasks={projectTasks} />
     ) : (
@@ -96,20 +127,24 @@ export default async function OfficeHomePage({ searchParams }: { searchParams: P
       </div>
 
       <div className="hidden md:block">
-        <OfficeFloor
-          floor={floor}
-          agentDetails={agentDetails}
-          officeState={overview.officeState}
-          recentHandoff={recentHandoff}
-          debugEnabled={debugEnabled}
-        />
+        <OfficeFloor floor={floor} officeState={overview.officeState} recentHandoff={recentHandoff} debugEnabled={debugEnabled} />
       </div>
       <div className="md:hidden">
         <OfficeProjectStrip floor={floor} />
         <div className="mt-3">
-          <AgentsList floor={floor} agentDetails={agentDetails} />
+          <AgentsList floor={floor} />
         </div>
       </div>
+
+      {agentDetail && (
+        <AgentWorkspace
+          detail={agentDetail}
+          performance={getRolePerformance(db, agentDetail.roleId)}
+          nextSteps={deriveNextSteps(agentDetail)}
+          specialization={getRoleSpecialization(agentDetail.roleId)}
+          fileEntries={fileEntries}
+        />
+      )}
     </div>
   );
 }

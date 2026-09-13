@@ -59,16 +59,31 @@ export function getHotspotPercent(roleId: string): HotspotPercent | null {
  * fake illustration.
  */
 export function getWorkstationCropStyle(roleId: string, thumbPx: number): CSSProperties | undefined {
+  return getWorkstationCropRect(roleId, thumbPx, thumbPx, 0.72, 0.38);
+}
+
+/**
+ * The same real-crop recipe generalized to a non-square box (e.g. a wide
+ * Agent Workspace header banner) — a `widthFactor` of 1 frames roughly the
+ * whole hotspot's width instead of the tighter square-thumbnail crop.
+ */
+export function getWorkstationCropRect(
+  roleId: string,
+  boxWidthPx: number,
+  boxHeightPx: number,
+  widthFactor = 0.72,
+  verticalAnchor = 0.38,
+): CSSProperties | undefined {
   const spot = OFFICE_HOTSPOTS[roleId];
   if (!spot) return undefined;
-  const cropWidth = spot.px.width * 0.72;
-  const zoom = thumbPx / cropWidth;
+  const cropWidth = spot.px.width * widthFactor;
+  const zoom = boxWidthPx / cropWidth;
   const centerX = spot.px.x + spot.px.width / 2;
-  const centerY = spot.px.y + spot.px.height * 0.38;
+  const centerY = spot.px.y + spot.px.height * verticalAnchor;
   const bgWidth = OFFICE_IMAGE_WIDTH * zoom;
   const bgHeight = OFFICE_IMAGE_HEIGHT * zoom;
-  const posX = -(centerX * zoom - thumbPx / 2);
-  const posY = -(centerY * zoom - thumbPx / 2);
+  const posX = -(centerX * zoom - boxWidthPx / 2);
+  const posY = -(centerY * zoom - boxHeightPx / 2);
   return {
     backgroundImage: "url(/images/ai-office/living-office.webp)",
     backgroundSize: `${bgWidth}px ${bgHeight}px`,

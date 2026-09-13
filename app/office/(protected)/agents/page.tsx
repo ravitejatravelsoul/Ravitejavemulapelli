@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { getAppDatabase } from "@/lib/ai-office/db/client";
-import { getOfficeFloorView, getAgentDetail } from "@/lib/ai-office/dashboard/office-floor-data";
+import { getOfficeFloorView } from "@/lib/ai-office/dashboard/office-floor-data";
 import { listAgentRoles } from "@/lib/ai-office/domain/agent-roles";
 import { AgentsGrid, type AgentCardData } from "@/components/ai-office/dashboard/agents-grid";
 import { GlassCard } from "@/components/common/glass-card";
@@ -25,8 +25,6 @@ export default async function AgentsPage() {
     return { agent, description: responsibilities[0] ?? "" };
   });
 
-  const agentDetails = Object.fromEntries(roles.map((role) => [role.id, getAgentDetail(db, role.id, floor.selectedProject?.id)!]));
-
   return (
     <div className="flex flex-col gap-4">
       <div>
@@ -40,7 +38,7 @@ export default async function AgentsPage() {
         <GlassCard className="text-sm text-muted-foreground">Start a project from the Office to see the team at work.</GlassCard>
       )}
 
-      <AgentsGrid cards={cards} agentDetails={agentDetails} />
+      <AgentsGrid cards={cards} />
     </div>
   );
 }
