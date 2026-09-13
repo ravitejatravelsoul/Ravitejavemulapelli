@@ -27,6 +27,9 @@ import { pauseProjectAction, resumeProjectAction } from "@/app/office/actions/pr
 import { checkOllamaHealth } from "@/lib/ai-office/providers/ollama/health";
 import { getProjectModelPolicy } from "@/lib/ai-office/domain/model-routing";
 import { AGENT_ROLE_CATALOG } from "@/lib/ai-office/domain/agent-role-catalog";
+import { ProviderBadge } from "@/components/ai-office/provider-badge";
+import { generateReadme } from "@/lib/ai-office/workspace/readme-generator";
+import { Download } from "lucide-react";
 
 export const metadata: Metadata = { title: "Project" };
 
@@ -103,6 +106,15 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
   const ollamaHealth = project.provider === "ollama" ? await checkOllamaHealth() : null;
   const routableRoles = AGENT_ROLE_CATALOG.filter((r) => r.id !== "orchestrator").map((r) => ({ id: r.id, name: r.name }));
   const projectAgents = getOfficeFloorView(db, project.id).agents;
+
+  const workspaceFilePaths = workspace.files.map((f) => f.path);
+  const hasOwnReadme = workspaceFilePaths.some((p) => p.toLowerCase() === "readme.md");
+  const generatedReadme = workspace.hasWorkspace
+    ? hasOwnReadme
+      ? await readFile(project.id, workspace.files.find((f) => f.path.toLowerCase() === "readme.md")!.path)
+      : generateReadme({ projectTitle: project.title, ideaText, files: workspaceFilePaths })
+    : null;
+  const workspaceTotalBytes = workspace.files.reduce((sum, f) => sum + f.sizeBytes, 0);
 
   const hasIndexHtml = workspace.files.some((f) => f.path === "index.html");
   const previewStatus = getPreviewStatusLabel(workspace.hasWorkspace, workspace.deliveryState, hasIndexHtml);
@@ -286,17 +298,46 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
           <CollaborationFeed entries={collaboration} />
         </TabsContent>
 
-        <TabsContent value="workspace">
+        <TabsContent value="workspace" className="flex flex-col gap-4">
           <GlassCard>
-            <h2 className="text-sm font-semibold tracking-tight">Real Development Workspace</h2>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold tracking-tight">Real Development Workspace</h2>
+              {workspace.hasWorkspace && (
+                <a
+                  href={`/office/download/${project.id}`}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-border/60 bg-background px-3 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
+                >
+                  <Download className="size-3.5" />
+                  Download ZIP
+                </a>
+              )}
+            </div>
             {workspace.hasWorkspace ? (
-              <div className="mt-4">
-                <FileBrowser files={fileEntries} />
-              </div>
+              <>
+                <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-muted-foreground">
+                  <span>
+                    Delivery: <span className="font-mono uppercase text-foreground">{workspace.deliveryState ?? "—"}</span>
+                  </span>
+                  <span>{fileEntries.length} file(s)</span>
+                  <span>{(workspaceTotalBytes / 1024).toFixed(1)} KB total</span>
+                </div>
+                <div className="mt-4">
+                  <FileBrowser files={fileEntries} />
+                </div>
+              </>
             ) : (
               <p className="mt-3 text-sm text-muted-foreground">No workspace yet — real files appear once a development role writes its first output.</p>
             )}
           </GlassCard>
+
+          {generatedReadme && (
+            <GlassCard>
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="text-sm font-semibold tracking-tight">README{hasOwnReadme ? "" : " (auto-generated preview)"}</h2>
+              </div>
+              <pre className="mt-3 max-h-96 overflow-auto rounded-lg bg-muted/50 p-4 text-xs whitespace-pre-wrap">{generatedReadme}</pre>
+            </GlassCard>
+          )}
         </TabsContent>
 
         <TabsContent value="preview">
@@ -387,10 +428,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
                     {roleProviders.map((rp) => (
                       <li key={rp.roleId} className="flex items-center gap-2">
                         <span className="font-medium">{rp.roleName}</span>
-                        <Badge variant={rp.provider === "claude" ? "default" : "outline"} className="font-mono text-[0.6rem] uppercase">
-                          {rp.provider}
-                          {rp.model ? ` · ${rp.model}` : ""}
-                        </Badge>
+                        <ProviderBadge provider={rp.provider} model={rp.model} />
                       </li>
                     ))}
                   </ul>

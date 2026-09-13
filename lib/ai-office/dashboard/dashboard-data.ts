@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { getOfficeStatus, type OfficeState } from "../domain/office.ts";
 import { listProjects, getProjectIdea, type ProjectRow, type ProjectStatus, type AiMode, type ProjectProvider } from "../domain/projects.ts";
 import { listTasksForProject } from "../domain/tasks.ts";
+import { getAgentRole } from "../domain/agent-roles.ts";
 import { listUnresolvedFailures, listPendingApprovalsForProject, type ApprovalKind } from "../domain/project-outputs.ts";
 import { listPendingApprovals } from "../domain/project-outputs.ts";
 import { listRecentEvents, type MessageEventRow } from "../domain/events.ts";
@@ -101,6 +102,8 @@ export interface ProjectSummary {
   completedTasks: number;
   currentTaskTitle: string | null;
   currentTaskRoleId: string | null;
+  /** The role's display name for `currentTaskRoleId` — e.g. "Frontend Developer" — so the Projects board can show which agent is actively working/waiting without the card needing its own DB access (Part 2 of the platform-hardening phase). */
+  currentTaskRoleName: string | null;
   latestAgentRoleId: string | null;
   unresolvedFailures: number;
   pendingApprovals: number;
@@ -155,6 +158,7 @@ function summarizeProject(db: DatabaseSync, project: ProjectRow): ProjectSummary
     completedTasks,
     currentTaskTitle: currentTask?.title ?? null,
     currentTaskRoleId: currentTask?.roleId ?? null,
+    currentTaskRoleName: currentTask ? (getAgentRole(db, currentTask.roleId)?.name ?? currentTask.roleId) : null,
     latestAgentRoleId: latestAttemptedTask?.roleId ?? null,
     unresolvedFailures: listUnresolvedFailures(db, project.id).length,
     pendingApprovals: listPendingApprovalsForProject(db, project.id).length,

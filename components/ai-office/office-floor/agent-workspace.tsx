@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
@@ -9,6 +9,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { FileBrowser, type WorkspaceFileEntry } from "@/components/ai-office/workspace/file-browser";
 import { getRoleVisual } from "./role-visuals";
 import { getWorkstationCropRect } from "@/lib/ai-office/office-hotspots";
+import { ProviderBadge } from "@/components/ai-office/provider-badge";
 import { useAgentSelection } from "./use-agent-selection";
 import type { AgentDetailView, AgentTaskStepState } from "@/lib/ai-office/dashboard/office-floor-data";
 import type { RolePerformanceSummary } from "@/lib/ai-office/dashboard/agent-workspace-data";
@@ -216,7 +217,7 @@ function CurrentTaskTab({ detail }: { detail: AgentDetailView }) {
     <div className="flex flex-col gap-4">
       <Card>
         <p className="text-lg font-semibold text-white">{detail.currentTaskTitle ?? detail.lastCompletedTaskTitle ?? "—"}</p>
-        <div className="mt-3 grid grid-cols-2 gap-4 text-sm sm:grid-cols-4">
+        <div className="mt-3 grid grid-cols-2 gap-4 text-sm sm:grid-cols-3">
           <div>
             <p className="text-white/40">Status</p>
             <p className="mt-0.5 font-medium text-white">{detail.taskStatus?.replace(/_/g, " ") ?? "—"}</p>
@@ -229,11 +230,11 @@ function CurrentTaskTab({ detail }: { detail: AgentDetailView }) {
           </div>
           <div>
             <p className="text-white/40">Provider</p>
-            <p className="mt-0.5 font-mono font-medium text-white uppercase">{detail.provider ?? "—"}</p>
-          </div>
-          <div>
-            <p className="text-white/40">Model</p>
-            <p className="mt-0.5 font-mono font-medium text-white">{detail.model ?? "—"}</p>
+            {detail.provider ? (
+              <ProviderBadge provider={detail.provider} model={detail.model} className="mt-0.5 border-white/20" />
+            ) : (
+              <p className="mt-0.5 font-mono font-medium text-white">—</p>
+            )}
           </div>
         </div>
       </Card>
@@ -416,6 +417,7 @@ export function AgentWorkspace({
   const { clearSelection } = useAgentSelection();
   const accent = getRoleVisual(detail.roleId).accent;
   const isOrchestrator = !!detail.orchestrator;
+  const workspaceRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -425,14 +427,33 @@ export function AgentWorkspace({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [clearSelection]);
 
+  // Real defect found during the platform-hardening audit: clicking an
+  // office hotspot selects the agent (URL updates, workstation
+  // highlights) but on desktop this component renders in-flow *below*
+  // the office scene, off-screen — the owner had to scroll down manually
+  // every time to actually see it. On mobile it's already a full-screen
+  // overlay (`fixed inset-0`), so no scroll is needed there.
+  //
+  // Keyed on `detail.roleId` alone (not `officeState`/refresh-driven
+  // props) so this only fires on a genuine new selection — this
+  // component's props are re-supplied by every `AutoRefresh`-driven
+  // server refresh too, but React only re-runs an effect when a
+  // dependency's *value* actually changes, so a refresh that leaves the
+  // same agent selected never re-triggers the scroll.
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia("(min-width: 768px)").matches) return;
+    workspaceRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [detail.roleId]);
+
   const bannerStyle = getWorkstationCropRect(detail.roleId, 1200, 220, 1.0, 0.42);
 
   return (
     <div
       id="agent-workspace"
+      ref={workspaceRef}
       role="region"
       aria-label={`${detail.roleName} workspace`}
-      className="animate-workspace-enter fixed inset-0 z-50 flex flex-col overflow-y-auto bg-[#0a0812] md:static md:z-auto md:mt-4 md:overflow-visible md:rounded-[2rem] md:border md:border-white/10 md:shadow-[0_30px_70px_-30px_rgba(0,0,0,0.6)]"
+      className="animate-workspace-enter fixed inset-0 z-50 flex flex-col overflow-y-auto bg-[#0a0812] md:static md:z-auto md:mt-4 md:overflow-visible md:rounded-[2rem] md:border md:border-white/10 md:shadow-[0_30px_70px_-30px_rgba(0,0,0,0.6)] md:scroll-mt-4"
     >
       <div className="relative shrink-0 overflow-hidden md:rounded-t-[2rem]" style={{ height: 200 }}>
         <div className="absolute inset-0" style={bannerStyle} aria-hidden="true" />
@@ -473,14 +494,12 @@ export function AgentWorkspace({
           <span className="text-white/40">Project </span>
           <span className="text-white/90">{detail.projectTitle ?? "None"}</span>
         </div>
-        <div>
-          <span className="text-white/40">Provider </span>
-          <span className="font-mono text-white/90 uppercase">{detail.provider ?? "—"}</span>
-        </div>
-        <div>
-          <span className="text-white/40">Model </span>
-          <span className="font-mono text-white/90">{detail.model ?? "—"}</span>
-        </div>
+        {detail.provider && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-white/40">Provider </span>
+            <ProviderBadge provider={detail.provider} model={detail.model} className="border-white/20" />
+          </div>
+        )}
         <div>
           <span className="text-white/40">Current Task </span>
           <span className="text-white/90">{detail.currentTaskTitle ?? "—"}</span>

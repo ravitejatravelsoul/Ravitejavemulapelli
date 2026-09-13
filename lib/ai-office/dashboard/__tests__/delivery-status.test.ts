@@ -24,8 +24,8 @@ describe("getHonestStatusLabel", () => {
     }
   });
 
-  test("a VERIFIED real deliverable shows the project's real terminal status as-is", () => {
-    assert.equal(getHonestStatusLabel("READY_FOR_REVIEW", true, "VERIFIED"), "READY FOR REVIEW");
+  test("a VERIFIED real deliverable maps READY_FOR_REVIEW to an unambiguous owner-facing COMPLETED label (Part 14) and leaves APPROVED as-is", () => {
+    assert.equal(getHonestStatusLabel("READY_FOR_REVIEW", true, "VERIFIED"), "COMPLETED");
     assert.equal(getHonestStatusLabel("APPROVED", true, "VERIFIED"), "APPROVED");
   });
 });

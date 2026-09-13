@@ -2,10 +2,9 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import { GlassCard } from "@/components/common/glass-card";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import type { ProjectSummary } from "@/lib/ai-office/dashboard/dashboard-data";
@@ -40,49 +39,58 @@ function formatRelativeTime(ms: number): string {
 }
 
 function ProjectRow({ project }: { project: ProjectSummary }) {
+  const progressPct = project.totalTasks > 0 ? Math.round((project.completedTasks / project.totalTasks) * 100) : 0;
+
   return (
-    <GlassCard className="p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="truncate text-sm font-semibold tracking-tight">{project.title}</h3>
-            <Badge variant={project.isStalledWithNoDeliverable ? "destructive" : project.isUnverifiedCompletion ? "outline" : "default"}>
-              {project.displayStatusLabel}
-            </Badge>
-            {project.deliveryState && (
-              <Badge variant="outline" className="font-mono text-[0.6rem] uppercase">
-                {project.deliveryState}
-              </Badge>
-            )}
-            <Badge variant={project.aiPolicyMode === "LOCAL_ONLY" ? "outline" : "secondary"} className="font-mono text-[0.6rem] uppercase">
-              {project.aiPolicyMode.replace("_", " ")}
-            </Badge>
-            {project.canPreview && (
-              <Badge variant="secondary" className="font-mono text-[0.6rem] uppercase">
-                Preview ready
-              </Badge>
-            )}
-          </div>
-          {project.ideaSummary && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{project.ideaSummary}</p>}
-          <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-            <span>
-              {project.completedTasks}/{project.totalTasks} tasks
-            </span>
-            {project.currentTaskTitle && <span>Active: {project.currentTaskTitle}</span>}
-            {project.unresolvedFailures > 0 && <span className="text-destructive">{project.unresolvedFailures} failure(s)</span>}
-            {project.pendingApprovals > 0 && <span className="text-amber-500">{project.pendingApprovals} approval(s)</span>}
-            <span>LIVE ${project.liveCostUsd.toFixed(2)}</span>
-            <span>{formatRelativeTime(project.updatedAt)}</span>
-          </div>
-        </div>
-        <Button asChild variant="ghost" size="sm">
-          <Link href={`/office/projects/${project.id}`}>
-            Open
-            <ArrowRight className="size-3.5" />
-          </Link>
-        </Button>
+    <Link
+      href={`/office/projects/${project.id}`}
+      className={cn(
+        "glass block rounded-2xl p-4 transition-colors",
+        "hover:border-primary/40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
+      )}
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <h3 className="truncate text-sm font-semibold tracking-tight">{project.title}</h3>
+        <Badge variant={project.isStalledWithNoDeliverable ? "destructive" : project.isUnverifiedCompletion ? "outline" : "default"}>
+          {project.displayStatusLabel}
+        </Badge>
+        {project.deliveryState && (
+          <Badge variant="outline" className="font-mono text-[0.6rem] uppercase">
+            {project.deliveryState}
+          </Badge>
+        )}
+        <Badge variant={project.aiPolicyMode === "LOCAL_ONLY" ? "outline" : "secondary"} className="font-mono text-[0.6rem] uppercase">
+          {project.aiPolicyMode.replace("_", " ")}
+        </Badge>
+        {project.canPreview && (
+          <Badge variant="secondary" className="font-mono text-[0.6rem] uppercase">
+            Preview ready
+          </Badge>
+        )}
       </div>
-    </GlassCard>
+      {project.ideaSummary && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{project.ideaSummary}</p>}
+
+      <div className="mt-2.5 flex items-center gap-2">
+        <div className="h-1.5 w-full max-w-40 overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuenow={progressPct} aria-valuemin={0} aria-valuemax={100}>
+          <div className="h-full rounded-full bg-primary transition-[width]" style={{ width: `${progressPct}%` }} />
+        </div>
+        <span className="shrink-0 text-xs text-muted-foreground">
+          {project.completedTasks}/{project.totalTasks} tasks
+        </span>
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        {project.currentTaskRoleName && (
+          <span>
+            {project.completedTasks === project.totalTasks ? "Last active" : "Active"}: {project.currentTaskRoleName}
+          </span>
+        )}
+        {project.unresolvedFailures > 0 && <span className="text-destructive">{project.unresolvedFailures} failure(s)</span>}
+        {project.pendingApprovals > 0 && <span className="text-amber-500">{project.pendingApprovals} approval(s)</span>}
+        <span>LIVE ${project.liveCostUsd.toFixed(2)}</span>
+        <span>{formatRelativeTime(project.updatedAt)}</span>
+      </div>
+    </Link>
   );
 }
 

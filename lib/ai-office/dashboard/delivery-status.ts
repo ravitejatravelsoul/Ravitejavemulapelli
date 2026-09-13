@@ -27,10 +27,22 @@ const TERMINAL_COMPLETION_STATUSES: ReadonlySet<ProjectStatus> = new Set(["READY
 
 export const NO_DELIVERABLE_LABEL = "WORKFLOW COMPLETE · NO DELIVERABLE";
 
+/**
+ * Platform-hardening phase, Part 14 — a real owner reported that
+ * "READY FOR REVIEW" reads as still-pending even once every gate (QA,
+ * Code Review, Release) has genuinely passed and the deliverable is
+ * VERIFIED — the internal `READY_FOR_REVIEW` status name (never
+ * renamed; `advanceProjectStatus()` in agent-runner.ts only ever sets it
+ * once literally every planned task is DONE and the latest QA result
+ * PASSed) is repurposed here into an honest, unambiguous owner-facing
+ * "COMPLETED" label. `APPROVED` (a distinct, owner-decided terminal
+ * state) is intentionally left as-is — it already reads as complete.
+ */
 export function getHonestStatusLabel(status: ProjectStatus, hasWorkspace: boolean, deliveryState: DeliveryState | null): string {
   if (!TERMINAL_COMPLETION_STATUSES.has(status)) return status.replace(/_/g, " ");
   if (!hasWorkspace) return NO_DELIVERABLE_LABEL;
   if (deliveryState !== "VERIFIED") return NO_DELIVERABLE_LABEL;
+  if (status === "READY_FOR_REVIEW") return "COMPLETED";
   return status.replace(/_/g, " ");
 }
 
