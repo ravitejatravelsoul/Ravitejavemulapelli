@@ -21,7 +21,7 @@ import { getProjectMemory } from "../domain/project-memory.ts";
 import { sumSimulatedCostForProject, sumLiveCostForProject, listAiUsageForProject } from "../domain/budget.ts";
 import { getBudgetSnapshot } from "../budget/budget-service.ts";
 import { isClaudeConfigured } from "../providers/claude/claude-adapter.ts";
-import { describeEvent, type ActivityEntry } from "./dashboard-data.ts";
+import { describeEvent, categorizeEventType, type ActivityEntry } from "./dashboard-data.ts";
 import { getWorkspace, listWorkspaceFileRecords, type DeliveryState, type WorkspaceFileRow } from "../domain/workspace.ts";
 import { getHonestStatusLabel, isUnverifiedCompletionClaim, isStalledWithNoDeliverable, STALLED_NO_DELIVERABLE_LABEL } from "./delivery-status.ts";
 
@@ -502,7 +502,8 @@ export function getProjectDetail(db: DatabaseSync, projectId: string): ProjectDe
     id: event.id,
     occurredAt: event.occurredAt,
     projectId: event.projectId,
-    message: describeEvent(event),
+    message: describeEvent(db, event),
+    category: categorizeEventType(event.type),
   }));
 
   const workspaceRow = getWorkspace(db, projectId);

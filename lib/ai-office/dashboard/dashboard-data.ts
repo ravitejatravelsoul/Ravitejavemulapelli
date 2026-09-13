@@ -2,8 +2,9 @@ import "server-only";
 import type { DatabaseSync } from "node:sqlite";
 import { getOfficeStatus, type OfficeState } from "../domain/office.ts";
 import { listProjects, getProjectIdea, type ProjectRow, type ProjectStatus, type AiMode, type ProjectProvider } from "../domain/projects.ts";
-import { listTasksForProject } from "../domain/tasks.ts";
+import { listTasksForProject, listTaskAttempts, getAgentRun, getTask } from "../domain/tasks.ts";
 import { getAgentRole } from "../domain/agent-roles.ts";
+import { listTestResultsForTask } from "../domain/project-outputs.ts";
 import { listUnresolvedFailures, listPendingApprovalsForProject, type ApprovalKind } from "../domain/project-outputs.ts";
 import { listPendingApprovals } from "../domain/project-outputs.ts";
 import { listRecentEvents, type MessageEventRow } from "../domain/events.ts";
@@ -178,26 +179,60 @@ function summarizeProject(db: DatabaseSync, project: ProjectRow): ProjectSummary
 
 // ---- activity feed ---------------------------------------------------
 
+/**
+ * Platform-hardening phase, Part 4 — an owner reported the Activity
+ * experience read as generic "agent collaboration" rather than a useful
+ * execution timeline. `category` lets the UI offer real filtering
+ * (All/Work/Failures/Recovery/Approvals/Cost) driven by the event's own
+ * real type, never a fabricated grouping.
+ */
+export type ActivityCategory = "WORK" | "FAILURE" | "RECOVERY" | "APPROVAL" | "COST";
+
 export interface ActivityEntry {
   id: string;
   occurredAt: number;
   projectId: string | null;
   message: string;
+  category: ActivityCategory;
+}
+
+const EVENT_CATEGORY: Record<string, ActivityCategory> = {
+  "agent_run.failed": "FAILURE",
+  "task.escalated": "FAILURE",
+  "task.budget_refused": "FAILURE",
+  "project.live_mode_refused": "FAILURE",
+  "task.claude_routing_blocked": "FAILURE",
+  "budget.overage_detected": "FAILURE",
+  "task.recovered_after_crash": "RECOVERY",
+  "task.invalidated_by_upstream_change": "RECOVERY",
+  "office_engineer.repairing": "RECOVERY",
+  "office_engineer.escalated": "RECOVERY",
+  "approval.required": "APPROVAL",
+  "approval.approved": "APPROVAL",
+  "approval.rejected": "APPROVAL",
+  "approval.revoked": "APPROVAL",
+  "budget.cap_changed": "COST",
+  "claude.context_budget_warning": "COST",
+};
+
+export function categorizeEventType(type: string): ActivityCategory {
+  return EVENT_CATEGORY[type] ?? "WORK";
 }
 
 const EVENT_DESCRIPTIONS: Record<string, (payload: Record<string, unknown>) => string> = {
-  "project.planned": (p) => `Project planned — ${(p.taskCount as number) ?? "?"} tasks across ${((p.roles as string[]) ?? []).length} roles.`,
-  "task.claimed": () => "A task was claimed by the runner.",
-  "task.executed": (p) => `A task finished executing — outcome: ${String(p.outcome ?? "unknown")}.`,
-  "task.recovered_after_crash": () => "An interrupted task was recovered after a crash and returned to the queue.",
-  "task.escalated": () => "A task exceeded its retry limit and was escalated — project blocked pending review.",
+  "project.planned": (p) => `Product Owner planned the project — ${(p.taskCount as number) ?? "?"} tasks across ${((p.roles as string[]) ?? []).length} roles.`,
+  "task.claimed": (p) => `${roleLabel(p)} started work${p.taskTitle ? ` on "${String(p.taskTitle)}"` : ""}.`,
+  "task.executed": (p) => `${roleLabel(p)}'s attempt finished — outcome: ${String(p.outcome ?? "unknown")}.`,
+  "task.recovered_after_crash": () => "Office Engineer detected a stalled task (an interrupted attempt with an expired lease) and returned it to the queue.",
+  "task.escalated": (p) => `${roleLabel(p)} exceeded its retry limit and was escalated — project blocked pending review.`,
   "task.invalidated_by_upstream_change": () => "A completed review was invalidated because the code it reviewed changed again.",
   "task.budget_refused": (p) => `A task was refused by the budget gate — ${String(p.reason ?? "budget not authorized")}.`,
-  "agent_run.succeeded": (p) => `${String(p.roleId ?? "An agent")} completed its task successfully.`,
-  "agent_run.failed": (p) => `${String(p.roleId ?? "An agent")} reported a failure — ${String(p.reason ?? "no reason given")}.`,
+  "agent_run.succeeded": (p) => `${roleLabel(p)} completed "${String(p.taskTitle ?? "its task")}" successfully.${p.detail ? ` ${String(p.detail)}` : ""}`,
+  "agent_run.failed": (p) => `${roleLabel(p)}'s attempt on "${String(p.taskTitle ?? "its task")}" failed — ${String(p.reason ?? "no reason given")}`,
   "approval.required": (p) => `Owner approval requested (${String(p.kind ?? p.matchedSignal ?? "review needed")}).`,
   "approval.approved": (p) => `Approval decision: approved (${String(p.kind ?? "")}).`,
   "approval.rejected": (p) => `Approval decision: rejected (${String(p.kind ?? "")}).`,
+  "approval.revoked": (p) => `Approval decision: revoked (${String(p.kind ?? "")}) — the paid action is blocked again until a new approval.`,
   "project.live_mode_refused": () => "A LIVE-mode task was refused — no live provider exists yet.",
   "office.opened": () => "The Office was opened.",
   "office.closed": (p) => (p.reason ? `The Office was closed — ${String(p.reason)}.` : "The Office was closed."),
@@ -209,19 +244,62 @@ const EVENT_DESCRIPTIONS: Record<string, (payload: Record<string, unknown>) => s
     `Paid AI (Claude) routing for ${String(p.roleId ?? "a role")} is blocked — ${String(p.reason ?? "not yet actionable")}.`,
   "claude.context_budget_warning": (p) =>
     `CONTEXT BUDGET WARNING — ${String(p.roleId ?? "a role")}'s call used ${String(p.estimatedInputTokens ?? "?")} tokens, above its ${String(p.targetEstimatedInputTokens ?? "?")}-token target but within its ${String(p.burstEstimatedInputTokens ?? "?")}-token burst allowance.`,
+  "office_engineer.repairing": (p) => `Office Engineer diagnosed a stuck task as a transient/operational failure and is auto-retrying it — ${String(p.incidentId ?? "")}`.trim(),
+  "office_engineer.escalated": () => "Office Engineer found a task blocked by a real content/logic problem — escalated for owner attention, never auto-retried.",
 };
 
-/** Turns a raw event row into a human-readable sentence — never raw JSON. Unknown event types fall back to a readable version of the type string, so a future event type never renders as literally nothing. */
-export function describeEvent(event: MessageEventRow): string {
+function roleLabel(p: Record<string, unknown>): string {
+  const name = p.roleName;
+  if (typeof name === "string" && name.length > 0) return name;
+  const id = p.roleId;
+  return typeof id === "string" && id.length > 0 ? id.replace(/-/g, " ") : "An agent";
+}
+
+/**
+ * Turns a raw event row into a human-readable sentence — never raw
+ * JSON. Unknown event types fall back to a readable version of the type
+ * string, so a future event type never renders as literally nothing.
+ * `db` is used to resolve real role names and task titles (never
+ * fabricated — absent from the payload means the raw id is shown
+ * as-is) so the sentence reads like "Frontend Developer" and a real
+ * task title, not a raw `roleId`/`taskId`.
+ */
+export function describeEvent(db: DatabaseSync, event: MessageEventRow): string {
   let payload: Record<string, unknown> = {};
   try {
     payload = JSON.parse(event.payload) as Record<string, unknown>;
   } catch {
     // malformed payload — fall through to the type-name fallback below
   }
+
+  const relatedTask = typeof payload.taskId === "string" ? getTask(db, payload.taskId) : undefined;
+  if (typeof payload.roleId !== "string" && relatedTask) payload.roleId = relatedTask.roleId;
+  if (typeof payload.roleId === "string") {
+    payload.roleName = getAgentRole(db, payload.roleId)?.name ?? payload.roleId;
+  }
+  if (relatedTask && !payload.taskTitle) {
+    payload.taskTitle = relatedTask.title;
+  }
+  if ((event.type === "agent_run.succeeded" || event.type === "agent_run.failed") && typeof payload.taskId === "string" && typeof payload.attemptNumber === "number") {
+    payload.detail = describeAgentRunDetail(db, payload.taskId, payload.attemptNumber, payload.roleId as string | undefined);
+  }
+
   const describe = EVENT_DESCRIPTIONS[event.type];
   if (describe) return describe(payload);
   return event.type.replace(/[._]/g, " ");
+}
+
+/** Real, non-fabricated detail for a completed attempt — provider/model actually used, and (for a QA role) the real browser-verification test result. `undefined` (never guessed) whenever the underlying attempt/agent-run/test-result rows can't be found. */
+function describeAgentRunDetail(db: DatabaseSync, taskId: string, attemptNumber: number, roleId: string | undefined): string | undefined {
+  const attempt = listTaskAttempts(db, taskId).find((a) => a.attemptNumber === attemptNumber);
+  const agentRun = attempt?.agentRunId ? getAgentRun(db, attempt.agentRunId) : undefined;
+  const parts: string[] = [];
+  if (agentRun) parts.push(`(${agentRun.provider}${agentRun.model ? ` · ${agentRun.model}` : ""})`);
+  if (roleId === "qa-agent") {
+    const latestTest = listTestResultsForTask(db, taskId).at(-1);
+    if (latestTest) parts.push(`Browser verification: ${latestTest.status}${latestTest.summary ? ` — ${latestTest.summary}` : ""}.`);
+  }
+  return parts.length > 0 ? parts.join(" ") : undefined;
 }
 
 export function getRecentActivity(db: DatabaseSync, limit = 30): ActivityEntry[] {
@@ -229,7 +307,8 @@ export function getRecentActivity(db: DatabaseSync, limit = 30): ActivityEntry[]
     id: event.id,
     occurredAt: event.occurredAt,
     projectId: event.projectId,
-    message: describeEvent(event),
+    message: describeEvent(db, event),
+    category: categorizeEventType(event.type),
   }));
 }
 

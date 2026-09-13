@@ -28,6 +28,7 @@ import { checkOllamaHealth } from "@/lib/ai-office/providers/ollama/health";
 import { getProjectModelPolicy } from "@/lib/ai-office/domain/model-routing";
 import { AGENT_ROLE_CATALOG } from "@/lib/ai-office/domain/agent-role-catalog";
 import { ProviderBadge } from "@/components/ai-office/provider-badge";
+import { ActivityTimeline } from "@/components/ai-office/dashboard/activity-timeline";
 import { generateReadme } from "@/lib/ai-office/workspace/readme-generator";
 import { Download } from "lucide-react";
 
@@ -350,20 +351,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
         </TabsContent>
 
         <TabsContent value="activity" className="flex flex-col gap-4">
-          <GlassCard>
-            <h2 className="text-sm font-semibold tracking-tight">Activity</h2>
-            {activity.length === 0 ? (
-              <p className="mt-3 text-sm text-muted-foreground">No activity yet.</p>
-            ) : (
-              <ul className="mt-3 flex flex-col gap-2 text-xs">
-                {activity.map((entry) => (
-                  <li key={entry.id} className="border-b border-border/40 pb-2 last:border-0">
-                    {entry.message}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </GlassCard>
+          <ActivityTimeline entries={activity} />
         </TabsContent>
 
         {approvals.length > 0 && (

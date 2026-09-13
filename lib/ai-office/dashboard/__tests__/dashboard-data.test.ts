@@ -84,7 +84,11 @@ describe("dashboard-data — project summaries and activity reflect real state",
 
     const activity = getRecentActivity(t.db);
     assert.ok(activity.length > 0);
-    assert.ok(activity.every((entry) => !entry.message.includes("{") && !entry.message.includes('"')), "activity messages must be human-readable, not raw JSON");
+    // Human-readable prose is allowed to quote a real task title (e.g.
+    // `Frontend Developer started work on "Implement frontend".`) — the
+    // real thing this guards against is a raw, undescribed JSON payload
+    // leaking straight into the message, which always starts with `{`.
+    assert.ok(activity.every((entry) => !entry.message.trim().startsWith("{")), "activity messages must be human-readable, not raw JSON");
 
     // Overview "Ready for Review" counts this legacy/pure-text project
     // (no workspace at all) — its status is honest as-is.
@@ -183,7 +187,7 @@ describe("dashboard-data — project summaries and activity reflect real state",
       occurredAt: Date.now(),
       createdAt: Date.now(),
     };
-    const message = describeEvent(fakeEvent);
+    const message = describeEvent(t.db, fakeEvent);
     assert.ok(!message.includes("{"));
     assert.match(message, /some unmapped event/);
     t.close();

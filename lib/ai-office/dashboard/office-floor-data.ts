@@ -15,7 +15,7 @@ import {
   type TestResultRow,
 } from "../domain/project-outputs.ts";
 import { listEventsForProject } from "../domain/events.ts";
-import { describeEvent, type ActivityEntry } from "./dashboard-data.ts";
+import { describeEvent, categorizeEventType, type ActivityEntry } from "./dashboard-data.ts";
 import { listWorkspaceFileRecords, getWorkspace, type WorkspaceFileRow } from "../domain/workspace.ts";
 import { getHonestStatusLabel, isUnverifiedCompletionClaim, isStalledWithNoDeliverable, STALLED_NO_DELIVERABLE_LABEL } from "./delivery-status.ts";
 
@@ -376,7 +376,13 @@ export function getAgentDetail(db: DatabaseSync, roleId: string, selectedProject
         }
       })
       .slice(0, 8)
-      .map((event) => ({ id: event.id, occurredAt: event.occurredAt, projectId: event.projectId, message: describeEvent(event) }));
+      .map((event) => ({
+        id: event.id,
+        occurredAt: event.occurredAt,
+        projectId: event.projectId,
+        message: describeEvent(db, event),
+        category: categorizeEventType(event.type),
+      }));
 
     decisions = listDecisionsForProject(db, project.id)
       .filter((d) => d.madeBy === roleId)
