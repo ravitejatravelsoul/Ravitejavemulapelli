@@ -123,7 +123,7 @@ export default async function OfficeHomePage({
         <div className="min-w-0 flex-1">
           <OfficeTopBar officeState={overview.officeState} runnerActivity={runnerActivity} floor={floor} liveCostUsd={budget.liveSpendUsd} liveCapUsd={budget.capUsd} />
         </div>
-        <SideCommandPanel sections={sections} />
+        <SideCommandPanel sections={sections} pendingApprovalCount={approvals.length} />
       </div>
 
       <div className="hidden md:block">

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Building2, FolderKanban, Users, ListChecks, Activity, CheckCircle2, Wallet, Settings, LogOut, Menu } from "lucide-react";
 import { Sheet, SheetTrigger, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { logout } from "@/app/office/actions/auth";
 
@@ -25,17 +26,30 @@ const NAV: { key: SectionKey; label: string; icon: React.ComponentType<{ classNa
  * one per section) inside a drawer, so none of that working code needed
  * to change. "Office Floor" isn't a section here; it's just what's behind
  * the drawer when it's closed.
+ *
+ * `pendingApprovalCount` (real UX defect fix): previously a pending
+ * approval was only ever visible after the owner opened this panel *and*
+ * manually selected the "Approvals" tab within it — nothing on the closed
+ * trigger button or the tab strip itself gave any indication something
+ * needed a decision. Now a nonzero count puts a real badge on both the
+ * trigger and the tab, and opening the panel jumps straight to Approvals
+ * instead of defaulting to Projects.
  */
-export function SideCommandPanel({ sections }: { sections: Record<SectionKey, React.ReactNode> }) {
+export function SideCommandPanel({ sections, pendingApprovalCount = 0 }: { sections: Record<SectionKey, React.ReactNode>; pendingApprovalCount?: number }) {
   const [open, setOpen] = useState(false);
-  const [active, setActive] = useState<SectionKey>("projects");
+  const [active, setActive] = useState<SectionKey>(pendingApprovalCount > 0 ? "approvals" : "projects");
 
   return (
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger asChild>
-        <Button variant="outline" size="sm">
+        <Button variant="outline" size="sm" className="relative">
           <Menu className="size-4" />
           Panel
+          {pendingApprovalCount > 0 && (
+            <Badge variant="destructive" className="absolute -top-2 -right-2 size-5 justify-center rounded-full p-0 text-[0.65rem]">
+              {pendingApprovalCount}
+            </Badge>
+          )}
         </Button>
       </SheetTrigger>
       <SheetContent side="right" className="flex w-full flex-col p-0 sm:max-w-lg">
@@ -59,6 +73,11 @@ export function SideCommandPanel({ sections }: { sections: Record<SectionKey, Re
             >
               <item.icon className="size-3.5" />
               {item.label}
+              {item.key === "approvals" && pendingApprovalCount > 0 && (
+                <Badge variant="destructive" className="size-4 justify-center rounded-full p-0 text-[0.6rem]">
+                  {pendingApprovalCount}
+                </Badge>
+              )}
             </button>
           ))}
         </div>

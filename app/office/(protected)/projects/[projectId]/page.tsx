@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getAppDatabase } from "@/lib/ai-office/db/client";
 import { getProjectDetail } from "@/lib/ai-office/dashboard/project-detail-data";
+import { getPendingApprovalsView } from "@/lib/ai-office/dashboard/dashboard-data";
 import { getOfficeFloorView } from "@/lib/ai-office/dashboard/office-floor-data";
 import { getPreviewStatusLabel } from "@/lib/ai-office/dashboard/delivery-status";
 import { signPreviewToken } from "@/lib/ai-office/auth/preview-token";
@@ -11,6 +12,7 @@ import { GlassCard } from "@/components/common/glass-card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { ActionButton } from "@/components/ai-office/action-button";
+import { approveApprovalAction, rejectApprovalAction } from "@/app/office/actions/approvals";
 import { TaskFlow } from "@/components/ai-office/dashboard/task-flow";
 import { AutoRefresh } from "@/components/ai-office/auto-refresh";
 import { ProjectPipeline } from "@/components/ai-office/dashboard/project-pipeline";
@@ -65,6 +67,17 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
 
   const isActive = project.status === "IN_PROGRESS";
 
+  // The one place on this page the owner can actually decide a pending
+  // approval — previously this page only ever listed approvals read-only,
+  // buried behind a tab that didn't even appear unless clicked, with no
+  // Approve/Reject controls anywhere on it (the only real controls lived
+  // on the main dashboard's ApprovalsPanel). Reuses the exact same
+  // `getPendingApprovalsView` projection and `approveApprovalAction`/
+  // `rejectApprovalAction` Server Actions that panel already uses — never
+  // a second decision path.
+  const pendingApprovalsForProject = getPendingApprovalsView(db).filter((a) => a.projectId === project.id);
+  const waitingForOwnerApproval = pendingApprovalsForProject.length > 0;
+
   const modelPolicy = project.provider === "ollama" ? getProjectModelPolicy(db, project.id) : null;
   const ollamaHealth = project.provider === "ollama" ? await checkOllamaHealth() : null;
   const routableRoles = AGENT_ROLE_CATALOG.filter((r) => r.id !== "orchestrator").map((r) => ({ id: r.id, name: r.name }));
@@ -107,6 +120,11 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
               <Badge variant={project.aiPolicyMode === "LOCAL_ONLY" ? "outline" : "default"} className="font-mono text-[0.6rem] uppercase">
                 AI Policy: {project.aiPolicyMode.replace("_", " ")}
               </Badge>
+              {waitingForOwnerApproval && (
+                <Badge variant="destructive" className="animate-pulse font-mono text-[0.6rem] uppercase">
+                  Waiting for your approval
+                </Badge>
+              )}
             </div>
             <p className="mt-2 max-w-2xl text-sm text-muted-foreground">{ideaText}</p>
             <p className="mt-2 text-xs text-muted-foreground">
@@ -135,12 +153,82 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
           </span>
           <span>Simulated cost: ${simulatedCostUsd.toFixed(2)}</span>
           <span>LIVE cost: ${liveCostUsd.toFixed(2)}</span>
+          {waitingForOwnerApproval && (
+            <span className="font-medium text-destructive">
+              Work is paused — {pendingApprovalsForProject.length} decision{pendingApprovalsForProject.length === 1 ? "" : "s"} needed below before the
+              runner can continue.
+            </span>
+          )}
         </div>
 
         <div className="mt-4 overflow-x-auto pb-1">
           <ProjectPipeline stages={pipeline} />
         </div>
       </GlassCard>
+
+      {/* ---- Owner approval — prominent, above the fold, with real Approve/Reject controls ----
+          Previously the only approval UI on this page was a read-only list buried behind an
+          "Approvals" tab that never even had Approve/Reject buttons. Reuses the exact same
+          approveApprovalAction/rejectApprovalAction Server Actions the main dashboard's
+          ApprovalsPanel already uses — never a second decision path. */}
+      {pendingApprovalsForProject.length > 0 && (
+        <GlassCard className="border-destructive/40 bg-destructive/5">
+          <div className="flex items-center gap-2">
+            <Badge variant="destructive">Action needed</Badge>
+            <h2 className="text-sm font-semibold tracking-tight">Waiting for your approval</h2>
+          </div>
+          <ul className="mt-3 flex flex-col gap-4">
+            {pendingApprovalsForProject.map((approval) => {
+              const roleName = approval.roleId ? (AGENT_ROLE_CATALOG.find((r) => r.id === approval.roleId)?.name ?? approval.roleId) : null;
+              return (
+                <li key={approval.id} className="rounded-xl border border-border/60 bg-background/60 p-4">
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    {approval.provider && (
+                      <Badge variant="outline" className="font-mono uppercase">
+                        Provider: {approval.provider}
+                      </Badge>
+                    )}
+                    {roleName && (
+                      <Badge variant="secondary" className="font-mono uppercase">
+                        Agent: {roleName}
+                      </Badge>
+                    )}
+                  </div>
+                  {approval.reason && <p className="mt-2 text-sm">{approval.reason}</p>}
+                  <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-muted-foreground">
+                    <span>
+                      Project LIVE spend: ${budget.projectLiveSpendUsd.toFixed(2)}/
+                      {budget.projectLiveCapUsd != null ? `$${budget.projectLiveCapUsd.toFixed(2)}` : "(no cap)"}
+                    </span>
+                    <span>
+                      Monthly LIVE spend: ${budget.officeMonthlySpendUsd.toFixed(2)}/${budget.officeMonthlyCapUsd.toFixed(2)}
+                    </span>
+                  </div>
+                  <div className="mt-3 flex gap-2">
+                    <ActionButton
+                      action={approveApprovalAction.bind(null, approval.id)}
+                      size="sm"
+                      successMessage="Approved."
+                      confirmMessage="Approve this action? Only this exact request becomes eligible to proceed."
+                    >
+                      Approve
+                    </ActionButton>
+                    <ActionButton
+                      action={rejectApprovalAction.bind(null, approval.id)}
+                      variant="outline"
+                      size="sm"
+                      successMessage="Rejected."
+                      confirmMessage="Reject this action? It will remain blocked."
+                    >
+                      Reject
+                    </ActionButton>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </GlassCard>
+      )}
 
       {/* ---- Everything else, organized into tabs (Section 21) ---- */}
       <Tabs defaultValue="overview">

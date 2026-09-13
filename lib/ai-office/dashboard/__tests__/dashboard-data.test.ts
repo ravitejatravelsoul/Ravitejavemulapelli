@@ -7,6 +7,7 @@ import { createTestDb } from "../../db/test-helpers.ts";
 import { getOwner } from "../../domain/users.ts";
 import { createProjectWithIdea, updateProjectStatus } from "../../domain/projects.ts";
 import { createTask, createTaskAttempt, createAgentRunForAttempt } from "../../domain/tasks.ts";
+import { createApproval } from "../../domain/project-outputs.ts";
 import { recordAiUsage } from "../../domain/budget.ts";
 import { planProject } from "../../orchestrator/orchestrator.ts";
 import { runOneCycle } from "../../runner/runner.ts";
@@ -113,6 +114,46 @@ describe("dashboard-data — project summaries and activity reflect real state",
     assert.equal(approvalsView.length, 1);
     assert.equal(approvalsView[0].scopeLabel, "Entire project");
     assert.equal(approvalsView[0].projectTitle, "Needs approval");
+
+    t.close();
+  });
+
+  test("a Claude routing approval exposes provider and roleId for the project detail page's prominent approval card", () => {
+    const t = createTestDb();
+    const owner = getOwner(t.db)!;
+    const { project } = createProjectWithIdea(t.db, { title: "Pomodoro timer", rawIdeaText: "Build a Pomodoro timer.", ownerId: owner.id });
+
+    createApproval(t.db, {
+      projectId: project.id,
+      kind: "paid_service_purchase",
+      requestedBy: "system",
+      context: {
+        provider: "claude",
+        role: "frontend-developer",
+        reason: "PAID AI APPROVAL REQUIRED — Provider: Claude · Role: Frontend Developer · Reason: no qualified local model is available for this capability.",
+      },
+    });
+
+    const approvalsView = getPendingApprovalsView(t.db);
+    assert.equal(approvalsView.length, 1);
+    assert.equal(approvalsView[0].provider, "claude");
+    assert.equal(approvalsView[0].roleId, "frontend-developer");
+    assert.match(approvalsView[0].reason!, /PAID AI APPROVAL REQUIRED/);
+
+    t.close();
+  });
+
+  test("an approval with no provider/role in its context (e.g. a budget increase) exposes provider/roleId as null, never a crash", () => {
+    const t = createTestDb();
+    const owner = getOwner(t.db)!;
+    const { project } = createProjectWithIdea(t.db, { title: "P", rawIdeaText: "x", ownerId: owner.id });
+
+    createApproval(t.db, { projectId: project.id, kind: "budget_increase", requestedBy: "system", context: { reason: "Owner requested a higher cap." } });
+
+    const approvalsView = getPendingApprovalsView(t.db);
+    assert.equal(approvalsView.length, 1);
+    assert.equal(approvalsView[0].provider, null);
+    assert.equal(approvalsView[0].roleId, null);
 
     t.close();
   });

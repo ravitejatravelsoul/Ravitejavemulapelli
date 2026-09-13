@@ -52,6 +52,7 @@ export function TejaAssistant({ assistantName }: { assistantName: string }) {
   const [listening, setListening] = useState(false);
   const [voiceOutput, setVoiceOutput] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const speechSupported = typeof window !== "undefined" && !!getSpeechRecognition();
 
   useEffect(() => {
@@ -59,6 +60,30 @@ export function TejaAssistant({ assistantName }: { assistantName: string }) {
       getAssistantAwarenessAction().then(setAwareness);
     }
   }, [open, awareness]);
+
+  // Closes on outside click / Escape without ever rendering a full-viewport
+  // backdrop element — a prior version used a `fixed inset-0` backdrop to
+  // catch outside clicks, which (correctly, by design) intercepted every
+  // click anywhere on the page — including the primary sidebar navigation —
+  // for as long as the panel stayed open. Since this assistant is meant to
+  // be an ambient, non-modal launcher available across every /office/**
+  // page (not a dialog the owner must dismiss before doing anything else),
+  // the rest of the page must stay fully interactive while it's open.
+  useEffect(() => {
+    if (!open) return;
+    function handlePointerDown(event: MouseEvent) {
+      if (panelRef.current && !panelRef.current.contains(event.target as Node)) setOpen(false);
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -139,104 +164,102 @@ export function TejaAssistant({ assistantName }: { assistantName: string }) {
       </button>
 
       {open && (
-        <div className="fixed inset-0 z-50 flex items-end justify-end bg-black/20 sm:p-6" onClick={() => setOpen(false)}>
-          <div
-            role="dialog"
-            aria-label={`${assistantName} — AI Office Chief of Staff`}
-            onClick={(e) => e.stopPropagation()}
-            className="flex h-full w-full flex-col overflow-hidden border border-border/60 bg-background shadow-2xl sm:h-[36rem] sm:w-[26rem] sm:rounded-2xl"
-          >
-            <div className="flex items-center justify-between border-b border-border/60 px-4 py-3">
-              <div>
-                <p className="text-sm font-semibold tracking-tight">{assistantName.toUpperCase()}</p>
-                <p className="text-[0.65rem] text-muted-foreground uppercase">AI Office Chief of Staff</p>
-              </div>
-              <div className="flex items-center gap-1">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  aria-label={voiceOutput ? "Turn voice output off" : "Turn voice output on"}
-                  aria-pressed={voiceOutput}
-                  onClick={() => setVoiceOutput((v) => !v)}
-                >
-                  {voiceOutput ? <Volume2 className="size-4" /> : <VolumeX className="size-4" />}
-                </Button>
-                <Button type="button" variant="ghost" size="icon" aria-label="Close assistant" onClick={() => setOpen(false)}>
-                  <X className="size-4" />
-                </Button>
-              </div>
+        <div
+          ref={panelRef}
+          role="dialog"
+          aria-label={`${assistantName} — AI Office Chief of Staff`}
+          className="fixed inset-0 z-50 flex flex-col overflow-hidden border border-border/60 bg-background shadow-2xl sm:inset-auto sm:right-6 sm:bottom-6 sm:h-[36rem] sm:w-[26rem] sm:rounded-2xl"
+        >
+          <div className="flex items-center justify-between border-b border-border/60 px-4 py-3">
+            <div>
+              <p className="text-sm font-semibold tracking-tight">{assistantName.toUpperCase()}</p>
+              <p className="text-[0.65rem] text-muted-foreground uppercase">AI Office Chief of Staff</p>
             </div>
+            <div className="flex items-center gap-1">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label={voiceOutput ? "Turn voice output off" : "Turn voice output on"}
+                aria-pressed={voiceOutput}
+                onClick={() => setVoiceOutput((v) => !v)}
+              >
+                {voiceOutput ? <Volume2 className="size-4" /> : <VolumeX className="size-4" />}
+              </Button>
+              <Button type="button" variant="ghost" size="icon" aria-label="Close assistant" onClick={() => setOpen(false)}>
+                <X className="size-4" />
+              </Button>
+            </div>
+          </div>
 
-            {awareness && (
-              <div className="border-b border-border/60 bg-muted/30 px-4 py-2.5 text-xs text-muted-foreground">
-                Office {awareness.officeOpen ? "OPEN" : "CLOSED"} · {awareness.activeProjects} project(s) active · {awareness.pendingApprovals} approval(s)
-                pending · ${awareness.monthlyLiveSpendUsd.toFixed(2)} monthly LIVE spend
+          {awareness && (
+            <div className="border-b border-border/60 bg-muted/30 px-4 py-2.5 text-xs text-muted-foreground">
+              Office {awareness.officeOpen ? "OPEN" : "CLOSED"} · {awareness.activeProjects} project(s) active · {awareness.pendingApprovals} approval(s)
+              pending · ${awareness.monthlyLiveSpendUsd.toFixed(2)} monthly LIVE spend
+            </div>
+          )}
+
+          <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3">
+            {messages.length === 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {QUICK_COMMANDS.map((cmd) => (
+                  <button
+                    key={cmd}
+                    type="button"
+                    onClick={() => void send(cmd)}
+                    className="rounded-full border border-border/60 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+                  >
+                    {cmd}
+                  </button>
+                ))}
               </div>
             )}
-
-            <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3">
-              {messages.length === 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {QUICK_COMMANDS.map((cmd) => (
-                    <button
-                      key={cmd}
-                      type="button"
-                      onClick={() => void send(cmd)}
-                      className="rounded-full border border-border/60 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
-                    >
-                      {cmd}
-                    </button>
-                  ))}
-                </div>
-              )}
-              <div className="mt-3 flex flex-col gap-2.5">
-                {messages.map((m, i) => (
-                  <div
-                    key={i}
-                    className={cn(
-                      "max-w-[85%] rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap",
-                      m.role === "user" ? "ml-auto bg-primary text-primary-foreground" : "bg-muted text-foreground",
-                    )}
-                  >
-                    {m.text}
-                  </div>
-                ))}
-                {busy && <div className="max-w-[85%] rounded-2xl bg-muted px-3 py-2 text-sm text-muted-foreground">…</div>}
-              </div>
-            </div>
-
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void send(input);
-              }}
-              className="flex items-center gap-2 border-t border-border/60 p-3"
-            >
-              {speechSupported && (
-                <Button
-                  type="button"
-                  variant={listening ? "default" : "outline"}
-                  size="icon"
-                  aria-label={listening ? "Stop listening" : "Speak to Teja"}
-                  aria-pressed={listening}
-                  onClick={toggleMic}
+            <div className="mt-3 flex flex-col gap-2.5">
+              {messages.map((m, i) => (
+                <div
+                  key={i}
+                  className={cn(
+                    "max-w-[85%] rounded-2xl px-3 py-2 text-sm whitespace-pre-wrap",
+                    m.role === "user" ? "ml-auto bg-primary text-primary-foreground" : "bg-muted text-foreground",
+                  )}
                 >
-                  <Mic className="size-4" />
-                </Button>
-              )}
-              <input
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder={pending ? "Confirm or cancel…" : "Ask Teja…"}
-                className="h-9 flex-1 rounded-lg border border-input bg-transparent px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-                aria-label="Message"
-              />
-              <Button type="submit" size="icon" disabled={busy || !input.trim()} aria-label="Send">
-                <Send className="size-4" />
-              </Button>
-            </form>
+                  {m.text}
+                </div>
+              ))}
+              {busy && <div className="max-w-[85%] rounded-2xl bg-muted px-3 py-2 text-sm text-muted-foreground">…</div>}
+            </div>
           </div>
+
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void send(input);
+            }}
+            className="flex items-center gap-2 border-t border-border/60 p-3"
+          >
+            {speechSupported && (
+              <Button
+                type="button"
+                variant={listening ? "default" : "outline"}
+                size="icon"
+                aria-label={listening ? "Stop listening" : "Speak to Teja"}
+                aria-pressed={listening}
+                onClick={toggleMic}
+              >
+                <Mic className="size-4" />
+              </Button>
+            )}
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder={pending ? "Confirm or cancel…" : "Ask Teja…"}
+              className="h-9 flex-1 rounded-lg border border-input bg-transparent px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+              aria-label="Message"
+            />
+            <Button type="submit" size="icon" disabled={busy || !input.trim()} aria-label="Send">
+              <Send className="size-4" />
+            </Button>
+          </form>
         </div>
       )}
     </>

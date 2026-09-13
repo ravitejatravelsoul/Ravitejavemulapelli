@@ -242,6 +242,10 @@ export interface PendingApprovalView {
   createdAt: number;
   scopeLabel: string;
   reason: string | null;
+  /** The provider this approval is for (e.g. "claude"), parsed from the approval's own `context` — `null` for approval kinds that never set one (e.g. `destructive_db_action`). */
+  provider: string | null;
+  /** The agent role id this approval is for (e.g. "frontend-developer"), parsed the same way as `provider`. */
+  roleId: string | null;
   /** A human-readable line describing the real external-escalation state for this approval, if any has ever been raised — Section O's "External escalation: SMS sent / waiting for response" convergence. */
   escalationStatus: string | null;
 }
@@ -279,9 +283,13 @@ export function getPendingApprovalsView(db: DatabaseSync): PendingApprovalView[]
       ? (db.prepare("SELECT title FROM tasks WHERE id = ?").get(approval.taskId) as { title: string } | undefined)
       : undefined;
     let reason: string | null = null;
+    let provider: string | null = null;
+    let roleId: string | null = null;
     try {
-      const context = JSON.parse(approval.context) as { reason?: string };
+      const context = JSON.parse(approval.context) as { reason?: string; provider?: string; role?: string };
       reason = context.reason ?? null;
+      provider = context.provider ?? null;
+      roleId = context.role ?? null;
     } catch {
       reason = null;
     }
@@ -297,6 +305,8 @@ export function getPendingApprovalsView(db: DatabaseSync): PendingApprovalView[]
       createdAt: approval.createdAt,
       scopeLabel: approval.taskId ? "This task only" : approval.projectId ? "Entire project" : "Office-wide",
       reason,
+      provider,
+      roleId,
       escalationStatus,
     };
   });

@@ -30,6 +30,7 @@ export async function approveApprovalAction(approvalId: string, note?: string): 
 
   const result = approveApproval(db, { approvalId, decidedByUserId: owner.id, note: note?.trim() || undefined });
   revalidatePath("/office");
+  if (result.ok && result.approval.projectId) revalidatePath(`/office/projects/${result.approval.projectId}`);
   return result.ok ? {} : { error: result.reason };
 }
 
@@ -44,5 +45,6 @@ export async function rejectApprovalAction(approvalId: string, note?: string): P
 
   const result = rejectApproval(db, { approvalId, decidedByUserId: owner.id, note: note?.trim() || undefined });
   revalidatePath("/office");
+  if (result.ok && result.approval.projectId) revalidatePath(`/office/projects/${result.approval.projectId}`);
   return result.ok ? {} : { error: result.reason };
 }
