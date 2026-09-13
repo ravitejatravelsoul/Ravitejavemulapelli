@@ -218,4 +218,59 @@ describe("Office navigation — real clicks, real browser, isolated database", (
 
     await page.close();
   });
+
+  /**
+   * Platform-hardening phase, Part 1/15 regression guard — a real defect
+   * found on a narrow (mobile) viewport: the project detail page's
+   * TabsList uses `flex-wrap` so its tabs wrap to a second row once there
+   * are enough of them, but the base Tabs component also hardcodes a
+   * fixed `h-9` height. The wrapped second row then overflowed that fixed
+   * height and visually spilled onto the TabsContent below it — every tab
+   * still LOOKED clickable (`visible`/`enabled` both true), but a real
+   * click on it actually landed on the content card underneath instead
+   * (Playwright's own "element intercepts pointer events" failure — not a
+   * console error, not a hydration warning, just a click silently
+   * swallowed by the wrong element). Fixed by adding `h-auto` alongside
+   * `flex-wrap`. This test creates a real project through the real UI
+   * (not a fixture) and, at a narrow viewport, clicks through every real
+   * tab present, asserting each one actually activates — the general
+   * form of "no pointer interception," not dependent on a specific tab
+   * count ever recurring exactly.
+   */
+  test("every project-detail tab is genuinely clickable on a narrow (mobile) viewport — no pointer interception from wrapped tabs", async () => {
+    const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    const errors: string[] = [];
+    page.on("pageerror", (err) => errors.push(String(err)));
+    page.on("console", (msg) => {
+      if (msg.type() === "error") errors.push(msg.text());
+    });
+
+    await page.goto(`${BASE}/office/login`);
+    await page.fill('input[name="email"]', TEST_EMAIL);
+    await page.fill('input[name="password"]', TEST_PASSWORD);
+    await page.click('button[type="submit"]');
+    await page.waitForURL(`${BASE}/office`, { timeout: 15_000 });
+
+    await page.goto(`${BASE}/office/projects/new`);
+    await page.fill("#title", "Mobile Tab Click Test");
+    await page.fill("#ideaText", "A tiny idea used only to exercise the project detail page's tabs on a narrow viewport.");
+    await page.getByRole("button", { name: "Simulation" }).click();
+    await page.getByRole("button", { name: "Create Project" }).click();
+    await page.waitForURL(/\/office\/projects\/[a-f0-9-]+$/, { timeout: 15_000 });
+
+    const tabs = page.getByRole("tab");
+    const count = await tabs.count();
+    assert.ok(count >= 4, `expected several real tabs on the project detail page, found ${count}`);
+
+    for (let i = 0; i < count; i++) {
+      const tab = tabs.nth(i);
+      const label = await tab.textContent();
+      await tab.click({ timeout: 5000 });
+      const selected = await tab.getAttribute("aria-selected");
+      assert.equal(selected, "true", `clicking tab "${label}" on a narrow viewport must actually select it, not be intercepted by another element`);
+    }
+
+    assert.deepEqual(errors, [], "no console/page errors while clicking through every tab");
+    await page.close();
+  });
 });

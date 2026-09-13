@@ -279,7 +279,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
 
       {/* ---- Everything else, organized into tabs (Section 21) ---- */}
       <Tabs defaultValue="overview">
-        <TabsList className="flex-wrap">
+        <TabsList className="h-auto flex-wrap">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="workspace">Workspace</TabsTrigger>
           <TabsTrigger value="preview">Preview</TabsTrigger>
