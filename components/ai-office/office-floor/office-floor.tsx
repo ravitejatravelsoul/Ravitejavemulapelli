@@ -1,36 +1,75 @@
 "use client";
 
 import { useState } from "react";
+import { Crown } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { DepartmentPod } from "./department-pod";
-import { CentralCommandPod } from "./central-command-pod";
+import { WorkstationArt } from "./workstation-art";
+import { getRoleVisual } from "./role-visuals";
 import { Connector } from "./connector";
 import { OfficeProjectStrip } from "./office-project-strip";
 import { AgentDetailDrawer } from "./agent-detail-drawer";
-import type { OfficeFloorView, AgentDetailView } from "@/lib/ai-office/dashboard/office-floor-data";
+import type { OfficeFloorView, AgentDetailView, OfficeAgentView } from "@/lib/ai-office/dashboard/office-floor-data";
 
-type DeptKey = "product" | "design" | "engineering" | "quality" | "release";
-
-const DEPARTMENTS: { key: DeptKey; title: string; roleIds: string[] }[] = [
-  { key: "product", title: "Product & Research", roleIds: ["product-owner", "research-agent"] },
-  { key: "design", title: "Design & Architecture", roleIds: ["solution-architect", "ui-ux-agent"] },
-  { key: "engineering", title: "Engineering", roleIds: ["frontend-developer", "backend-developer"] },
-  { key: "quality", title: "Quality & Security", roleIds: ["qa-agent", "security-reviewer"] },
-  { key: "release", title: "Review & Release", roleIds: ["code-reviewer", "release-agent"] },
+/** Left-to-right, top-to-bottom reads as the real pipeline order: idea → plan → design → build → verify → ship. */
+const FLOOR_ORDER = [
+  "product-owner",
+  "research-agent",
+  "solution-architect",
+  "ui-ux-agent",
+  "frontend-developer",
+  "backend-developer",
+  "qa-agent",
+  "security-reviewer",
+  "code-reviewer",
+  "release-agent",
 ];
 
-function isDeptActive(agents: OfficeFloorView["agents"], roleIds: string[]): boolean {
-  return agents.some((a) => roleIds.includes(a.roleId) && (a.status === "WORKING" || a.status === "THINKING" || a.status === "REVIEWING"));
+const STATUS_LABEL: Record<OfficeAgentView["status"], string> = {
+  IDLE: "Idle",
+  WORKING: "Working",
+  THINKING: "Thinking",
+  REVIEWING: "Reviewing",
+  WAITING: "Waiting",
+  BLOCKED: "Blocked",
+  DONE: "Done",
+  PAUSED: "Paused",
+};
+
+const STATUS_DOT: Record<OfficeAgentView["status"], string> = {
+  IDLE: "bg-muted-foreground/50",
+  WORKING: "bg-primary",
+  THINKING: "bg-accent-2",
+  REVIEWING: "bg-accent-2",
+  WAITING: "bg-[oklch(0.78_0.14_75)]",
+  BLOCKED: "bg-destructive",
+  DONE: "bg-[oklch(0.7_0.17_150)]",
+  PAUSED: "bg-muted-foreground/30",
+};
+
+function isAnyActive(agents: OfficeAgentView[]): boolean {
+  return agents.some((a) => a.status === "WORKING" || a.status === "THINKING" || a.status === "REVIEWING");
+}
+
+function AgentLabel({ agent }: { agent: OfficeAgentView }) {
+  return (
+    <div className="flex flex-col items-center gap-0.5 text-center">
+      <p className="max-w-[7.5rem] truncate text-xs font-semibold text-white/90">{agent.roleName}</p>
+      <span className="flex items-center gap-1 text-[0.6rem] text-white/55">
+        <span className={cn("size-1.5 rounded-full", STATUS_DOT[agent.status])} aria-hidden="true" />
+        {STATUS_LABEL[agent.status]}
+        {agent.provider === "claude" && <span className="ml-1 rounded-full bg-primary/25 px-1 py-px font-mono text-[0.5rem] tracking-widest uppercase">Claude</span>}
+      </span>
+    </div>
+  );
 }
 
 /**
- * The living office floor — idea flows top-to-bottom, left-to-right:
- * Central Command coordinates, then Product & Research / Design &
- * Architecture / Engineering / Quality & Security sit side by side as one
- * visual row the eye can scan across, and Review & Release closes the
- * loop at the bottom. Every zone, glow, and connector is driven entirely
- * by real per-role status from `getOfficeFloorView()` — nothing here is
- * decorative-only except the ambient background wash.
+ * The living office floor — an illustrated scene (workstation-art.tsx), not
+ * a grid of cards. Every desk, monitor motif, and character is decorative
+ * SVG; the only real data layered on top is a compact name/status label and
+ * the click target itself. Central Command sits apart and larger, the
+ * other ten roles read left-to-right in real pipeline order, and a single
+ * connector lights up only while real work is actually flowing.
  */
 export function OfficeFloor({
   floor,
@@ -43,13 +82,10 @@ export function OfficeFloor({
 }) {
   const [selectedRoleId, setSelectedRoleId] = useState<string | null>(null);
   const isClosed = officeState === "CLOSED";
-
-  const byDept = new Map(DEPARTMENTS.map((d) => [d.key, floor.agents.filter((a) => d.roleIds.includes(a.roleId))]));
-  const dept = (key: DeptKey) => byDept.get(key) ?? [];
-  const active = (key: DeptKey) => !isClosed && isDeptActive(floor.agents, DEPARTMENTS.find((d) => d.key === key)!.roleIds);
-  const orchestrator = floor.agents.find((a) => a.roleId === "orchestrator");
-  const anyRowActive = (["product", "design", "engineering", "quality"] as DeptKey[]).some(active);
-  const hasProject = floor.selectedProject !== null;
+  const byRole = new Map(floor.agents.map((a) => [a.roleId, a]));
+  const orchestrator = byRole.get("orchestrator");
+  const floorAgents = FLOOR_ORDER.map((id) => byRole.get(id)).filter((a): a is OfficeAgentView => !!a);
+  const anyActive = !isClosed && isAnyActive(floor.agents);
 
   return (
     <div className="flex flex-col gap-3">
@@ -57,45 +93,105 @@ export function OfficeFloor({
 
       <div
         className={cn(
-          "glass-strong relative overflow-hidden rounded-[2.5rem] p-4 transition-[filter,opacity] sm:p-6 lg:p-8",
-          isClosed && "opacity-70 grayscale-[0.6]",
+          "relative overflow-hidden rounded-[2.5rem] border border-white/10 p-4 shadow-[0_30px_70px_-30px_rgba(0,0,0,0.6)] transition-opacity sm:p-6 lg:p-8",
+          isClosed && "opacity-60",
         )}
       >
+        {/* Ambient office — a dark "night engineering office" backdrop the
+            illustrated workstations sit directly on, deliberately never a
+            bordered rectangle per role. Always dark/cinematic regardless of
+            the site's light/dark theme (Section 16). */}
+        <div
+          className="absolute inset-0 rounded-[2.5rem]"
+          style={{ background: "radial-gradient(ellipse 80% 60% at 50% 0%, #241f36 0%, #140f20 55%, #0a0812 100%)" }}
+          aria-hidden="true"
+        />
+        <div className="grid-pattern grid-fade-mask pointer-events-none absolute inset-0 rounded-[2.5rem] opacity-[0.12]" aria-hidden="true" />
+        <div
+          className="pointer-events-none absolute -top-16 left-1/4 h-56 w-56 rounded-full blur-[100px] transition-opacity duration-700"
+          style={{ background: "oklch(0.64 0.19 280 / 35%)", opacity: anyActive ? 0.9 : 0.4 }}
+          aria-hidden="true"
+        />
+        <div
+          className="pointer-events-none absolute right-0 bottom-0 h-64 w-64 rounded-full blur-[100px]"
+          style={{ background: "oklch(0.78 0.14 75 / 18%)" }}
+          aria-hidden="true"
+        />
+
         {isClosed && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/40" aria-hidden="true">
-            <span className="glass-strong rounded-full px-4 py-1.5 font-mono text-xs tracking-widest text-muted-foreground uppercase">Office closed</span>
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/50" aria-hidden="true">
+            <span className="glass-strong rounded-full px-4 py-1.5 font-mono text-xs tracking-widest text-white uppercase">Office closed</span>
           </div>
         )}
 
-        {/* Ambient office lighting — a floor wash plus two soft corner light
-            pools for depth, entirely decorative and non-interactive. */}
-        <div className="pointer-events-none absolute inset-0" aria-hidden="true">
-          <div className="grid-pattern grid-fade-mask absolute inset-0 opacity-25" />
-          <div
-            className="absolute -top-24 -left-16 h-72 w-72 rounded-full blur-[90px] transition-opacity duration-700"
-            style={{ background: "oklch(0.64 0.19 280 / 30%)", opacity: anyRowActive ? 0.9 : 0.45 }}
-          />
-          <div
-            className="absolute -right-20 bottom-0 h-64 w-64 rounded-full blur-[90px]"
-            style={{ background: "oklch(0.78 0.14 75 / 22%)" }}
-          />
-          <div className="absolute inset-x-0 bottom-0 h-1/3 bg-gradient-to-t from-black/25 to-transparent dark:from-black/40" />
-        </div>
-
-        <div className="relative flex flex-col gap-1">
-          <CentralCommandPod agent={orchestrator} floor={floor} onSelectAgent={setSelectedRoleId} />
-          <Connector active={anyRowActive} />
-
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4 lg:gap-4">
-            <DepartmentPod title="Product & Research" agents={dept("product")} onSelectAgent={setSelectedRoleId} hasProject={hasProject} />
-            <DepartmentPod title="Design & Architecture" agents={dept("design")} onSelectAgent={setSelectedRoleId} hasProject={hasProject} />
-            <DepartmentPod title="Engineering" agents={dept("engineering")} onSelectAgent={setSelectedRoleId} hasProject={hasProject} />
-            <DepartmentPod title="Quality & Security" agents={dept("quality")} onSelectAgent={setSelectedRoleId} hasProject={hasProject} />
+        <div className="relative flex flex-col gap-6 py-2">
+          {/* Central Command — elevated, larger, visually the room's anchor:
+              a raised dais and two flanking status tiles set it apart from
+              an ordinary workstation, not just a bigger copy of one. */}
+          <div className="mx-auto flex w-full max-w-[15rem] flex-col items-center gap-2">
+            <span className="flex items-center gap-1.5 font-mono text-[0.62rem] font-semibold tracking-[0.22em] text-primary uppercase">
+              <Crown className="size-3.5" aria-hidden="true" />
+              Central Command
+            </span>
+            <div className="relative flex items-end justify-center">
+              <div
+                className="absolute bottom-2 h-6 w-56 rounded-[50%] opacity-70 sm:w-64"
+                style={{ background: "radial-gradient(ellipse, oklch(0.64 0.19 280 / 45%) 0%, transparent 75%)" }}
+                aria-hidden="true"
+              />
+              <div className="hidden shrink-0 flex-col gap-1.5 self-center pb-6 opacity-70 sm:flex" aria-hidden="true">
+                <span className="h-6 w-9 rounded-sm bg-primary/25" />
+                <span className="h-6 w-9 rounded-sm bg-primary/15" />
+              </div>
+              {orchestrator ? (
+                <button
+                  type="button"
+                  onClick={() => setSelectedRoleId("orchestrator")}
+                  className="relative z-10 rounded-2xl focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
+                  aria-label={`${orchestrator.roleName}, ${STATUS_LABEL[orchestrator.status]}${orchestrator.currentTaskTitle ? `: ${orchestrator.currentTaskTitle}` : ""}`}
+                >
+                  <WorkstationArt
+                    roleId="orchestrator"
+                    accent={getRoleVisual("orchestrator").accent}
+                    status={orchestrator.status}
+                    dim={isClosed}
+                    className="h-40 w-40 drop-shadow-[0_18px_30px_rgba(0,0,0,0.55)] transition-transform duration-200 hover:scale-[1.03] sm:h-48 sm:w-48"
+                  />
+                </button>
+              ) : (
+                <div className="h-40 w-40 sm:h-48 sm:w-48" />
+              )}
+              <div className="hidden shrink-0 flex-col gap-1.5 self-center pb-6 opacity-70 sm:flex" aria-hidden="true">
+                <span className="h-6 w-9 rounded-sm bg-primary/15" />
+                <span className="h-6 w-9 rounded-sm bg-primary/25" />
+              </div>
+            </div>
+            {orchestrator && <AgentLabel agent={orchestrator} />}
           </div>
 
-          <Connector active={active("release")} />
-          <div className="mx-auto w-full max-w-2xl">
-            <DepartmentPod title="Review & Release" agents={dept("release")} onSelectAgent={setSelectedRoleId} columns={2} hasProject={hasProject} />
+          <Connector active={anyActive} />
+
+          {/* The other ten roles, in real pipeline order. */}
+          <div className="grid grid-cols-2 gap-x-2 gap-y-7 sm:grid-cols-3 sm:gap-x-3 lg:grid-cols-5">
+            {floorAgents.map((agent) => (
+              <div key={agent.roleId} className="flex flex-col items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSelectedRoleId(agent.roleId)}
+                  className="rounded-2xl focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
+                  aria-label={`${agent.roleName}, ${STATUS_LABEL[agent.status]}${agent.currentTaskTitle ? `: ${agent.currentTaskTitle}` : ""}`}
+                >
+                  <WorkstationArt
+                    roleId={agent.roleId}
+                    accent={getRoleVisual(agent.roleId).accent}
+                    status={agent.status}
+                    dim={isClosed}
+                    className="h-28 w-28 drop-shadow-[0_14px_22px_rgba(0,0,0,0.5)] transition-transform duration-200 hover:scale-[1.05] sm:h-32 sm:w-32"
+                  />
+                </button>
+                <AgentLabel agent={agent} />
+              </div>
+            ))}
           </div>
         </div>
       </div>

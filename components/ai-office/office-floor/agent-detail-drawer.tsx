@@ -1,11 +1,11 @@
 "use client";
 
-import type { CSSProperties } from "react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { getRoleVisual } from "./role-visuals";
+import { WorkstationArt } from "./workstation-art";
 import type { AgentDetailView, AgentTaskStepState } from "@/lib/ai-office/dashboard/office-floor-data";
 
 function formatTimestamp(ms: number): string {
@@ -228,39 +228,24 @@ function ProgressTab({ detail }: { detail: AgentDetailView }) {
  */
 export function AgentDetailDrawer({ detail, onOpenChange }: { detail: AgentDetailView | null; onOpenChange: (open: boolean) => void }) {
   const visual = detail ? getRoleVisual(detail.roleId) : null;
-  const Icon = visual?.icon;
-  const isActive = detail && (detail.status === "WORKING" || detail.status === "THINKING" || detail.status === "REVIEWING");
 
   return (
     <Sheet open={detail !== null} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="flex w-full flex-col sm:max-w-md">
-        {detail && visual && Icon && (
+        {detail && visual && (
           <>
-            <div
-              className="relative overflow-hidden border-b border-border/50 px-4 pt-4 pb-3"
-              style={{ "--role-accent": visual.accent } as CSSProperties}
-            >
-              <div
-                className="pointer-events-none absolute inset-0 opacity-20"
-                style={{ background: "linear-gradient(135deg, var(--role-accent), transparent 70%)" }}
-                aria-hidden="true"
-              />
+            <div className="relative overflow-hidden border-b border-white/10 px-4 pt-5 pb-4" style={{ background: "radial-gradient(ellipse 100% 100% at 30% 0%, #241f36 0%, #100d18 75%)" }}>
               <SheetHeader className="relative p-0">
                 <div className="flex items-center gap-3">
-                  <span
-                    className={cn("flex size-11 shrink-0 items-center justify-center rounded-xl", isActive && "animate-accent-glow-pulse")}
-                    style={{ background: "color-mix(in oklch, var(--role-accent) 24%, transparent)", color: "var(--role-accent)" }}
-                  >
-                    <Icon className="size-5" aria-hidden="true" />
-                  </span>
+                  <WorkstationArt roleId={detail.roleId} accent={visual.accent} status={detail.status} className="h-20 w-20 shrink-0" />
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <SheetTitle>{detail.roleName}</SheetTitle>
+                      <SheetTitle className="text-white">{detail.roleName}</SheetTitle>
                       <Badge variant="secondary" className="font-mono text-[0.6rem] uppercase">
                         {detail.status}
                       </Badge>
                     </div>
-                    <SheetDescription className="mt-0.5">
+                    <SheetDescription className="mt-0.5 text-white/60">
                       {detail.projectTitle ? `Working within “${detail.projectTitle}”` : "Not currently assigned to a project"}
                     </SheetDescription>
                   </div>
