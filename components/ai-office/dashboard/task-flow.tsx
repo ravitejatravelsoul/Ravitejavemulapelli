@@ -57,6 +57,7 @@ function TaskCard({ task, step }: { task: TaskDetailView; step: number }) {
         Attempts: {task.attemptCount}
         {task.testResults.length > 0 && ` · Latest test: ${task.testResults[task.testResults.length - 1].status}`}
       </p>
+      {task.reopenedNote && <p className="mt-1.5 text-[0.65rem] font-medium text-amber-600 dark:text-amber-400">{task.reopenedNote}</p>}
     </div>
   );
 }

@@ -16,6 +16,7 @@ import { upsertWorkspaceFileRecord } from "../../domain/workspace.ts";
 import { listEventsForProject } from "../../domain/events.ts";
 import { updateTaskStatus } from "../../domain/tasks.ts";
 import { executeTask } from "../agent-runner.ts";
+import { getProjectDetail } from "../../dashboard/project-detail-data.ts";
 
 /**
  * Integration coverage for the controlled Claude LIVE pilot's real
@@ -197,6 +198,50 @@ describe("controlled Claude LIVE pilot — real routing/approval/budget integrat
     assert.equal(result.outcome, "claude-blocked");
     assert.match(result.reason ?? "", /ANTHROPIC_API_KEY/);
     assert.equal(listTaskAttempts(t.db, task.id).length, 0);
+
+    t.close();
+  });
+
+  test("real system-reliability regression: a Claude-blocked task repeatedly cycling claim->block->reset never reduces the progress of already-DONE tasks (first Claude LIVE pilot incident)", async () => {
+    const t = createTestDb();
+    const owner = getOwner(t.db)!;
+    const { project } = setupHybridProject(t);
+
+    // Two earlier tasks complete for real, exactly like the real pilot's
+    // Product Owner / Solution Architect steps — GENERAL/REASONING have no
+    // seeded evidence, so they stay LOCAL (SimulatedAdapter) and finish immediately.
+    const poTask = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "Define requirements" });
+    await executeTask(t.db, poTask.id);
+    const architectTask = createTask(t.db, { projectId: project.id, roleId: "solution-architect", title: "Design architecture" });
+    await executeTask(t.db, architectTask.id);
+    assert.equal(getTask(t.db, poTask.id)?.status, "DONE");
+    assert.equal(getTask(t.db, architectTask.id)?.status, "DONE");
+
+    const frontendTask = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+    await executeTask(t.db, frontendTask.id); // creates the real Claude approval
+    const approval = listApprovalsForProject(t.db, project.id)[0];
+    approveApproval(t.db, { approvalId: approval.id, decidedByUserId: owner.id });
+    delete process.env.ANTHROPIC_API_KEY; // matches the real incident: approved, but the runner process never loaded pricing/key config
+
+    // The real incident: the runner re-polls this task every cycle, and
+    // each cycle claims it, hits the (still unconfigured) Claude gate, and
+    // resets it to PENDING — repeated several times in a row in real life.
+    for (let i = 0; i < 5; i++) {
+      const result = await executeTask(t.db, frontendTask.id);
+      assert.equal(result.outcome, "claude-blocked");
+
+      // The actual bug report: progress must stay authoritative and
+      // stable across repeated reads while this cycle is happening —
+      // never regress from what's genuinely persisted.
+      const detail = getProjectDetail(t.db, project.id);
+      assert.equal(detail!.progress.completed, 2, `progress.completed must stay 2 on read #${i + 1}, never regress`);
+      assert.equal(detail!.tasks.find((tk) => tk.id === poTask.id)?.status, "DONE");
+      assert.equal(detail!.tasks.find((tk) => tk.id === architectTask.id)?.status, "DONE");
+
+      // Reading it again immediately must be identical — no drift between calls.
+      const detailAgain = getProjectDetail(t.db, project.id);
+      assert.equal(detailAgain!.progress.completed, detail!.progress.completed);
+    }
 
     t.close();
   });

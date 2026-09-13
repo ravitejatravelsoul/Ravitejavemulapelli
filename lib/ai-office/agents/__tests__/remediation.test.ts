@@ -10,6 +10,7 @@ import { createTask, createTaskWithDependencies, getTask, listTaskAttempts } fro
 import { listUnresolvedFailures } from "../../domain/project-outputs.ts";
 import { listEventsForProject } from "../../domain/events.ts";
 import { executeTask } from "../agent-runner.ts";
+import { getProjectDetail } from "../../dashboard/project-detail-data.ts";
 
 process.env.OFFICE_OWNER_EMAIL = "test-owner@example.invalid";
 process.env.OFFICE_OWNER_PASSWORD_HASH = "synthetic-test-salt:synthetic-test-hash-not-a-real-scrypt-output";
@@ -102,6 +103,29 @@ describe("Security Reviewer failure routes to the responsible development task",
     );
     assert.equal(invalidationEvents.length, 1);
     assert.equal(JSON.parse(invalidationEvents[0].payload).taskId, ctx.qaTask.id);
+
+    ctx.t.close();
+  });
+
+  test("the project detail page explains why a reopened task is queued again, instead of silently reducing progress (reliability fix)", async () => {
+    const ctx = setupProjectWithChain(createTestDb());
+    await runToSecurityAndCodeReview(ctx);
+    await executeTask(ctx.t.db, ctx.securityTask.id, { scenario: "failure" });
+
+    const detail = getProjectDetail(ctx.t.db, ctx.project.id);
+    assert.ok(detail);
+    const devTaskView = detail!.tasks.find((t) => t.id === ctx.devTask.id)!;
+    const qaTaskView = detail!.tasks.find((t) => t.id === ctx.qaTask.id)!;
+    const releaseTaskView = detail!.tasks.find((t) => t.id === ctx.releaseTask.id)!;
+
+    assert.match(devTaskView.reopenedNote!, /security reviewer/i, "names the role that actually requested the rework — the real remediation target");
+    // QA is reopened through a *different* mechanism (upstream-invalidation,
+    // "task.invalidated_by_upstream_change" — see the test above) rather
+    // than being a named remediation target of the Security failure itself,
+    // so it correctly gets no note from this lookup rather than a
+    // misattributed one.
+    assert.equal(qaTaskView.reopenedNote, null);
+    assert.equal(releaseTaskView.reopenedNote, null, "a task that was never attempted has nothing to explain");
 
     ctx.t.close();
   });

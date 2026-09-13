@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getAppDatabase } from "@/lib/ai-office/db/client";
 import { getProjectDetail } from "@/lib/ai-office/dashboard/project-detail-data";
-import { getPendingApprovalsView } from "@/lib/ai-office/dashboard/dashboard-data";
+import { getPendingApprovalsView, getRunnerActivityView } from "@/lib/ai-office/dashboard/dashboard-data";
 import { getOfficeFloorView } from "@/lib/ai-office/dashboard/office-floor-data";
 import { getPreviewStatusLabel } from "@/lib/ai-office/dashboard/delivery-status";
 import { signPreviewToken } from "@/lib/ai-office/auth/preview-token";
@@ -78,6 +78,17 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
   const pendingApprovalsForProject = getPendingApprovalsView(db).filter((a) => a.projectId === project.id);
   const waitingForOwnerApproval = pendingApprovalsForProject.length > 0;
 
+  // Real system-reliability fix (found during the first Claude LIVE pilot):
+  // a project can sit IN_PROGRESS with no pending approval while the
+  // standalone runner process simply isn't running — previously this page
+  // gave no indication of that at all, and just looked silently stuck. Only
+  // surfaced for a project that could otherwise still be making progress —
+  // never for one that's paused or already at a terminal state, where an
+  // offline runner is irrelevant.
+  const NON_ACTIVE_STATUSES = new Set(["PAUSED", "READY_FOR_REVIEW", "APPROVED", "FAILED", "ARCHIVED", "DRAFT"]);
+  const runnerActivity = getRunnerActivityView(db);
+  const runnerOfflineBlockingProgress = !NON_ACTIVE_STATUSES.has(project.status) && !waitingForOwnerApproval && runnerActivity.runnerStatus === "OFFLINE";
+
   const modelPolicy = project.provider === "ollama" ? getProjectModelPolicy(db, project.id) : null;
   const ollamaHealth = project.provider === "ollama" ? await checkOllamaHealth() : null;
   const routableRoles = AGENT_ROLE_CATALOG.filter((r) => r.id !== "orchestrator").map((r) => ({ id: r.id, name: r.name }));
@@ -125,6 +136,11 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
                   Waiting for your approval
                 </Badge>
               )}
+              {runnerOfflineBlockingProgress && (
+                <Badge variant="destructive" className="font-mono text-[0.6rem] uppercase">
+                  Runner offline
+                </Badge>
+              )}
             </div>
             <p className="mt-2 max-w-2xl text-sm text-muted-foreground">{ideaText}</p>
             <p className="mt-2 text-xs text-muted-foreground">
@@ -158,6 +174,9 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
               Work is paused — {pendingApprovalsForProject.length} decision{pendingApprovalsForProject.length === 1 ? "" : "s"} needed below before the
               runner can continue.
             </span>
+          )}
+          {runnerOfflineBlockingProgress && (
+            <span className="font-medium text-destructive">Runner offline — projects cannot progress. Start it with `npm run ai-office:runner`.</span>
           )}
         </div>
 

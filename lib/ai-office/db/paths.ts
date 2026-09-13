@@ -14,8 +14,21 @@ import { join } from "node:path";
  * `output: "standalone"` is not configured) — see the migration runner
  * for the same assumption applied to reading the migration SQL files.
  */
+/**
+ * `AI_OFFICE_DB_PATH` is a real, supported override — not test-only. The
+ * Next.js app and the standalone runner (`lib/ai-office/runner/start.ts`)
+ * are two separate OS processes; both resolve this the exact same way
+ * (`process.cwd()` when unset), so they only ever diverge onto different
+ * files if started from two different working directories — a real
+ * failure mode investigated and ruled out for the first Claude LIVE pilot
+ * (both processes were confirmed, via their actual running PIDs, to
+ * resolve the identical absolute path). This override exists so a
+ * permanent e2e test (lib/ai-office/e2e/__tests__/office-navigation.e2e.ts)
+ * can point a real spawned `next dev`/runner pair at a disposable
+ * database instead of ever touching a real `.data/office.db`.
+ */
 export function getDefaultDbPath(): string {
-  return join(process.cwd(), ".data", "office.db");
+  return process.env.AI_OFFICE_DB_PATH || join(process.cwd(), ".data", "office.db");
 }
 
 export function getMigrationsDir(): string {

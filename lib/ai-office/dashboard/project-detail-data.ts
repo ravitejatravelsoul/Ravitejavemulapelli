@@ -61,6 +61,8 @@ export interface TaskDetailView {
   dependsOnTaskIds: string[];
   attempts: TaskAttemptView[];
   testResults: TestResultRow[];
+  /** Human-readable explanation for why an already-attempted task is queued again (e.g. "QA requested rework — reopened for another attempt.") — `null` for a fresh task or one with no identifiable remediation cause. */
+  reopenedNote: string | null;
 }
 
 export interface ArtifactPreview {
@@ -340,7 +342,41 @@ function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
-function buildTaskDetail(db: DatabaseSync, task: TaskRow): TaskDetailView {
+/**
+ * Real system-reliability fix (found during the first Claude LIVE pilot):
+ * a task's status can genuinely move DONE-adjacent work back to PENDING
+ * when a downstream review (QA, Code Review) fails and names it as a
+ * remediation target (`agent_run.failed`'s `remediationTargetTaskIds` —
+ * see agent-runner.ts) — this is intentional, existing behavior, not a
+ * bug. Previously nothing on this page ever explained *why* a task that
+ * looked finished was queued again, which is exactly what made a real
+ * (unrelated) progress-display bug look even more alarming: silently
+ * reduced progress with zero explanation. Built once from the project's
+ * own real event log — never a guess, and empty for a project (like this
+ * one) where no remediation has ever actually happened.
+ */
+function buildRemediationReasonMap(db: DatabaseSync, events: { type: string; payload: string; actor: string }[]): Map<string, string> {
+  const reasons = new Map<string, string>();
+  for (const event of events) {
+    if (event.type !== "agent_run.failed") continue;
+    let payload: { roleId?: string; remediationTargetTaskIds?: string[] };
+    try {
+      payload = JSON.parse(event.payload) as typeof payload;
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(payload.remediationTargetTaskIds)) continue;
+    const failingRole = payload.roleId ? getAgentRole(db, payload.roleId) : undefined;
+    const failingRoleName = failingRole?.name ?? payload.roleId ?? "A downstream review";
+    for (const taskId of payload.remediationTargetTaskIds) {
+      // Later failures overwrite earlier ones — the most recent reason is the relevant one.
+      reasons.set(taskId, `${failingRoleName} requested rework — reopened for another attempt.`);
+    }
+  }
+  return reasons;
+}
+
+function buildTaskDetail(db: DatabaseSync, task: TaskRow, reopenedNote: string | null): TaskDetailView {
   const role = getAgentRole(db, task.roleId);
   const deps = listTaskDependencies(db, task.id).map((d) => d.dependsOnTaskId);
   const attempts = listTaskAttempts(db, task.id).map((attempt) => {
@@ -364,6 +400,9 @@ function buildTaskDetail(db: DatabaseSync, task: TaskRow): TaskDetailView {
     dependsOnTaskIds: deps,
     attempts,
     testResults: listTestResultsForTask(db, task.id),
+    // Only meaningful for a task that's been attempted before but isn't
+    // DONE — a fresh, never-attempted PENDING task has nothing to explain.
+    reopenedNote: task.attemptCount > 0 && task.status !== "DONE" ? reopenedNote : null,
   };
 }
 
@@ -372,11 +411,13 @@ export function getProjectDetail(db: DatabaseSync, projectId: string): ProjectDe
   if (!project) return undefined;
 
   const idea = getProjectIdea(db, projectId);
+  const projectEvents = listEventsForProject(db, projectId);
+  const remediationReasonByTaskId = buildRemediationReasonMap(db, projectEvents);
   const rawTasks = listTasksForProject(db, projectId);
-  const tasks = rawTasks.map((task) => buildTaskDetail(db, task));
+  const tasks = rawTasks.map((task) => buildTaskDetail(db, task, remediationReasonByTaskId.get(task.id) ?? null));
   const memory = getProjectMemory(db, projectId);
   const artifacts = listArtifactsForProject(db, projectId).map((artifact) => summarizeArtifact(artifact));
-  const events = listEventsForProject(db, projectId).map((event) => ({
+  const events = projectEvents.map((event) => ({
     id: event.id,
     occurredAt: event.occurredAt,
     projectId: event.projectId,
