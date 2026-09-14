@@ -8,7 +8,10 @@ export default async function robots(): Promise<MetadataRoute.Robots> {
     rules: {
       userAgent: "*",
       allow: "/",
-      disallow: ["/api/"],
+      // /office/** is the private, authenticated AI Office workspace — kept
+      // out of crawlable discovery. Authentication (not this rule) is the
+      // real access boundary; see docs/ai-office/08-security-plan.md.
+      disallow: ["/api/", "/office/"],
     },
     sitemap: `${site.seo.url}/sitemap.xml`,
   };

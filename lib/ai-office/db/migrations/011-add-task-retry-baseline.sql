@@ -1,0 +1,28 @@
+-- Retry-an-escalated-task capability — purely additive, same proven
+-- pattern as migrations 009/010 (plain ADD COLUMN, no CHECK widening,
+-- no table rebuild).
+--
+-- A real defect found during the first genuine Claude LIVE pilot when
+-- this column didn't exist yet: `retryEscalatedTask` originally reset
+-- `tasks.attemptCount` to 0 to grant a fresh retry-ceiling window. But
+-- `task_attempts.attemptNumber` is derived from `attemptCount + 1` and
+-- is UNIQUE per (taskId, attemptNumber) — and prior attempts (1..N from
+-- before the task escalated) are NEVER deleted, by explicit design
+-- ("never touch task_attempts/failures/messages_events" — full history
+-- preserved). Resetting attemptCount to 0 therefore guaranteed the very
+-- next `createTaskAttempt` call would try to reuse attemptNumber 1,
+-- colliding with the real, already-existing attempt 1 row — an
+-- immediate `UNIQUE constraint failed: task_attempts.taskId,
+-- task_attempts.attemptNumber` on every reclaim, forever (each crash
+-- orphaning the task in IN_PROGRESS for a full lease period before the
+-- next crash-recovery sweep retried the exact same broken reclaim).
+--
+-- Fixed by decoupling "next attempt number" (attemptCount — must always
+-- increase, never reset) from "how many attempts count toward this
+-- retry window" (the new retryBaselineAttemptCount below). A retry sets
+-- retryBaselineAttemptCount to the task's attemptCount *at the moment
+-- of retry*, and agent-runner.ts's ceiling check becomes
+-- `(attempt.attemptNumber - (task.retryBaselineAttemptCount ?? 0)) >
+-- role.maxRetries` — a genuinely fresh window, with attemptNumber
+-- allocation never touching already-used history.
+ALTER TABLE tasks ADD COLUMN retryBaselineAttemptCount INTEGER;

@@ -13,6 +13,8 @@ const staticRoutes = [
   "/travel",
   "/blog",
   "/contact",
+  // /office/** is intentionally excluded — private, authenticated workspace.
+  "/ai-office",
 ];
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {

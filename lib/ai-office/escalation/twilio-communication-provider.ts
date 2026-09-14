@@ -1,0 +1,104 @@
+import "server-only";
+import { createHmac } from "node:crypto";
+import type { CommunicationProvider, SendSmsResult, PlaceCallResult, InboundResponse, InboundCallResponse } from "./communication-provider.ts";
+
+/**
+ * A real (if minimal) Twilio REST implementation — plain `fetch` against
+ * Twilio's documented HTTP API rather than adding the `twilio` SDK as a
+ * dependency for a provider this phase never actually invokes (Section
+ * G/H: "Do NOT hardwire business logic to one vendor" + "Do not require
+ * a real telephony account to complete this phase"). Selecting this
+ * provider requires an explicit `COMMUNICATION_PROVIDER=twilio` — see
+ * `provider-factory.ts`, which defaults to the mock provider otherwise
+ * even if Twilio credentials happen to be present in the environment.
+ */
+interface TwilioConfig {
+  accountSid: string;
+  authToken: string;
+  fromNumber: string;
+  /** The public base URL Twilio should call back for call-response TwiML — required only for `placeCall`. */
+  publicBaseUrl?: string;
+}
+
+export class TwilioCommunicationProvider implements CommunicationProvider {
+  readonly name = "twilio";
+  private readonly config: TwilioConfig;
+
+  constructor(config: TwilioConfig) {
+    this.config = config;
+  }
+
+  private authHeader(): string {
+    return `Basic ${Buffer.from(`${this.config.accountSid}:${this.config.authToken}`).toString("base64")}`;
+  }
+
+  async sendSms(to: string, body: string): Promise<SendSmsResult> {
+    const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${this.config.accountSid}/Messages.json`, {
+      method: "POST",
+      headers: { Authorization: this.authHeader(), "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ To: to, From: this.config.fromNumber, Body: body }),
+    });
+    if (!res.ok) throw new Error(`Twilio sendSms failed: HTTP ${res.status}`);
+    const data = (await res.json()) as { sid: string };
+    return { providerMessageId: data.sid };
+  }
+
+  async placeCall(to: string, voiceMessage: string, callbackToken: string): Promise<PlaceCallResult> {
+    // Requiring a real public base URL here (rather than defaulting to
+    // "") is deliberate: a call placed with a broken callback URL would
+    // let the owner press 1/2/3 with no way to ever act on it — far
+    // worse than simply not placing the call. `placeCallForEscalation`
+    // in the escalation service already catches any `placeCall` failure
+    // and falls back to SMS, so throwing here degrades gracefully.
+    if (!this.config.publicBaseUrl) throw new Error("OFFICE_PUBLIC_BASE_URL must be configured to place a real call.");
+    const callbackUrl = `${this.config.publicBaseUrl}/api/escalation/inbound-call-response?token=${encodeURIComponent(callbackToken)}`;
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Gather numDigits="1" action="${escapeXmlAttr(callbackUrl)}" method="POST"><Say>${escapeXml(voiceMessage)}</Say></Gather><Say>No response received. Goodbye.</Say></Response>`;
+    const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${this.config.accountSid}/Calls.json`, {
+      method: "POST",
+      headers: { Authorization: this.authHeader(), "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ To: to, From: this.config.fromNumber, Twiml: twiml }),
+    });
+    if (!res.ok) throw new Error(`Twilio placeCall failed: HTTP ${res.status}`);
+    const data = (await res.json()) as { sid: string };
+    return { providerCallId: data.sid };
+  }
+
+  /** Twilio's documented request-signing scheme: HMAC-SHA1(authToken, url + sorted-concatenated-POST-params), base64, compared to X-Twilio-Signature. */
+  verifyInboundRequest(input: { headers: Headers; url: string; rawBody: string }): boolean {
+    const signature = input.headers.get("x-twilio-signature");
+    if (!signature) return false;
+    const params = new URLSearchParams(input.rawBody);
+    const sortedKeys = Array.from(params.keys()).sort();
+    let data = input.url;
+    for (const key of sortedKeys) data += key + params.get(key);
+    const expected = createHmac("sha1", this.config.authToken).update(data, "utf8").digest("base64");
+    return timingSafeEqualString(expected, signature);
+  }
+
+  /** Inbound SMS only — call DTMF now arrives at a dedicated route/token and is parsed by `parseInboundCallResponse` instead (Defect 1: the two channels carry very different trust models and must not share a parser). */
+  parseInboundResponse(rawBody: string): InboundResponse {
+    const params = new URLSearchParams(rawBody);
+    return { from: params.get("From") ?? "unknown", body: (params.get("Body") ?? "").trim() };
+  }
+
+  parseInboundCallResponse(rawBody: string): InboundCallResponse {
+    const params = new URLSearchParams(rawBody);
+    return { from: params.get("From") ?? "unknown", to: params.get("To") ?? "unknown", digit: params.get("Digits") };
+  }
+}
+
+function escapeXml(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/** Same escaping as `escapeXml` plus single-quote, since this text is interpolated into a double-quoted XML attribute that itself sits inside a template literal — a callback token could in principle contain characters needing both. */
+function escapeXmlAttr(text: string): string {
+  return escapeXml(text).replace(/'/g, "&apos;");
+}
+
+function timingSafeEqualString(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < a.length; i++) mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return mismatch === 0;
+}

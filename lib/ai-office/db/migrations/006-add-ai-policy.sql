@@ -1,0 +1,13 @@
+-- Controlled Claude LIVE pilot — per-project AI policy (LOCAL_ONLY /
+-- HYBRID / CLAUDE_ONLY). Purely additive, matching migrations
+-- 003/004/005's proven-safe pattern: a plain ADD COLUMN (no CHECK
+-- constraint — validated in application code instead, for the same
+-- reason documented in migration 005) rather than widening any
+-- existing CHECK constraint, which requires SQLite's create-copy-drop-
+-- rename table rebuild and fails inside this app's transaction-wrapped
+-- migration runner. 001-005 are untouched.
+--
+-- Deliberately defaults to 'LOCAL_ONLY' — adding Claude support must
+-- never change the default behavior of any existing or future project
+-- that doesn't explicitly opt in.
+ALTER TABLE projects ADD COLUMN aiPolicyMode TEXT NOT NULL DEFAULT 'LOCAL_ONLY';

@@ -21,6 +21,7 @@ downloads/
 
 # next.js
 /.next/
+/.next-e2e/
 /out/
 /dist/
 
@@ -35,7 +36,19 @@ Thumbs.db
 *.crt
 *.p12
 *.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite-journal
 *.db
+*.db-shm
+*.db-wal
+*.db-journal
+
+# AI Office local SQLite database (lib/ai-office/db/paths.ts) — the *.db
+# pattern above already covers the main file; this directory entry is
+# belt-and-suspenders in case the DB path or its sidecar files ever
+# change shape.
+/.data/
 
 # debug / logs
 npm-debug.log*

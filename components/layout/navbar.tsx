@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Menu, ArrowUpRight, ChevronDown } from "lucide-react";
+import { Menu, ArrowUpRight, ChevronDown, Sparkles } from "lucide-react";
 import { motion } from "motion/react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -31,6 +31,13 @@ const primaryLinks = [
   { label: "Projects", href: "/projects" },
   { label: "Writing", href: "/blog" },
 ];
+
+// Kept out of `primaryLinks`/`menuGroups` — it renders with its own
+// distinct icon treatment (see the desktop/mobile markup below) rather
+// than the plain-text underline pattern the rest of the nav uses, since
+// it points at a different kind of destination (a private workspace, not
+// a content page).
+const aiOfficeLink = { label: "AI Office", href: "/ai-office" };
 
 // Reachable on desktop via the "More" dropdown rather than a full top-level
 // slot each — kept out of `primaryLinks` so the main nav row stays compact.
@@ -166,6 +173,17 @@ export function Navbar() {
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
+
+          <Link
+            href={aiOfficeLink.href}
+            className={cn(
+              "flex items-center gap-1.5 rounded-full border border-primary/30 bg-primary/5 py-1 pr-3 pl-2.5 text-sm font-medium transition-colors hover:border-primary/50 hover:bg-primary/10 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring",
+              pathname === aiOfficeLink.href ? "text-foreground" : "text-primary",
+            )}
+          >
+            <Sparkles className="size-3.5" />
+            {aiOfficeLink.label}
+          </Link>
         </div>
 
         <div className="flex items-center gap-2">
@@ -189,6 +207,17 @@ export function Navbar() {
               </SheetHeader>
               {menuOpen ? (
                 <StaggerContainer eager stagger={0.06} className="flex flex-col gap-8 px-6 pb-8">
+                  <StaggerItem>
+                    <SheetClose asChild>
+                      <Link
+                        href={aiOfficeLink.href}
+                        className="flex items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2.5 text-base font-medium text-primary transition-colors hover:bg-primary/10"
+                      >
+                        <Sparkles className="size-4" />
+                        {aiOfficeLink.label}
+                      </Link>
+                    </SheetClose>
+                  </StaggerItem>
                   {menuGroups.map((group) => (
                     <StaggerItem key={group.label}>
                       <p className="mb-3 text-xs font-medium tracking-wide text-muted-foreground uppercase">

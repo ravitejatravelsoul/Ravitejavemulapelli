@@ -555,6 +555,117 @@
   .fog-drift {
     animation: fog-drift 46s ease-in-out infinite;
   }
+
+  /* Office-floor agent animations (Teja's AI Office) — three small additions
+     to the vocabulary above, reused across every workstation status. */
+  @keyframes typing-bounce {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-1.5px);
+    }
+  }
+  @keyframes scan-sweep {
+    0% {
+      transform: translateY(-40%);
+      opacity: 0;
+    }
+    15%,
+    85% {
+      opacity: 1;
+    }
+    100% {
+      transform: translateY(140%);
+      opacity: 0;
+    }
+  }
+  /* One-shot (not infinite) — a brief "just finished" pulse, not an ambient loop. */
+  @keyframes done-pulse {
+    0% {
+      transform: scale(1);
+      box-shadow: 0 0 0 color-mix(in oklch, oklch(0.7 0.17 150) 0%, transparent);
+    }
+    40% {
+      transform: scale(1.12);
+      box-shadow: 0 0 16px color-mix(in oklch, oklch(0.7 0.17 150) 60%, transparent);
+    }
+    100% {
+      transform: scale(1);
+      box-shadow: 0 0 0 color-mix(in oklch, oklch(0.7 0.17 150) 0%, transparent);
+    }
+  }
+
+  /* Opacity-only pulse so the glow's *color* can come from each workstation's
+     own --role-accent custom property instead of being baked into the
+     keyframe (unlike glow-pulse above, which hardcodes --primary). */
+  @keyframes accent-glow-pulse {
+    0%,
+    100% {
+      opacity: 0.45;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+  /* A small dot traveling along a department connector — only shown while
+     that connector is real (driven by actual in-progress work), never a
+     permanent decoration. */
+  @keyframes flow-dot {
+    0% {
+      transform: translateY(-8px);
+      opacity: 0;
+    }
+    20%,
+    80% {
+      opacity: 1;
+    }
+    100% {
+      transform: translateY(8px);
+      opacity: 0;
+    }
+  }
+
+  .animate-typing-bounce {
+    animation: typing-bounce 0.6s ease-in-out infinite;
+  }
+  .animate-scan-sweep {
+    animation: scan-sweep 2.4s ease-in-out infinite;
+  }
+  .animate-done-pulse {
+    animation: done-pulse 1.4s ease-out 1;
+  }
+  .animate-accent-glow-pulse {
+    animation: accent-glow-pulse 2.6s ease-in-out infinite;
+  }
+  .animate-flow-dot {
+    animation: flow-dot 1.6s ease-in-out infinite;
+  }
+  /* "Marching ants" for a real, recent office-image hand-off connector. */
+  @keyframes handoff-dash {
+    to {
+      stroke-dashoffset: -28;
+    }
+  }
+  .animate-handoff-dash {
+    animation: handoff-dash 1.1s linear infinite;
+  }
+  /* The Agent Workspace's entrance — a premium but lightweight fade + rise,
+     never a heavy library. Respects the blanket reduced-motion rule above. */
+  @keyframes workspace-enter {
+    from {
+      opacity: 0;
+      transform: translateY(14px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  .animate-workspace-enter {
+    animation: workspace-enter 0.45s ease-out;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

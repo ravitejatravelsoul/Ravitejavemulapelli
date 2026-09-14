@@ -1,0 +1,22 @@
+-- Superseded/stale failure records.
+--
+-- Real incident this closes: TaskFlow's backend-developer accumulated a
+-- real "index.html" does not exist QA-gate failure from BEFORE the
+-- generic QA-hardcoded-index.html-assumption bug was fixed (see
+-- agent-runner.ts's qa-agent gate docblock). That failure was never
+-- "resolved" in the normal sense (no successful retry ever addressed
+-- it — the platform code that produced it was simply fixed instead),
+-- so it stayed `resolved = 0` forever and kept polluting the semantic
+-- failure signature computed for that task, even though it no longer
+-- reflects anything a repair could or should act on.
+--
+-- `resolved` keeps its existing meaning unchanged (a later real retry
+-- succeeded and cleared the specific problem it reported) — this adds a
+-- SEPARATE, additive concept: a failure can be marked superseded when
+-- the underlying PLATFORM defect that produced it has been fixed,
+-- independent of whether that exact task was ever retried. The failure
+-- row itself is never deleted or edited elsewhere — full history and
+-- audit trail preserved, exactly like every other real/historical
+-- record in this schema.
+ALTER TABLE failures ADD COLUMN supersededAt INTEGER;
+ALTER TABLE failures ADD COLUMN supersededReason TEXT;
