@@ -24,7 +24,7 @@ describe("clean DB creation + migrations from zero", () => {
     const db = openDatabase(join(dir, "fresh.db"));
 
     const result = runMigrations(db);
-    assert.equal(result.version, 12);
+    assert.equal(result.version, 13);
     assert.deepEqual(result.applied, [
       "001-init.sql",
       "002-budget-and-approval-scope.sql",
@@ -38,8 +38,9 @@ describe("clean DB creation + migrations from zero", () => {
       "010-add-approval-revocation.sql",
       "011-add-task-retry-baseline.sql",
       "012-add-office-engineer.sql",
+      "013-add-semantic-repair.sql",
     ]);
-    assert.equal(getSchemaVersion(db), 12);
+    assert.equal(getSchemaVersion(db), 13);
 
     const tableCount = db
       .prepare("SELECT COUNT(*) as count FROM sqlite_master WHERE type = 'table' AND name != 'sqlite_sequence'")
@@ -56,11 +57,11 @@ describe("migrations are idempotent / safe to run repeatedly", () => {
     const t = createTestDb({ seed: false });
     const first = runMigrations(t.db); // no-op, createTestDb already migrated
     assert.deepEqual(first.applied, []);
-    assert.equal(first.version, 12);
+    assert.equal(first.version, 13);
 
     const second = runMigrations(t.db);
     assert.deepEqual(second.applied, []);
-    assert.equal(second.version, 12);
+    assert.equal(second.version, 13);
     t.close();
   });
 });
@@ -87,6 +88,7 @@ describe("schema version is inspectable", () => {
       { version: 10, name: "010-add-approval-revocation.sql" },
       { version: 11, name: "011-add-task-retry-baseline.sql" },
       { version: 12, name: "012-add-office-engineer.sql" },
+      { version: 13, name: "013-add-semantic-repair.sql" },
     ]);
     t.close();
   });
@@ -135,8 +137,9 @@ describe("migrations 002+003+004+005 apply cleanly on top of an existing v1 data
       "010-add-approval-revocation.sql",
       "011-add-task-retry-baseline.sql",
       "012-add-office-engineer.sql",
+      "013-add-semantic-repair.sql",
     ]);
-    assert.equal(getSchemaVersion(db), 12);
+    assert.equal(getSchemaVersion(db), 13);
 
     // The pre-existing rows survive, unmodified except for the new
     // columns now existing (and being NULL, since this data predates
@@ -220,6 +223,18 @@ describe("migrations 002+003+004+005 apply cleanly on top of an existing v1 data
     const usage = db.prepare("SELECT * FROM ai_usage WHERE id = 'u1'").get() as { cacheCreationInputTokens: number; cacheReadInputTokens: number };
     assert.equal(usage.cacheCreationInputTokens, 20);
     assert.equal(usage.cacheReadInputTokens, 80);
+
+    // Migration 013's new table is fully usable afterward too.
+    db.prepare(
+      "INSERT INTO office_incidents (id, status, symptom, projectId, taskId, diagnosis, detectedAt, updatedAt) VALUES ('i1','INVESTIGATING','semantic-repair-required','p1','t1','diag',?,?)",
+    ).run(now, now);
+    db.prepare(
+      `INSERT INTO semantic_repair_plans
+         (id, incidentId, projectId, taskId, roleId, failureSignature, classification, rootCause, authoritativeContract,
+          affectedFiles, requiredChanges, mustPreserve, verification, status, createdAt, updatedAt)
+       VALUES ('sp1','i1','p1','t1','frontend-developer','SIG','IMPLEMENTATION_WRONG','root','contract','[]','[]','[]','[]','PROPOSED',?,?)`,
+    ).run(now, now);
+    assert.ok(db.prepare("SELECT * FROM semantic_repair_plans WHERE id = 'sp1'").get());
 
     db.close();
     rmSync(dir, { recursive: true, force: true });
@@ -372,7 +387,7 @@ describe("DB survives reopen/reconnect", () => {
     t.db.close();
 
     const reopened = reopenTestDb(dir);
-    assert.equal(getSchemaVersion(reopened), 12);
+    assert.equal(getSchemaVersion(reopened), 13);
     const roles = reopened.prepare("SELECT COUNT(*) as count FROM agent_roles").get() as { count: number };
     assert.equal(roles.count, AGENT_ROLE_CATALOG.length);
     reopened.close();

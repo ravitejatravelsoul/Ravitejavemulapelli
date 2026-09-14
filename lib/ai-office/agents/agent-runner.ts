@@ -408,6 +408,23 @@ export interface ExecuteTaskOptions {
   availableModelsOverride?: string[];
   /** Test-injection point for the real OllamaAdapter's own HTTP call when executeTask constructs it internally via LocalModelRouter (separate from `intentCheckFetch`, which only covers the intent-consistency gates' own call). Real (non-test) runner operation never sets this; ignored when `options.provider` is already given. */
   ollamaFetchImpl?: typeof fetch;
+  /**
+   * Office Engineer's semantic-repair capability (see
+   * lib/ai-office/engineer/semantic-repair-execution.ts) uses this to
+   * substitute a small, hand-curated context — the authoritative
+   * request, the relevant architecture section, only the directly
+   * affected files, and the exact rejection being repaired — for the
+   * normal per-role `buildTaskContext()` output, so a repair call never
+   * sends the whole project. Deliberately the ONLY difference from a
+   * normal attempt: every gate below this point (approval, LIVE budget,
+   * context-budget optimization, provider routing, retry-drift
+   * intent-consistency, fileOperations application, ai_usage/audit
+   * recording, the real retry-ceiling accounting) runs completely
+   * unchanged — a repair is executed as literally "another attempt at
+   * this task," never a separate, weaker, or privileged paid path.
+   * Real (non-test, non-repair) runner operation never sets this.
+   */
+  contextOverride?: import("../providers/types.ts").TaskContext;
   /** Test-injection point for the real ClaudeAdapter's own Anthropic client when executeTask constructs it internally via the controlled Claude LIVE pilot's provider-routing/approval/budget gate (separate from `options.provider`, which bypasses that gate entirely). Real (non-test) runner operation never sets this; ignored when `options.provider` is already given. Still requires `isClaudeConfigured()` to hold (a real or test `ANTHROPIC_API_KEY`/pricing configuration) — this only replaces the HTTP client, never the configuration check itself. */
   claudeClientOverride?: import("../providers/claude/claude-adapter.ts").ClaudeAdapterOptions["client"];
 }
@@ -732,7 +749,7 @@ export async function executeTask(
   // actionable" outcome (no owner decision yet, no budget, no
   // credential) must never consume this task's real retry ceiling.
   const predictedAttemptNumber = task.attemptCount + 1;
-  const context = await buildTaskContext(db, task, role, { scenario: options.scenario, attemptNumber: predictedAttemptNumber });
+  const context = options.contextOverride ?? (await buildTaskContext(db, task, role, { scenario: options.scenario, attemptNumber: predictedAttemptNumber }));
 
   let claudeCall: PreparedClaudeCall | null = null;
   if (!options.provider) {

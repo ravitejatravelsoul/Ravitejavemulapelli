@@ -4,8 +4,12 @@ import { computeOfficeHealthStatus } from "@/lib/ai-office/engineer/office-engin
 import { listRecentIncidents } from "@/lib/ai-office/domain/office-incidents";
 import { getProject } from "@/lib/ai-office/domain/projects";
 import { getTask } from "@/lib/ai-office/domain/tasks";
+import { listSemanticRepairPlansForTask, type SemanticRepairPlanRow } from "@/lib/ai-office/domain/semantic-repair";
+import { SYMPTOM_SEMANTIC_REPAIR_REQUIRED } from "@/lib/ai-office/engineer/semantic-repair-execution";
 import { GlassCard } from "@/components/common/glass-card";
 import { Badge } from "@/components/ui/badge";
+import { ActionButton } from "@/components/ai-office/action-button";
+import { approveSemanticRepairAction, rejectSemanticRepairAction, executeSemanticRepairAction } from "@/app/office/actions/semantic-repair";
 
 export const metadata: Metadata = { title: "Office Engineer" };
 
@@ -19,6 +23,109 @@ const STATUS_COPY: Record<string, { label: string; variant: "default" | "seconda
 
 function formatDate(ms: number): string {
   return new Date(ms).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+/** Maps a semantic_repair_plans.status onto the UI wording the semantic-repair follow-up asked for — see semantic-repair.ts's SemanticRepairStatus docblock for what each persisted status actually means. */
+const PLAN_STATUS_LABEL: Record<SemanticRepairPlanRow["status"], string> = {
+  PROPOSED: "WAITING FOR APPROVAL",
+  APPROVED: "APPROVED — QUEUED FOR REPAIR",
+  REJECTED: "REJECTED",
+  REPAIRING: "REPAIRING",
+  APPLIED: "VERIFYING",
+  VERIFIED: "RESOLVED",
+  ESCALATED: "ESCALATED",
+};
+
+function SemanticRepairPlanCard({ plan }: { plan: SemanticRepairPlanRow }) {
+  return (
+    <div className="mt-3 rounded-lg border border-border/40 bg-muted/20 p-3 text-xs">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant="outline" className="font-mono text-[0.6rem] uppercase">
+          {plan.classification.replace(/_/g, " ")}
+        </Badge>
+        <span className="font-mono text-[0.65rem] uppercase text-muted-foreground">{PLAN_STATUS_LABEL[plan.status]}</span>
+      </div>
+      <p className="mt-2">
+        <span className="text-muted-foreground">Root cause: </span>
+        {plan.rootCause}
+      </p>
+      <p className="mt-1">
+        <span className="text-muted-foreground">Authoritative contract: </span>
+        {plan.authoritativeContract}
+      </p>
+      {plan.affectedFiles.length > 0 && (
+        <p className="mt-1">
+          <span className="text-muted-foreground">Affected files: </span>
+          {plan.affectedFiles.join(", ")}
+        </p>
+      )}
+      {plan.requiredChanges.length > 0 && (
+        <div className="mt-1">
+          <span className="text-muted-foreground">Required changes:</span>
+          <ul className="ml-4 list-disc">
+            {plan.requiredChanges.map((c, i) => (
+              <li key={i}>{c}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {plan.mustPreserve.length > 0 && (
+        <div className="mt-1">
+          <span className="text-muted-foreground">Must preserve:</span>
+          <ul className="ml-4 list-disc">
+            {plan.mustPreserve.map((c, i) => (
+              <li key={i}>{c}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      <p className="mt-1">
+        <span className="text-muted-foreground">Estimated repair cost: </span>
+        {plan.estimatedRepairCostUsd != null ? `$${plan.estimatedRepairCostUsd.toFixed(4)}` : "(not available — Claude not configured)"}
+        {plan.actualRepairCostUsd != null && ` · actual: $${plan.actualRepairCostUsd.toFixed(4)}`}
+        {plan.repairProvider && ` · provider: ${plan.repairProvider}`}
+      </p>
+      {plan.repairResult && (
+        <p className="mt-1">
+          <span className="text-muted-foreground">Result: </span>
+          {plan.repairResult}
+        </p>
+      )}
+      {plan.status === "PROPOSED" && plan.classification === "IMPLEMENTATION_WRONG" && (
+        <div className="mt-3 flex gap-2">
+          <ActionButton
+            action={approveSemanticRepairAction.bind(null, plan.id)}
+            size="sm"
+            successMessage="Approved."
+            confirmMessage="Approve this repair plan? This does not yet spend anything — a subsequent explicit 'Run repair' still goes through the normal paid-AI approval/budget gate."
+          >
+            Approve plan
+          </ActionButton>
+          <ActionButton
+            action={rejectSemanticRepairAction.bind(null, plan.id)}
+            variant="outline"
+            size="sm"
+            successMessage="Rejected."
+            confirmMessage="Reject this repair plan? The task will stay escalated for manual attention."
+          >
+            Reject plan
+          </ActionButton>
+        </div>
+      )}
+      {plan.status === "APPROVED" && (
+        <div className="mt-3">
+          <ActionButton
+            action={executeSemanticRepairAction.bind(null, plan.id)}
+            size="sm"
+            successMessage="Repair attempt complete — see the updated result above."
+            confirmMessage={`Run the one bounded repair attempt now? ${plan.estimatedRepairCostUsd != null ? `Estimated cost: $${plan.estimatedRepairCostUsd.toFixed(4)}.` : "This may incur a real paid AI cost."} This will not be retried automatically if it fails.`}
+          >
+            Run repair
+          </ActionButton>
+        </div>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -89,6 +196,11 @@ export default async function OfficeEngineerPage() {
                       {incident.retryResult}
                     </p>
                   )}
+                  {incident.symptom === SYMPTOM_SEMANTIC_REPAIR_REQUIRED &&
+                    incident.taskId &&
+                    listSemanticRepairPlansForTask(db, incident.taskId)
+                      .filter((p) => p.incidentId === incident.id)
+                      .map((plan) => <SemanticRepairPlanCard key={plan.id} plan={plan} />)}
                 </li>
               );
             })}

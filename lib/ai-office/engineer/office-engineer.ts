@@ -14,6 +14,7 @@ import {
   type OfficeIncidentStatus,
 } from "../domain/office-incidents.ts";
 import { recordEvent, recordAuditEntry } from "../domain/events.ts";
+import { proposeSemanticRepair } from "./semantic-repair-execution.ts";
 
 /**
  * Office Engineer — Teja's AI Office's own self-healing maintenance
@@ -144,6 +145,35 @@ export function runOfficeEngineerCycle(db: DatabaseSync, actorId = "office-engin
   }
 
   return { incidentsCreated, repaired, escalated };
+}
+
+/**
+ * Semantic-repair follow-up — detection + classification + plan-building
+ * only (see semantic-repair-execution.ts). Deliberately separate from
+ * `runOfficeEngineerCycle`'s operational-repair loop above and its
+ * `listProjects(db, { status: "BLOCKED" })` scope: a semantic failure
+ * loop can be visible well before a task actually reaches BLOCKED (e.g.
+ * TaskFlow's real incident — the task stayed PENDING/IN_PROGRESS between
+ * rejected corrective attempts), so this scans every non-DONE task in
+ * every project. Never calls AI, never touches a task's status, never
+ * spends budget — it only ever creates an incident + a PROPOSED repair
+ * plan (or, for OWNER_CLARIFICATION_REQUIRED/BOTH_INCONSISTENT, an
+ * immediately-ESCALATED one) documenting what it found. The actual
+ * repair requires a separate, explicit owner approval — see
+ * approveSemanticRepairPlan/executeApprovedSemanticRepair.
+ */
+export async function runSemanticRepairDetectionCycle(db: DatabaseSync, actorId = "office-engineer"): Promise<{ proposed: number; escalated: number }> {
+  let proposed = 0;
+  let escalated = 0;
+  for (const project of listProjects(db)) {
+    for (const task of listTasksForProject(db, project.id)) {
+      if (task.status === "DONE") continue;
+      const result = await proposeSemanticRepair(db, task.id, actorId);
+      if (result.status === "proposed") proposed += 1;
+      if (result.status === "escalated-needs-owner") escalated += 1;
+    }
+  }
+  return { proposed, escalated };
 }
 
 /**
