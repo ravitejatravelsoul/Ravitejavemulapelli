@@ -164,3 +164,93 @@ describe("executeConfirmedAction — only ever calls the real existing services"
     t.close();
   });
 });
+
+describe("executeConfirmedAction — respects the V1 limited-production operational-mode guard", () => {
+  const ORIGINAL_ENV = { ...process.env };
+  const disableOperationalMode = () => {
+    process.env.AI_OFFICE_OPERATIONAL_MODE = "disabled";
+  };
+  const restoreEnv = () => {
+    process.env = { ...ORIGINAL_ENV };
+  };
+
+  test("APPROVE (state-increasing) is blocked when operational mode is disabled — the approval itself is left untouched", () => {
+    const t = createTestDb();
+    const owner = getOwner(t.db)!;
+    const { project } = createProjectWithIdea(t.db, { title: "P", rawIdeaText: "x", ownerId: owner.id });
+    const approval = createApproval(t.db, { projectId: project.id, kind: "paid_service_purchase", requestedBy: "system", context: {} });
+
+    disableOperationalMode();
+    try {
+      const result = executeConfirmedAction(t.db, owner.id, { kind: "APPROVE", label: "Approve", approvalId: approval.id });
+      assert.match(result.message, /disabled/i);
+      assert.equal(getApproval(t.db, approval.id)!.status, "PENDING", "a blocked APPROVE must never actually decide the approval");
+    } finally {
+      restoreEnv();
+      t.close();
+    }
+  });
+
+  test("RESUME_PROJECT (state-increasing) is blocked when operational mode is disabled", () => {
+    const t = createTestDb();
+    const owner = getOwner(t.db)!;
+    const { project } = createProjectWithIdea(t.db, { title: "P", rawIdeaText: "x", ownerId: owner.id });
+
+    disableOperationalMode();
+    try {
+      const result = executeConfirmedAction(t.db, owner.id, { kind: "RESUME_PROJECT", label: "Resume", projectId: project.id });
+      assert.match(result.message, /disabled/i);
+    } finally {
+      restoreEnv();
+      t.close();
+    }
+  });
+
+  test("OPEN_OFFICE (state-increasing) is blocked when operational mode is disabled", () => {
+    const t = createTestDb();
+    const owner = getOwner(t.db)!;
+    // Known baseline: the office starts OPEN by default (seedAll) — close
+    // it for real first, so a blocked OPEN_OFFICE flipping it back to
+    // OPEN would be a real, detectable regression rather than masked by
+    // the seeded default already being OPEN.
+    executeConfirmedAction(t.db, owner.id, { kind: "CLOSE_OFFICE", label: "Close the Office" });
+    assert.equal(getOfficeStatus(t.db)?.state, "CLOSED");
+
+    disableOperationalMode();
+    try {
+      const result = executeConfirmedAction(t.db, owner.id, { kind: "OPEN_OFFICE", label: "Open the Office" });
+      assert.match(result.message, /disabled/i);
+      assert.equal(getOfficeStatus(t.db)?.state, "CLOSED", "a blocked OPEN_OFFICE must never actually open the office");
+    } finally {
+      restoreEnv();
+      t.close();
+    }
+  });
+
+  test("PAUSE_PROJECT, CLOSE_OFFICE, and REJECT (risk-reducing) remain available even when operational mode is disabled", () => {
+    const t = createTestDb();
+    const owner = getOwner(t.db)!;
+    const { project } = createProjectWithIdea(t.db, { title: "P", rawIdeaText: "x", ownerId: owner.id });
+    const approval = createApproval(t.db, { projectId: project.id, kind: "paid_service_purchase", requestedBy: "system", context: {} });
+
+    disableOperationalMode();
+    try {
+      const closeResult = executeConfirmedAction(t.db, owner.id, { kind: "CLOSE_OFFICE", label: "Close the Office" });
+      assert.match(closeResult.message, /closed/i);
+
+      const rejectResult = executeConfirmedAction(t.db, owner.id, { kind: "REJECT", label: "Reject", approvalId: approval.id });
+      assert.match(rejectResult.message, /rejected/i);
+      assert.equal(getApproval(t.db, approval.id)!.status, "REJECTED");
+
+      // PAUSE_PROJECT on a DRAFT project fails for the same real business
+      // reason as the earlier test above (never pausable from DRAFT) —
+      // the point here is only that it's NOT blocked by operational mode
+      // (the message is a normal domain rejection, not the disabled message).
+      const pauseResult = executeConfirmedAction(t.db, owner.id, { kind: "PAUSE_PROJECT", label: 'Pause "P"', projectId: project.id });
+      assert.doesNotMatch(pauseResult.message, /production operations are disabled/i);
+    } finally {
+      restoreEnv();
+      t.close();
+    }
+  });
+});

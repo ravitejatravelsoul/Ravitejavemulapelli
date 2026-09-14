@@ -7,6 +7,9 @@ import { getOwner } from "@/lib/ai-office/domain/users";
 import { getOfficeStatus } from "@/lib/ai-office/domain/office";
 import { OfficeSidebarNav } from "@/components/ai-office/shell/office-sidebar-nav";
 import { TejaAssistant } from "@/components/ai-office/assistant/teja-assistant";
+import { GlassCard } from "@/components/common/glass-card";
+import { Badge } from "@/components/ui/badge";
+import { isAiOfficeOperationalModeEnabled } from "@/lib/ai-office/config/operational-mode";
 
 export const metadata: Metadata = {
   title: {
@@ -44,7 +47,23 @@ export default async function OfficeProtectedLayout({ children }: { children: Re
     <div className="flex min-h-screen flex-col bg-background md:flex-row">
       <OfficeSidebarNav ownerEmail={owner?.email ?? "owner"} officeState={officeStatus?.state ?? "CLOSED"} signOut={logout} />
       <main className="min-w-0 flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
-        <div className="mx-auto w-full max-w-[1600px]">{children}</div>
+        <div className="mx-auto w-full max-w-[1600px]">
+          {!isAiOfficeOperationalModeEnabled() && (
+            <GlassCard className="mb-4 !p-4">
+              <div className="flex flex-wrap items-center gap-3">
+                <Badge variant="destructive" className="font-mono text-xs uppercase">
+                  Local-only · production operations disabled
+                </Badge>
+                <p className="text-sm text-muted-foreground">
+                  This deployment has no durable production hosting configured for the private AI Office yet. You can view everything here, but creating
+                  projects, resuming execution, and approving paid work are turned off. Run <code className="font-mono">npm run office:dev</code> locally for the
+                  fully operational workspace.
+                </p>
+              </div>
+            </GlassCard>
+          )}
+          {children}
+        </div>
       </main>
       <TejaAssistant assistantName={process.env.OWNER_ASSISTANT_NAME || "Teja"} />
     </div>

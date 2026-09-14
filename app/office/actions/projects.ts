@@ -9,6 +9,7 @@ import { getOwner } from "@/lib/ai-office/domain/users";
 import { createProjectWithIdea } from "@/lib/ai-office/domain/projects";
 import { planProject } from "@/lib/ai-office/orchestrator/orchestrator";
 import { pauseProject, resumeProject } from "@/lib/ai-office/control/project-transitions";
+import { isAiOfficeOperationalModeEnabled, OPERATIONAL_MODE_DISABLED_MESSAGE } from "@/lib/ai-office/config/operational-mode";
 
 /**
  * "Start New Project" + Pause/Resume — every action here independently
@@ -51,6 +52,7 @@ export interface CreateProjectState {
 export async function createProjectAction(_prevState: CreateProjectState | undefined, formData: FormData): Promise<CreateProjectState> {
   const session = await verifySession();
   if (!session) return { error: "You must be signed in." };
+  if (!isAiOfficeOperationalModeEnabled()) return { error: OPERATIONAL_MODE_DISABLED_MESSAGE };
 
   const parsed = newProjectSchema.safeParse({
     title: formData.get("title"),
@@ -112,6 +114,7 @@ export async function pauseProjectAction(projectId: string): Promise<ProjectTran
 export async function resumeProjectAction(projectId: string): Promise<ProjectTransitionActionState> {
   const ctx = await withOwnerSession();
   if ("error" in ctx) return ctx;
+  if (!isAiOfficeOperationalModeEnabled()) return { error: OPERATIONAL_MODE_DISABLED_MESSAGE };
   if (typeof projectId !== "string" || projectId.length === 0) return { error: "Invalid project." };
 
   const result = resumeProject(ctx.db, projectId, ctx.ownerId);

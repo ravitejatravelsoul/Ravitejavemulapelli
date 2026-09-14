@@ -5,6 +5,7 @@ import { verifySession } from "@/lib/ai-office/auth/dal";
 import { getAppDatabase } from "@/lib/ai-office/db/client";
 import { getOwner } from "@/lib/ai-office/domain/users";
 import { approveSemanticRepairPlan, rejectSemanticRepairPlan, executeApprovedSemanticRepair } from "@/lib/ai-office/engineer/semantic-repair-execution";
+import { isAiOfficeOperationalModeEnabled, OPERATIONAL_MODE_DISABLED_MESSAGE } from "@/lib/ai-office/config/operational-mode";
 
 export interface SemanticRepairActionState {
   error?: string;
@@ -20,6 +21,7 @@ export interface SemanticRepairActionState {
 export async function approveSemanticRepairAction(planId: string): Promise<SemanticRepairActionState> {
   const session = await verifySession();
   if (!session) return { error: "You must be signed in." };
+  if (!isAiOfficeOperationalModeEnabled()) return { error: OPERATIONAL_MODE_DISABLED_MESSAGE };
   if (typeof planId !== "string" || planId.length === 0) return { error: "Invalid plan." };
 
   const db = getAppDatabase();
@@ -62,6 +64,7 @@ export async function rejectSemanticRepairAction(planId: string, note?: string):
 export async function executeSemanticRepairAction(planId: string): Promise<SemanticRepairActionState> {
   const session = await verifySession();
   if (!session) return { error: "You must be signed in." };
+  if (!isAiOfficeOperationalModeEnabled()) return { error: OPERATIONAL_MODE_DISABLED_MESSAGE };
   if (typeof planId !== "string" || planId.length === 0) return { error: "Invalid plan." };
 
   const db = getAppDatabase();

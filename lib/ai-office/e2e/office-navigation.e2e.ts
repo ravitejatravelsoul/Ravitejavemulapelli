@@ -91,6 +91,16 @@ before(async () => {
     OFFICE_OWNER_EMAIL: TEST_EMAIL,
     OFFICE_OWNER_PASSWORD_HASH: hashOwnerPassword(TEST_PASSWORD),
     // Deliberately no ANTHROPIC_* vars — this suite never needs Claude configured.
+    // This spawns a REAL `next build` + `next start` (NODE_ENV=production
+    // in the child), which the V1 limited-production operational-mode
+    // guard (lib/ai-office/config/operational-mode.ts) would otherwise
+    // read as "no durable hosting configured" and correctly disable
+    // project creation/execution — exactly its intended behavior for a
+    // real Vercel deployment, but wrong for this suite, which tests a
+    // fully operational AI Office end-to-end against a production build,
+    // not the production-lockdown behavior itself. Explicit opt-in, the
+    // same escape hatch a real durably-hosted production deployment would use.
+    AI_OFFICE_OPERATIONAL_MODE: "enabled",
   };
 
   // A real production build + `next start`, not `next dev` — `next dev`

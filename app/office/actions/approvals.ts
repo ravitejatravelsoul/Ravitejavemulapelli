@@ -5,6 +5,7 @@ import { verifySession } from "@/lib/ai-office/auth/dal";
 import { getAppDatabase } from "@/lib/ai-office/db/client";
 import { getOwner } from "@/lib/ai-office/domain/users";
 import { approveApproval, rejectApproval, revokeApproval } from "@/lib/ai-office/approvals/approval-service";
+import { isAiOfficeOperationalModeEnabled, OPERATIONAL_MODE_DISABLED_MESSAGE } from "@/lib/ai-office/config/operational-mode";
 
 export interface ApprovalDecisionActionState {
   error?: string;
@@ -22,6 +23,7 @@ export interface ApprovalDecisionActionState {
 export async function approveApprovalAction(approvalId: string, note?: string): Promise<ApprovalDecisionActionState> {
   const session = await verifySession();
   if (!session) return { error: "You must be signed in." };
+  if (!isAiOfficeOperationalModeEnabled()) return { error: OPERATIONAL_MODE_DISABLED_MESSAGE };
   if (typeof approvalId !== "string" || approvalId.length === 0) return { error: "Invalid approval." };
 
   const db = getAppDatabase();

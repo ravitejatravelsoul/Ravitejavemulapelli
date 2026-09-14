@@ -16,6 +16,7 @@ import { listAgentRoles } from "../domain/agent-roles.ts";
 import { pauseProject, resumeProject } from "../control/project-transitions.ts";
 import { openOffice, closeOffice } from "../control/office-control.ts";
 import { decideApproval, getApproval } from "../domain/project-outputs.ts";
+import { isAiOfficeOperationalModeEnabled, OPERATIONAL_MODE_DISABLED_MESSAGE } from "../config/operational-mode.ts";
 
 export interface PendingAction {
   kind: "PAUSE_PROJECT" | "RESUME_PROJECT" | "OPEN_OFFICE" | "CLOSE_OFFICE" | "APPROVE" | "REJECT";
@@ -201,7 +202,13 @@ export function handleAssistantText(db: DatabaseSync, text: string): AssistantTu
  * S/T). `ownerId` is the real, session-verified owner id; nothing here
  * trusts a client-supplied identity.
  */
+/** State-increasing action kinds only — pausing/closing/rejecting always reduces risk and stays available regardless of operational mode; see lib/ai-office/config/operational-mode.ts. */
+const STATE_INCREASING_ACTION_KINDS: ReadonlySet<PendingAction["kind"]> = new Set(["RESUME_PROJECT", "OPEN_OFFICE", "APPROVE"]);
+
 export function executeConfirmedAction(db: DatabaseSync, ownerId: string, action: PendingAction): AssistantTurn {
+  if (STATE_INCREASING_ACTION_KINDS.has(action.kind) && !isAiOfficeOperationalModeEnabled()) {
+    return { message: OPERATIONAL_MODE_DISABLED_MESSAGE };
+  }
   switch (action.kind) {
     case "PAUSE_PROJECT": {
       if (!action.projectId) return { message: "That action is missing its project." };
