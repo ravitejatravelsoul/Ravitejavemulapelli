@@ -2,9 +2,6 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { verifySession } from "@/lib/ai-office/auth/dal";
 import { logout } from "@/app/office/actions/auth";
-import { getAppDatabase } from "@/lib/ai-office/db/client";
-import { getOwner } from "@/lib/ai-office/domain/users";
-import { getOfficeStatus } from "@/lib/ai-office/domain/office";
 import { OfficeSidebarNav } from "@/components/ai-office/shell/office-sidebar-nav";
 import { LimitedProductionOffice } from "@/components/ai-office/shell/limited-production-office";
 import { TejaAssistant } from "@/components/ai-office/assistant/teja-assistant";
@@ -44,6 +41,23 @@ export const metadata: Metadata = {
  * simply by typing its URL — there is no route inside this group that can
  * bypass this check, because there is no route inside this group that
  * renders without first passing through this layout.
+ *
+ * `getAppDatabase`/`getOwner`/`getOfficeStatus` are deliberately *dynamic*
+ * `import()`s below, not static top-level imports — this is what actually
+ * keeps the disabled branch above import-safe, not just call-safe.
+ * `lib/ai-office/db/client.ts` has a real (non-`import type`) top-level
+ * `import { DatabaseSync } from "node:sqlite"`; `node:sqlite` requires
+ * Node.js ≥22.5 (unflagged only from ≥22.13 — see
+ * https://nodejs.org/api/sqlite.html), and Vercel still offers 20.x as a
+ * selectable Functions runtime. A static top-level import of `client.ts`
+ * here would have made *this module's own evaluation* throw on such a
+ * runtime — before the `isAiOfficeOperationalModeEnabled()` check above
+ * ever ran — exactly the bug a plain "early return" doesn't fix: ES
+ * module imports are hoisted and evaluated eagerly regardless of which
+ * branch actually executes. A dynamic `import()` inside the `if` block
+ * below only ever resolves `client.ts` (and transitively `node:sqlite`)
+ * when this code path is actually reached, which never happens once
+ * operational mode is disabled.
  */
 export default async function OfficeProtectedLayout({ children }: { children: React.ReactNode }) {
   const session = await verifySession();
@@ -58,6 +72,11 @@ export default async function OfficeProtectedLayout({ children }: { children: Re
   // Reached only when isAiOfficeOperationalModeEnabled() is true (the
   // early return above handles the disabled case) — local dev, tests, or
   // a future durably-hosted production deployment.
+  const [{ getAppDatabase }, { getOwner }, { getOfficeStatus }] = await Promise.all([
+    import("@/lib/ai-office/db/client"),
+    import("@/lib/ai-office/domain/users"),
+    import("@/lib/ai-office/domain/office"),
+  ]);
   const db = getAppDatabase();
   const owner = getOwner(db);
   const officeStatus = getOfficeStatus(db);
