@@ -81,3 +81,28 @@ export function findOpenIncidentFor(db: DatabaseSync, input: { projectId: string
     )
     .get(input.symptom, input.projectId, input.projectId, input.taskId, input.taskId) as unknown as OfficeIncidentRow | undefined;
 }
+
+/**
+ * The most recent incident for this exact (projectId, taskId, symptom)
+ * triple, REGARDLESS of status — unlike `findOpenIncidentFor`, this also
+ * matches an ESCALATED or RESOLVED one. Used by callers that track ONE
+ * incident lineage per task/symptom across its whole repair history
+ * (Office Engineer's semantic-repair capability): a task that develops a
+ * genuinely NEW problem after its prior incident reached a terminal
+ * state should reopen and continue that SAME incident's history rather
+ * than fragmenting into a fresh, disconnected row — see
+ * semantic-repair-execution.ts's incident-reopening logic for why this
+ * distinction matters (a real defect: an incident silently stayed
+ * ESCALATED while a fresh PROPOSED repair plan sat active underneath it).
+ */
+export function findLatestIncidentFor(db: DatabaseSync, input: { projectId: string | null; taskId: string | null; symptom: string }): OfficeIncidentRow | undefined {
+  return db
+    .prepare(
+      `SELECT * FROM office_incidents
+       WHERE symptom = ?
+         AND ((projectId IS NULL AND ? IS NULL) OR projectId = ?)
+         AND ((taskId IS NULL AND ? IS NULL) OR taskId = ?)
+       ORDER BY detectedAt DESC LIMIT 1`,
+    )
+    .get(input.symptom, input.projectId, input.projectId, input.taskId, input.taskId) as unknown as OfficeIncidentRow | undefined;
+}

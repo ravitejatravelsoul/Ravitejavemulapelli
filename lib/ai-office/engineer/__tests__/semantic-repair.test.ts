@@ -12,7 +12,8 @@ import { approveApproval } from "../../approvals/approval-service.ts";
 import { upsertRecommendedRouting, applyRecommendedRouting } from "../../domain/model-routing.ts";
 import { writeFile, listFiles } from "../../workspace/workspace-service.ts";
 import { upsertWorkspaceFileRecord } from "../../domain/workspace.ts";
-import { listOpenIncidents } from "../../domain/office-incidents.ts";
+import { listOpenIncidents, getIncident } from "../../domain/office-incidents.ts";
+import { listEventsForProject } from "../../domain/events.ts";
 import { listSemanticRepairPlansForTask, getSemanticRepairPlan } from "../../domain/semantic-repair.ts";
 import { computeFailureSignature, detectSemanticFailureLoop, classifyMismatch, MIN_SEMANTIC_FAILURES_FOR_LOOP } from "../semantic-failure-detection.ts";
 import {
@@ -715,5 +716,209 @@ describe("TaskFlow remains frozen during feature construction", () => {
     assert.equal(reservations.n, 0, "proposing a repair plan must never itself reserve any budget");
     assert.equal(getTask(t.db, task.id)?.status, "PENDING", "the task's own status must be completely untouched by mere detection");
     t.close();
+  });
+});
+
+/**
+ * Regression suite for the real state-consistency defect found during
+ * live TaskFlow validation: an Office Engineer incident silently stayed
+ * ESCALATED while a fresh PROPOSED repair plan for a NEW failure
+ * signature sat active underneath it — because the incident lookup only
+ * matched on (project, task, symptom), never on whether the incident's
+ * OWN status still reflected the currently-active plan.
+ */
+describe("incident state-consistency — an incident must reflect the currently-active repair cycle", () => {
+  test("old plan ESCALATED + new signature -> a new PROPOSED plan reopens the incident to INVESTIGATING, preserving the old plan and audit history", async () => {
+    const t = createTestDb();
+    const { project } = setupHybridProject(t);
+    const task = createTask(t.db, { projectId: project.id, roleId: "backend-developer", title: "Implement backend" });
+
+    // Round 1: no established contract anywhere in evidence -> a real
+    // OWNER_CLARIFICATION_REQUIRED classification, escalating BOTH the
+    // plan and the incident through the real path.
+    recordFailure(t.db, { projectId: project.id, taskId: task.id, reason: "The page loaded and worked, but does not match the requested product: totally wrong layout." });
+    recordFailure(t.db, { projectId: project.id, taskId: task.id, reason: "The page loaded and worked, but does not match the requested product: still wrong after retry." });
+    const firstResult = await proposeSemanticRepair(t.db, task.id, "test");
+    assert.equal(firstResult.status, "escalated-needs-owner");
+    if (firstResult.status !== "escalated-needs-owner") throw new Error("unreachable");
+    const oldPlan = firstResult.plan;
+    assert.equal(oldPlan.status, "ESCALATED");
+    const incidentId = oldPlan.incidentId;
+    assert.equal(getIncident(t.db, incidentId)?.status, "ESCALATED", "sanity check: the incident starts in the exact stale state the real defect showed");
+
+    // Round 2: a genuinely different failure category, now WITH real
+    // evidence establishing a contract -> IMPLEMENTATION_WRONG.
+    await writeFile(project.id, "js/widget.js", "export class Widget {}");
+    upsertWorkspaceFileRecord(t.db, { projectId: project.id, path: "js/widget.js", sizeBytes: 10, roleId: "backend-developer", taskId: task.id });
+    recordFailure(t.db, { projectId: project.id, taskId: task.id, reason: "Intent-consistency check failed: layout mismatch on the second attempt." });
+    recordFailure(t.db, { projectId: project.id, taskId: task.id, reason: "Intent-consistency check failed: layout still mismatched on the third attempt." });
+
+    const secondResult = await proposeSemanticRepair(t.db, task.id, "test");
+    assert.equal(secondResult.status, "proposed");
+    if (secondResult.status !== "proposed") throw new Error("unreachable");
+    const newPlan = secondResult.plan;
+
+    assert.notEqual(newPlan.id, oldPlan.id, "a genuinely new signature must produce a genuinely new plan, never reuse the old one");
+    assert.notEqual(newPlan.failureSignature, oldPlan.failureSignature);
+    assert.equal(newPlan.incidentId, incidentId, "the SAME incident lineage is reused, not fragmented into a disconnected new row");
+    assert.equal(newPlan.status, "PROPOSED");
+
+    const incidentAfter = getIncident(t.db, incidentId);
+    assert.equal(incidentAfter?.status, "INVESTIGATING", "the incident must be reopened to an active state — never left ESCALATED while a fresh PROPOSED plan is active");
+    assert.match(incidentAfter?.diagnosis ?? "", /Reopened/);
+    assert.match(incidentAfter?.diagnosis ?? "", new RegExp(newPlan.id));
+
+    // Old plan preserved unchanged.
+    const oldPlanAfter = getSemanticRepairPlan(t.db, oldPlan.id);
+    assert.deepEqual(oldPlanAfter, oldPlan, "the previous ESCALATED plan must be completely untouched");
+
+    // Audit/events preserved: a real reopening event exists, and the
+    // original escalation event from round 1 is still there too.
+    const events = listEventsForProject(t.db, project.id);
+    assert.ok(events.some((e) => e.type === "office_engineer.incident_reopened" && JSON.parse(e.payload).incidentId === incidentId && JSON.parse(e.payload).planId === newPlan.id));
+    assert.ok(events.some((e) => e.type === "office_engineer.escalated" && JSON.parse(e.payload).planId === oldPlan.id), "the original escalation event from round 1 must still be in history, never removed");
+
+    t.close();
+  });
+
+  test("a RESOLVED incident can reopen for a genuinely new failure signature on the same task", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const owner = getOwner(t.db)!;
+      const { project } = setupHybridProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "backend-developer", title: "Implement backend" });
+      await writeFile(project.id, "js/taskStore.js", "export class TaskStore {}");
+      upsertWorkspaceFileRecord(t.db, { projectId: project.id, path: "js/taskStore.js", sizeBytes: 10, roleId: "backend-developer", taskId: task.id });
+      await executeTask(t.db, task.id, { provider: failingAdapter(IDENTITY_REJECTION_1) });
+      await executeTask(t.db, task.id, { provider: failingAdapter(IDENTITY_REJECTION_2) });
+
+      const proposed = await proposeSemanticRepair(t.db, task.id, "test");
+      if (proposed.status !== "proposed") throw new Error("unreachable");
+      const firstPlan = proposed.plan;
+      approveSemanticRepairPlan(t.db, firstPlan.id, owner.id);
+
+      const claudeApproval = createApproval(t.db, { projectId: project.id, kind: "paid_service_purchase", requestedBy: "system", context: {} });
+      approveApproval(t.db, { approvalId: claudeApproval.id, decidedByUserId: owner.id });
+      process.env.ANTHROPIC_API_KEY = "sk-ant-test-key-not-real";
+
+      const fastFetch = (async () =>
+        ({ ok: true, status: 200, json: async () => ({ response: JSON.stringify({ productIntentPreserved: true, repairScopeSatisfied: true, outOfScopeChanges: [], reason: "ok" }) }) }) as unknown as Response) as unknown as typeof fetch;
+      const repairResult = await executeApprovedSemanticRepair(t.db, firstPlan.id, owner.id, {
+        claudeClientOverride: claudeClient(() => claudeTextMessage(GOOD_REPAIR_OUTPUT)),
+        intentCheckFetch: fastFetch,
+      });
+      assert.equal(repairResult.status, "repaired");
+      const incidentId = firstPlan.incidentId;
+      assert.equal(getIncident(t.db, incidentId)?.status, "RESOLVED", "sanity check: the incident is genuinely resolved after the successful repair");
+      assert.equal(getTask(t.db, task.id)?.status, "DONE");
+
+      // A later, genuinely new problem on the SAME task (e.g. a
+      // subsequent review round rejecting it for an unrelated reason) —
+      // simulated by directly reopening the task and recording new
+      // failures under a distinct category, exactly like a real
+      // downstream rejection would.
+      const { updateTaskStatus } = await import("../../domain/tasks.ts");
+      updateTaskStatus(t.db, task.id, "PENDING");
+      recordFailure(t.db, { projectId: project.id, taskId: task.id, reason: "Intent-consistency check failed: a later review round found an unrelated regression." });
+      recordFailure(t.db, { projectId: project.id, taskId: task.id, reason: "Intent-consistency check failed: the regression persisted on the next attempt." });
+
+      const secondResult = await proposeSemanticRepair(t.db, task.id, "test");
+      assert.equal(secondResult.status, "proposed");
+      if (secondResult.status !== "proposed") throw new Error("unreachable");
+      const secondPlan = secondResult.plan;
+
+      assert.notEqual(secondPlan.id, firstPlan.id);
+      assert.equal(secondPlan.incidentId, incidentId, "the same incident lineage reopens rather than fragmenting");
+      assert.equal(getIncident(t.db, incidentId)?.status, "INVESTIGATING", "a RESOLVED incident must be able to reopen for a genuinely new failure signature");
+
+      const firstPlanAfter = getSemanticRepairPlan(t.db, firstPlan.id);
+      assert.equal(firstPlanAfter?.status, "VERIFIED", "the previous successful repair's plan must remain VERIFIED, never overwritten by the new cycle");
+
+      t.close();
+    });
+  });
+
+  test("same signature deduplicated — a repeated detection never creates a second plan or double-reopens the incident", async () => {
+    await withWorkspace(async () => {
+    const t = createTestDb();
+    const { project } = setupHybridProject(t);
+    const task = createTask(t.db, { projectId: project.id, roleId: "backend-developer", title: "Implement backend" });
+    await writeFile(project.id, "js/taskStore.js", "export class TaskStore {}");
+    upsertWorkspaceFileRecord(t.db, { projectId: project.id, path: "js/taskStore.js", sizeBytes: 10, roleId: "backend-developer", taskId: task.id });
+    recordFailure(t.db, { projectId: project.id, taskId: task.id, reason: IDENTITY_REJECTION_1 });
+    recordFailure(t.db, { projectId: project.id, taskId: task.id, reason: IDENTITY_REJECTION_2 });
+
+    const first = await proposeSemanticRepair(t.db, task.id, "test");
+    if (first.status !== "proposed") throw new Error("unreachable");
+    const incidentStatusAfterFirst = getIncident(t.db, first.plan.incidentId)?.status;
+
+    const second = await proposeSemanticRepair(t.db, task.id, "test");
+    assert.equal(second.status, "already-in-flight");
+    assert.equal(listSemanticRepairPlansForTask(t.db, task.id).length, 1, "no duplicate plan for the same signature");
+    assert.equal(getIncident(t.db, first.plan.incidentId)?.status, incidentStatusAfterFirst, "an unchanged, already-active signature must never re-trigger a reopening event");
+
+    const reopenedEvents = listEventsForProject(t.db, project.id).filter((e) => e.type === "office_engineer.incident_reopened");
+    assert.equal(reopenedEvents.length, 0, "nothing was ever terminal here, so no reopening should ever have fired");
+    t.close();
+    });
+  });
+
+  test("an active PROPOSED/APPROVED/REPAIRING plan for the current signature is never duplicated even across multiple detection calls", async () => {
+    await withWorkspace(async () => {
+    const t = createTestDb();
+    const owner = getOwner(t.db)!;
+    const { project } = setupHybridProject(t);
+    const task = createTask(t.db, { projectId: project.id, roleId: "backend-developer", title: "Implement backend" });
+    await writeFile(project.id, "js/taskStore.js", "export class TaskStore {}");
+    upsertWorkspaceFileRecord(t.db, { projectId: project.id, path: "js/taskStore.js", sizeBytes: 10, roleId: "backend-developer", taskId: task.id });
+    recordFailure(t.db, { projectId: project.id, taskId: task.id, reason: IDENTITY_REJECTION_1 });
+    recordFailure(t.db, { projectId: project.id, taskId: task.id, reason: IDENTITY_REJECTION_2 });
+
+    const proposed = await proposeSemanticRepair(t.db, task.id, "test");
+    if (proposed.status !== "proposed") throw new Error("unreachable");
+    approveSemanticRepairPlan(t.db, proposed.plan.id, owner.id);
+
+    // Still APPROVED (not yet executed) — a repeated detection call must
+    // still find it in-flight and refuse to create a second plan.
+    const repeated = await proposeSemanticRepair(t.db, task.id, "test");
+    assert.equal(repeated.status, "already-in-flight");
+    if (repeated.status !== "already-in-flight") throw new Error("unreachable");
+    assert.equal(repeated.plan.id, proposed.plan.id);
+    assert.equal(listSemanticRepairPlansForTask(t.db, task.id).length, 1);
+    t.close();
+    });
+  });
+
+  test("the DEDUP ('already-in-flight') path ALSO reopens a stale ESCALATED incident sitting under an already-active plan — the exact real TaskFlow gap: a plan created before this fix existed, found again via detection, must still get its incident corrected", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const { project } = setupHybridProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "backend-developer", title: "Implement backend" });
+      await writeFile(project.id, "js/taskStore.js", "export class TaskStore {}");
+      upsertWorkspaceFileRecord(t.db, { projectId: project.id, path: "js/taskStore.js", sizeBytes: 10, roleId: "backend-developer", taskId: task.id });
+      recordFailure(t.db, { projectId: project.id, taskId: task.id, reason: IDENTITY_REJECTION_1 });
+      recordFailure(t.db, { projectId: project.id, taskId: task.id, reason: IDENTITY_REJECTION_2 });
+
+      const proposed = await proposeSemanticRepair(t.db, task.id, "test");
+      if (proposed.status !== "proposed") throw new Error("unreachable");
+
+      // Simulate the exact real production state: the incident somehow
+      // ended up ESCALATED (e.g. from before this fix shipped) while
+      // this plan remains genuinely active (PROPOSED).
+      const { updateIncident } = await import("../../domain/office-incidents.ts");
+      updateIncident(t.db, proposed.plan.incidentId, { status: "ESCALATED" });
+      assert.equal(getIncident(t.db, proposed.plan.incidentId)?.status, "ESCALATED");
+
+      const repeated = await proposeSemanticRepair(t.db, task.id, "test");
+      assert.equal(repeated.status, "already-in-flight", "the existing active plan must still be found — never a duplicate");
+      if (repeated.status !== "already-in-flight") throw new Error("unreachable");
+      assert.equal(repeated.plan.id, proposed.plan.id);
+      assert.equal(listSemanticRepairPlansForTask(t.db, task.id).length, 1, "no duplicate plan created just to fix the incident");
+
+      assert.equal(getIncident(t.db, proposed.plan.incidentId)?.status, "INVESTIGATING", "the incident must be corrected even when found through the dedup path, not only when a brand-new plan is created");
+      const reopenEvent = listEventsForProject(t.db, project.id).find((e) => e.type === "office_engineer.incident_reopened");
+      assert.ok(reopenEvent, "the reopening must still be recorded as a real, auditable event");
+      t.close();
+    });
   });
 });

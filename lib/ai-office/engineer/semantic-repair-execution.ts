@@ -6,7 +6,7 @@ import { getProjectIdea } from "../domain/projects.ts";
 import { listArtifactsForProject, createArtifact, createApproval, getApproval, recordDecision } from "../domain/project-outputs.ts";
 import { listWorkspaceFileRecords } from "../domain/workspace.ts";
 import { workspaceExists, readFile } from "../workspace/workspace-service.ts";
-import { createIncident, updateIncident, findOpenIncidentFor } from "../domain/office-incidents.ts";
+import { createIncident, updateIncident, findLatestIncidentFor, getIncident } from "../domain/office-incidents.ts";
 import {
   createSemanticRepairPlan,
   updateSemanticRepairPlan,
@@ -83,6 +83,39 @@ export type ProposeSemanticRepairResult =
  * documenting the observation. It never touches a task's status, never
  * spends budget, and never applies a file change.
  */
+/**
+ * Requirement 1 of the state-consistency fix: an Office Engineer
+ * incident must accurately reflect the currently-active repair cycle —
+ * this must hold not only at the instant a NEW plan is created, but
+ * every time `proposeSemanticRepair` runs and finds an ALREADY-ACTIVE
+ * plan too. Without this, the exact real gap this closes: a plan
+ * created before this fix existed (status PROPOSED) sits under an
+ * incident still reading ESCALATED from a PRIOR, unrelated signature —
+ * and every subsequent detection call would hit the dedup ("already-in-
+ * flight") path, which never touched incident status at all, leaving
+ * the inconsistency permanently unfixed even after this code shipped.
+ * Idempotent and cheap: a no-op whenever the incident is already active.
+ */
+function ensureIncidentReflectsActivePlan(db: DatabaseSync, incident: import("../domain/office-incidents.ts").OfficeIncidentRow, plan: SemanticRepairPlanRow, actorId: string): import("../domain/office-incidents.ts").OfficeIncidentRow {
+  const planIsActive = plan.status !== "ESCALATED" && plan.status !== "REJECTED";
+  const incidentIsTerminal = incident.status === "ESCALATED" || incident.status === "RESOLVED";
+  if (!planIsActive || !incidentIsTerminal) return incident;
+
+  const previousStatus = incident.status;
+  const reopened = updateIncident(db, incident.id, {
+    status: "INVESTIGATING",
+    diagnosis: `${incident.diagnosis} — Reopened: plan ${plan.id} (signature ${plan.failureSignature}) is active while the incident had been left ${previousStatus}. Prior plan/history is preserved unchanged.`,
+    resolvedAt: null,
+  });
+  recordEvent(db, {
+    projectId: plan.projectId,
+    type: "office_engineer.incident_reopened",
+    payload: { taskId: plan.taskId, incidentId: incident.id, planId: plan.id, previousStatus, newFailureSignature: plan.failureSignature },
+    actor: actorId,
+  });
+  return reopened;
+}
+
 export async function proposeSemanticRepair(db: DatabaseSync, taskId: string, actorId = "office-engineer"): Promise<ProposeSemanticRepairResult> {
   const task = getTask(db, taskId);
   if (!task) return { status: "not-detected" };
@@ -98,14 +131,20 @@ export async function proposeSemanticRepair(db: DatabaseSync, taskId: string, ac
     // enforced here at detection time as well as in the execution path.
     if (existing.status === "ESCALATED") return { status: "already-escalated", plan: existing };
     if (existing.status === "REJECTED") return { status: "already-rejected", plan: existing };
+    const incidentForExisting = getIncident(db, existing.incidentId);
+    if (incidentForExisting) ensureIncidentReflectsActivePlan(db, incidentForExisting, existing, actorId);
     return { status: "already-in-flight", plan: existing };
   }
 
   const evidence = await gatherEvidence(db, task.projectId, taskId, loop.semanticFailures.map((f) => f.reason));
   const plan = buildRepairPlan(evidence, loop.semanticFailures.map((f) => f.reason));
 
-  const incident =
-    findOpenIncidentFor(db, { projectId: task.projectId, taskId, symptom: SYMPTOM_SEMANTIC_REPAIR_REQUIRED }) ??
+  // Reuses the SAME incident lineage for this task/symptom across its
+  // whole repair history — including one that previously reached a
+  // terminal state (ESCALATED or RESOLVED) — rather than fragmenting
+  // into a fresh, disconnected row every time a new problem arises.
+  let incident =
+    findLatestIncidentFor(db, { projectId: task.projectId, taskId, symptom: SYMPTOM_SEMANTIC_REPAIR_REQUIRED }) ??
     createIncident(db, {
       symptom: SYMPTOM_SEMANTIC_REPAIR_REQUIRED,
       projectId: task.projectId,
@@ -137,9 +176,23 @@ export async function proposeSemanticRepair(db: DatabaseSync, taskId: string, ac
   recordEvent(db, {
     projectId: task.projectId,
     type: "office_engineer.semantic_repair_proposed",
-    payload: { taskId, incidentId: incident.id, planId: planRow.id, classification: plan.classification },
+    payload: { taskId, incidentId: incident.id, planId: planRow.id, classification: plan.classification, failureSignature: loop.signature },
     actor: actorId,
   });
+
+  // State-consistency fix: a genuinely NEW plan means a genuinely active
+  // repair cycle just started — an incident left over at a terminal
+  // status (ESCALATED from a prior, unrelated failure signature, or
+  // RESOLVED from a prior successful repair) must never keep showing
+  // that stale status while a fresh PROPOSED plan sits active under it.
+  // Reopening here, unconditionally and BEFORE any classification-
+  // specific branch below, means every path (including the plain
+  // IMPLEMENTATION_WRONG default, which had no other status-setting code
+  // at all) starts from a correctly "active" incident; a branch below may
+  // still re-escalate it immediately afterward (e.g.
+  // OWNER_CLARIFICATION_REQUIRED), which is a real, honest state
+  // transition, not the silent staleness this fixes.
+  incident = ensureIncidentReflectsActivePlan(db, incident, getSemanticRepairPlan(db, planRow.id)!, actorId);
 
   if (plan.classification === "OWNER_CLARIFICATION_REQUIRED" || plan.classification === "BOTH_INCONSISTENT") {
     // Section 4: "If OWNER_CLARIFICATION_REQUIRED: STOP and surface the
