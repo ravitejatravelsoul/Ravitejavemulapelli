@@ -216,6 +216,20 @@ export function findStaleLeasedTasks(db: DatabaseSync, asOf: number = Date.now()
     .all(asOf) as unknown as TaskRow[];
 }
 
+/**
+ * Every task currently leased to a specific runner, regardless of
+ * whether that lease has technically expired yet — used by the
+ * supervisor's dead-runner recovery (platform-hardening phase, runner
+ * reliability follow-up) to reclaim work the instant a runner is
+ * confirmed dead (via heartbeat + OS process check), rather than
+ * waiting up to `DEFAULT_LEASE_DURATION_MS` (5 minutes) for the lease to
+ * expire naturally — a genuinely dead runner never has a "graceful"
+ * remaining lease window worth honoring.
+ */
+export function listTasksByLeaseOwner(db: DatabaseSync, leaseOwnerId: string): TaskRow[] {
+  return db.prepare("SELECT * FROM tasks WHERE leaseOwnerId = ?").all(leaseOwnerId) as unknown as TaskRow[];
+}
+
 // ---- task_attempts + agent_runs --------------------------------------
 
 /** Creates the next task_attempt for a task and bumps tasks.attemptCount together, atomically — per the brief's "task-attempt creation" transaction example. */

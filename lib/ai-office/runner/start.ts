@@ -41,7 +41,15 @@ function log(message: string, detail?: Record<string, unknown>) {
   else console.log(line);
 }
 
-const runnerId = `runner-${process.pid}-${randomUUID().slice(0, 8)}`;
+// `AI_OFFICE_RUNNER_ID_HINT`: the supervisor script (scripts/ai-office-dev.ts)
+// generates a runner id itself *before* spawning this process, so it can
+// unambiguously recognize this exact instance's heartbeat afterward
+// (rather than guessing based on "whichever heartbeat is newest," which
+// breaks down the moment two spawns happen close together during a
+// restart). A runner started any other way (manually, `npm run
+// ai-office:runner`) has no hint and falls back to generating its own,
+// exactly as before.
+const runnerId = process.env.AI_OFFICE_RUNNER_ID_HINT || `runner-${process.pid}-${randomUUID().slice(0, 8)}`;
 const pollIntervalMs = Number(process.env.AI_OFFICE_RUNNER_POLL_INTERVAL_MS) || DEFAULT_POLL_INTERVAL_MS;
 
 const db = getAppDatabase();

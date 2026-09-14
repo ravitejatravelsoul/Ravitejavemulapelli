@@ -62,10 +62,29 @@ describe("selectRoles — deterministic keyword classifier", () => {
     }
   });
 
-  test("an idea with no UI signal and no backend signal still gets a development role (fallback default: backend-developer)", () => {
+  // Real defect found in the second AI Office pilot: this fallback used
+  // to default to backend-developer alone, silently producing a
+  // backend-only plan for a genuine, unambiguous user-facing app idea
+  // ("Build a polished personal task manager called TaskFlow...") that
+  // never happened to use a literal word like "app"/"ui"/"page" despite
+  // describing browser interaction throughout — a real project that
+  // could then never pass its own QA gate (no browser-loadable
+  // deliverable was ever going to exist). The safe default for a
+  // genuinely ambiguous idea is now a usable UI, not an invisible
+  // backend service — see role-selection.ts's own docblock for the
+  // full "why."
+  test("an idea with no UI, backend, or CLI signal now defaults to a usable UI (frontend-developer), not an invisible backend-only service", () => {
     const { roles } = selectRoles("x");
+    assert.ok(roles.includes("frontend-developer"));
+    assert.ok(roles.includes("ui-ux-agent"));
+    assert.ok(!roles.includes("backend-developer"));
+  });
+
+  test("an explicit CLI/terminal idea with no UI or backend signal still correctly gets backend-developer, never frontend-developer — a CLI has no browser UI", () => {
+    const { roles } = selectRoles("Build a CLI that reformats CSV files into JSON.");
     assert.ok(roles.includes("backend-developer"));
     assert.ok(!roles.includes("frontend-developer"));
+    assert.ok(!roles.includes("ui-ux-agent"));
   });
 });
 
@@ -124,6 +143,82 @@ describe("selectRoles — capability-driven backend selection (Phase 8 follow-up
   test('other negation phrasings ("no backend needed", "does not require a database") are also recognized', () => {
     assert.ok(!selectRoles("Build a simple page. No backend needed for this.").roles.includes("backend-developer"));
     assert.ok(!selectRoles("Build a simple page that does not require a database.").roles.includes("backend-developer"));
+  });
+});
+
+describe("selectRoles — real project-type regression suite (second AI Office pilot follow-up)", () => {
+  test("the exact real TaskFlow idea text now correctly produces a frontend deliverable — the literal real-world regression this fix closes", () => {
+    const { roles } = selectRoles(
+      `Build a polished personal task manager called TaskFlow.
+
+Users must be able to create, edit, complete, reopen and delete tasks.
+
+Each task has:
+- title
+- optional description
+- priority: Low, Medium or High
+- created date
+- completion status
+
+Provide:
+- All, Active and Completed filters
+- search
+- task counts
+- clear empty states
+- responsive desktop/mobile design
+- persistent local storage so tasks survive refresh
+- confirmation before deleting a task
+- accessible keyboard-friendly controls
+
+No login.
+No backend.
+No external APIs.
+
+The finished application must include:
+- working preview
+- README.md with exact local-run instructions
+- downloadable ZIP
+- real browser functional testing
+- responsive testing
+- no console errors
+- no broken interactions`,
+    );
+    assert.ok(roles.includes("frontend-developer"), "TaskFlow is a real user-facing app — it must get a frontend deliverable");
+    assert.ok(roles.includes("ui-ux-agent"));
+    assert.ok(!roles.includes("backend-developer"), 'the idea explicitly says "No backend."');
+  });
+
+  test("frontend-only app (explicit UI signal, explicit no-backend)", () => {
+    const { roles } = selectRoles("Build a static personal blog webpage with no backend and no database.");
+    assert.ok(roles.includes("frontend-developer"));
+    assert.ok(!roles.includes("backend-developer"));
+  });
+
+  test("backend-only service (explicit API/database signal, no UI mention)", () => {
+    const { roles } = selectRoles("Build a REST API backend service with a database for managing inventory records.");
+    assert.ok(roles.includes("backend-developer"));
+    assert.ok(!roles.includes("frontend-developer"));
+    assert.ok(!roles.includes("ui-ux-agent"));
+  });
+
+  test("full-stack app (explicit UI signal AND explicit backend/API signal)", () => {
+    const { roles } = selectRoles("Build a web application with a REST API and database for managing customer orders, with a dashboard for staff.");
+    assert.ok(roles.includes("frontend-developer"));
+    assert.ok(roles.includes("backend-developer"));
+    assert.ok(roles.includes("ui-ux-agent"));
+  });
+
+  test("static SPA (explicit UI signal, no server-side signal at all)", () => {
+    const { roles } = selectRoles("Create a single-page pomodoro timer web app using only local browser state, no backend.");
+    assert.ok(roles.includes("frontend-developer"));
+    assert.ok(!roles.includes("backend-developer"));
+  });
+
+  test("CLI/no-browser project (explicit CLI signal, no UI signal)", () => {
+    const { roles } = selectRoles("Write a command-line tool that batch-renames files according to a pattern.");
+    assert.ok(roles.includes("backend-developer"));
+    assert.ok(!roles.includes("frontend-developer"));
+    assert.ok(!roles.includes("ui-ux-agent"));
   });
 });
 

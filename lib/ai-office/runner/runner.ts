@@ -7,6 +7,7 @@ import {
   releaseLease,
   claimTask,
   findStaleLeasedTasks,
+  listTasksByLeaseOwner,
   listTaskAttempts,
   updateTaskAttemptStatus,
   getAgentRun,
@@ -17,6 +18,7 @@ import { recordEvent } from "../domain/events.ts";
 import { executeTask, type ExecuteTaskOptions } from "../agents/agent-runner.ts";
 import { findEligibleTasks, hasAnyPendingTask } from "./eligibility.ts";
 import { runOfficeEngineerCycle } from "../engineer/office-engineer.ts";
+import { upsertRunnerHeartbeat } from "../domain/workspace.ts";
 
 /**
  * The Durable Local Execution Runner —
@@ -140,6 +142,23 @@ export async function runOneCycle(
 
     recordEvent(db, { projectId: candidate.projectId, type: "task.claimed", payload: { taskId: candidate.id, runnerId }, actor: "system" });
 
+    // Real defect found in the second AI Office pilot: the heartbeat was
+    // previously only ever touched by the caller's `onCycle` callback
+    // *after* this whole function resolves — meaning it went untouched
+    // for the full duration of whatever `executeTask` below does. Every
+    // real Claude call in that pilot took 47-62 seconds; the dashboard's
+    // staleness threshold is 20 seconds. The runner and task were both
+    // completely healthy the whole time, but the dashboard showed
+    // "RUNNER OFFLINE" for the full duration of every single paid call,
+    // because the only heartbeat write was scheduled to happen *after*
+    // the slow part was already over. Marking WORKING here, immediately
+    // after a real claim and before the (possibly slow) execution starts,
+    // means the heartbeat is never more than a few milliseconds stale
+    // while a real attempt is genuinely in flight — the caller's own
+    // post-cycle `onCycle` heartbeat write still runs afterward too, for
+    // the idle/no-eligible-work cycles that never reach this line at all.
+    upsertRunnerHeartbeat(db, { runnerId, status: "WORKING" });
+
     const project = getProject(db, candidate.projectId);
     if (project && project.aiMode === "LIVE") {
       releaseLease(db, candidate.id);
@@ -208,6 +227,65 @@ export async function runOneCycle(
  * transaction itself rolled back on crash), so there is nothing to
  * duplicate.
  */
+/**
+ * The one safe transaction every recovery path shares, regardless of
+ * *why* a task is being reclaimed (lease expiry vs. a runner confirmed
+ * dead by the supervisor) — extracted so both callers can never drift
+ * into two slightly-different, independently-risky implementations of
+ * "close out an interrupted attempt without losing history." Closes out
+ * whatever `TaskAttempt`/`AgentRun` the interrupted execution left
+ * `RUNNING`/`QUEUED` into the existing `FAILED` status (never left
+ * `RUNNING` forever, never silently treated as succeeded), releases the
+ * lease, returns the task to `PENDING`, and records a
+ * `task.recovered_after_crash` event — all in one transaction, so a
+ * crash mid-recovery leaves the task exactly as it was (still leased,
+ * still IN_PROGRESS), safely retried by the next sweep rather than left
+ * half-recovered. `attemptCount` is left exactly as it was (already
+ * incremented when the interrupted attempt began), so `role.maxRetries`
+ * still applies — recovery can never become an unbounded retry loop.
+ */
+function recoverInterruptedTask(db: DatabaseSync, task: TaskRow, reason: string): void {
+  db.exec("BEGIN");
+  let interruptedAttemptId: string | null = null;
+  let interruptedAgentRunId: string | null = null;
+  try {
+    const attempts = listTaskAttempts(db, task.id);
+    const latestAttempt = attempts[attempts.length - 1];
+
+    if (latestAttempt && latestAttempt.status === "RUNNING") {
+      interruptedAttemptId = latestAttempt.id;
+      if (latestAttempt.agentRunId) {
+        const run = getAgentRun(db, latestAttempt.agentRunId);
+        if (run && (run.status === "RUNNING" || run.status === "QUEUED")) {
+          updateAgentRunStatus(db, run.id, "FAILED", Date.now());
+          interruptedAgentRunId = run.id;
+        }
+      }
+      updateTaskAttemptStatus(db, latestAttempt.id, "FAILED");
+    }
+
+    releaseLease(db, task.id);
+    updateTaskStatus(db, task.id, "PENDING");
+    recordEvent(db, {
+      projectId: task.projectId,
+      type: "task.recovered_after_crash",
+      payload: { taskId: task.id, attemptCount: task.attemptCount, interruptedAttemptId, interruptedAgentRunId, reason },
+      actor: "system",
+    });
+
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+/**
+ * Startup / per-cycle crash recovery — docs/ai-office/03-system-architecture.md
+ * §9.6. A task left `IN_PROGRESS` with an already-expired lease means
+ * the process that held it died (or threw an internal error — see
+ * runOneCycle's execution step) mid-attempt.
+ */
 function recoverStaleLeases(db: DatabaseSync): string[] {
   const stale = findStaleLeasedTasks(db);
   const recoveredIds: string[] = [];
@@ -220,56 +298,36 @@ function recoverStaleLeases(db: DatabaseSync): string[] {
       continue;
     }
 
-    // A genuine interrupted execution. One transaction: closing out the
-    // stale attempt/run, releasing the lease, returning the task to
-    // PENDING, and recording the recovery event all land together or
-    // not at all — a crash mid-recovery leaves the task exactly as it
-    // was (still leased, still IN_PROGRESS), safely retried by the next
-    // sweep rather than left half-recovered.
-    db.exec("BEGIN");
-    let interruptedAttemptId: string | null = null;
-    let interruptedAgentRunId: string | null = null;
-    try {
-      const attempts = listTaskAttempts(db, task.id);
-      const latestAttempt = attempts[attempts.length - 1];
-
-      if (latestAttempt && latestAttempt.status === "RUNNING") {
-        interruptedAttemptId = latestAttempt.id;
-        if (latestAttempt.agentRunId) {
-          const run = getAgentRun(db, latestAttempt.agentRunId);
-          if (run && (run.status === "RUNNING" || run.status === "QUEUED")) {
-            updateAgentRunStatus(db, run.id, "FAILED", Date.now());
-            interruptedAgentRunId = run.id;
-          }
-        }
-        updateTaskAttemptStatus(db, latestAttempt.id, "FAILED");
-      }
-
-      releaseLease(db, task.id);
-      updateTaskStatus(db, task.id, "PENDING");
-      recordEvent(db, {
-        projectId: task.projectId,
-        type: "task.recovered_after_crash",
-        payload: {
-          taskId: task.id,
-          attemptCount: task.attemptCount,
-          interruptedAttemptId,
-          interruptedAgentRunId,
-          reason: "Lease expired while the task was IN_PROGRESS — the process that held it stopped responding before completing the attempt.",
-        },
-        actor: "system",
-      });
-
-      db.exec("COMMIT");
-    } catch (error) {
-      db.exec("ROLLBACK");
-      throw error;
-    }
-
+    recoverInterruptedTask(
+      db,
+      task,
+      "Lease expired while the task was IN_PROGRESS — the process that held it stopped responding before completing the attempt.",
+    );
     recoveredIds.push(task.id);
   }
 
   return recoveredIds;
+}
+
+/**
+ * Runner-reliability follow-up (second AI Office pilot) — reclaims every
+ * task a *confirmed-dead* runner still holds, regardless of whether its
+ * lease has technically expired yet. Waiting for a lease to expire
+ * naturally (`DEFAULT_LEASE_DURATION_MS`, 5 minutes) is far too slow to
+ * call "self-healing" once a runner's OS process and heartbeat have
+ * already independently proven it's gone — this is the *only* thing
+ * that changes the trigger condition; the actual per-task recovery is
+ * the exact same safe, history-preserving transaction
+ * `recoverStaleLeases` already uses. Exported for the supervisor to call
+ * once it has confirmed (never assumed) a runner is dead — see
+ * `lib/ai-office/supervisor/supervisor.ts`.
+ */
+export function recoverTasksOwnedByDeadRunner(db: DatabaseSync, deadRunnerId: string): string[] {
+  const owned = listTasksByLeaseOwner(db, deadRunnerId).filter((t) => t.status === "IN_PROGRESS");
+  for (const task of owned) {
+    recoverInterruptedTask(db, task, `Runner "${deadRunnerId}" was confirmed dead (heartbeat stale and/or OS process gone) while this task was IN_PROGRESS.`);
+  }
+  return owned.map((t) => t.id);
 }
 
 export interface RunLoopHandle {

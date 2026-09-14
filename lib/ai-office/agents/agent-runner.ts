@@ -1126,7 +1126,26 @@ export async function executeTask(
   // untouched. Projects with no workspace (legacy/pure-text) are
   // completely unaffected — the adapter's fixture testResults still
   // stand as before.
-  if (role.id === "qa-agent" && workspaceExists(project.id)) {
+  //
+  // Real defect found in the second AI Office pilot: this gate used to
+  // fire unconditionally whenever ANY workspace existed, regardless of
+  // what the project actually planned to build. A project whose
+  // Orchestrator-selected role plan never included frontend-developer
+  // (a real, legitimate backend-only plan) can structurally never
+  // produce an `index.html` — no number of retries could ever satisfy a
+  // browser-load check for a deliverable that was never going to have
+  // one. That guaranteed an unrecoverable escalation, misdiagnosed as a
+  // content/logic failure in the *development* task when the real defect
+  // was this gate's own assumption. The real, currently-supported
+  // capability in this codebase is browser-based verification of a
+  // static HTML/CSS/JS deliverable; there is no framework/CLI/library
+  // build-and-test pipeline implemented anywhere yet (a real, disclosed
+  // scope limit, not silently pretended away) — so the fix is to only
+  // apply that real check when the project's own plan actually includes
+  // a role that produces a browser entry point, never to a plan that
+  // structurally has no such role.
+  const projectPlannedBrowserDeliverable = listTasksForProject(db, project.id).some((t) => t.roleId === "frontend-developer");
+  if (role.id === "qa-agent" && workspaceExists(project.id) && projectPlannedBrowserDeliverable) {
     const verification = await runQABrowserVerification(project.id);
     let finalStatus = verification.status;
     let finalSummary = verification.summary;

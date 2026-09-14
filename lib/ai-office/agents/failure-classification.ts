@@ -23,13 +23,28 @@ import "server-only";
  * importing `agent-runner.ts` itself, which is deliberately the *only*
  * module allowed to import a provider adapter — this module touches
  * neither providers nor the database, so sharing it is safe.
+ *
+ * Real defect found in the second AI Office pilot: `malformedResult()`'s
+ * own docblock (structured-output-contract.ts) already documents that
+ * callers compose its message directly after *either* "Ollama's model
+ * output " or "Claude's model output " — the same shared, provider-
+ * agnostic parsing failure — but this classifier's own pattern only ever
+ * matched the Ollama phrasing. A real Claude call returning malformed
+ * JSON (a genuine transient/protocol failure, identical in kind to the
+ * already-recognized Ollama case) was therefore always misclassified as
+ * a semantic content/logic problem, consuming a real retry attempt and
+ * making Office Engineer treat it as unrepairable rather than the same
+ * safe, auto-retryable operational hiccup Ollama's equivalent already
+ * is. Matched generically against "<Provider>'s model output"/"<Provider>'s
+ * HTTP response body" rather than hardcoding each provider name, so a
+ * future provider's identical failure shape is covered automatically.
  */
 export function isOperationalFailureReason(reason: string): boolean {
   return (
     /^Ollama request timed out/.test(reason) ||
     /^Could not reach Ollama/.test(reason) ||
     /^Ollama responded with HTTP/.test(reason) ||
-    /Ollama's (HTTP response body|model output) was not valid JSON/.test(reason) ||
+    /\w+'s (HTTP response body|model output) was not valid JSON/.test(reason) ||
     /did not match the expected structured shape/.test(reason) ||
     /^Execution timed out after/.test(reason) ||
     /^Operational:/.test(reason)

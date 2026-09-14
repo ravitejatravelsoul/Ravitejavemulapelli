@@ -16,7 +16,50 @@ export interface RoleSelection {
   rationale: string[];
 }
 
-const UI_SIGNALS = ["web app", "web application", "webpage", "web page", "app", "website", "ui", "screen", "interface", "dashboard", "mobile app", "frontend", "form", "page"];
+/**
+ * Real defect found in the second AI Office pilot: a genuine product
+ * idea ("Build a polished personal task manager called TaskFlow" — full
+ * text describes create/edit/complete/delete tasks, All/Active/Completed
+ * filters, search, "responsive desktop/mobile design," "accessible
+ * keyboard-friendly controls," "working preview," a downloadable ZIP,
+ * and explicit "No login. No backend. No external APIs.") never matched
+ * a single word in this list — it describes a browser UI throughout
+ * without ever using the literal words "app"/"ui"/"interface"/"page"/
+ * etc. Widened with the concrete phrases real product descriptions
+ * actually use for browser-based interaction, still every entry a
+ * genuine, unambiguous UI noun/phrase (never a word that could equally
+ * describe a CLI or backend service).
+ */
+const UI_SIGNALS = [
+  "web app",
+  "web application",
+  "webpage",
+  "web page",
+  "app",
+  "website",
+  "ui",
+  "screen",
+  "interface",
+  "dashboard",
+  "mobile app",
+  "frontend",
+  "form",
+  "page",
+  "responsive design",
+  "responsive desktop",
+  "desktop/mobile",
+  "desktop and mobile",
+  "keyboard-friendly",
+  "keyboard accessible",
+  "keyboard-accessible",
+  "working preview",
+  "browser",
+  "task manager",
+  "to-do list",
+  "todo list",
+];
+/** A CLI/terminal deliverable has no browser UI at all — checked before the ambiguous-idea fallback below, so a CLI request is never misrouted to frontend-developer just because it also mentions neither UI nor backend signals. */
+const CLI_SIGNALS = ["cli", "command-line", "command line", "terminal", "shell script"];
 /**
  * Signals that the idea genuinely needs server-side behavior — API,
  * database, auth, server-side persistence/logic, background processing,
@@ -133,23 +176,42 @@ export function selectRoles(ideaText: string): RoleSelection {
   // processing, or an external backend service) — see BACKEND_SIGNALS.
   // A UI-only idea (a static/client-side page, e.g. "a landing page" or
   // "a todo page using browser localStorage") never needed a backend
-  // just because it happened to also need a frontend. The one fallback:
-  // an idea with NEITHER a UI signal NOR a backend signal still needs
-  // *some* implementation role, and defaults to backend-developer as the
-  // more general-purpose "server/logic" role in this catalog — matching
-  // every existing generic idea like "Build a small tool." that isn't
-  // asserting anything about frontend/backend specifically.
+  // just because it happened to also need a frontend.
+  const cliHits = includesAny(text, CLI_SIGNALS);
   const backendHits = includesAnyUnlessNegated(text, BACKEND_SIGNALS);
-  const needsBackend = backendHits.length > 0 || !needsFrontend;
+  const needsBackend = backendHits.length > 0 || (!needsFrontend && cliHits.length > 0);
   if (needsBackend) {
     roles.push("backend-developer");
     rationale.push(
       backendHits.length > 0
         ? `backend-developer included: idea signals server-side behavior [${backendHits.join(", ")}].`
-        : "backend-developer included: idea has no explicit UI or backend signal — defaulting to a general implementation role.",
+        : `backend-developer included: idea is a CLI/terminal deliverable with no browser UI [${cliHits.join(", ")}].`,
     );
   } else {
     rationale.push("backend-developer excluded: idea describes client-side-only behavior with no server-side signal.");
+  }
+
+  // Real defect found in the second AI Office pilot: an idea with
+  // NEITHER a UI signal NOR a backend/CLI signal used to default to
+  // backend-developer alone — silently producing a backend-only plan
+  // for what, in practice, is almost always a small product a person
+  // expects to actually use (open, click, see something), not an
+  // invisible service. A genuine idea ("Build a polished personal task
+  // manager called TaskFlow...") that unambiguously describes browser
+  // interaction throughout (filters, search, "responsive desktop/mobile
+  // design," a "working preview") hit exactly this fallback and got a
+  // task graph with no frontend-developer at all — a real, user-facing
+  // app request that could structurally never pass its own QA gate
+  // (which correctly requires a real browser-loadable deliverable for
+  // any project that claims to have a UI). The safe default for a
+  // genuinely ambiguous idea is now a UI, unless the idea explicitly
+  // signals API/backend-only or CLI/terminal-only — matching the
+  // brief's own rule: "a request requiring a usable UI cannot produce a
+  // backend-only task graph unless the user explicitly requested an
+  // API/backend-only project."
+  if (!needsFrontend && !needsBackend) {
+    roles.push("ui-ux-agent", "frontend-developer");
+    rationale.push("ui-ux-agent, frontend-developer included: idea has no explicit UI, backend, or CLI signal — defaulting to a usable interface rather than an invisible backend-only service.");
   }
 
   const researchHits = includesAny(text, RESEARCH_SIGNALS);
