@@ -8,7 +8,8 @@ import { recordFailure } from "../../domain/project-outputs.ts";
 import { recordAiUsage } from "../../domain/budget.ts";
 import { planProject } from "../../orchestrator/orchestrator.ts";
 import { runOneCycle } from "../../runner/runner.ts";
-import { getProjectPipeline, getCollaborationFeed } from "../project-detail-data.ts";
+import { getProjectPipeline, getCollaborationFeed, getProjectDetail } from "../project-detail-data.ts";
+import { listTasksForProject } from "../../domain/tasks.ts";
 import { getOfficeAnalytics } from "../analytics-data.ts";
 
 process.env.OFFICE_OWNER_EMAIL = "test-owner@example.invalid";
@@ -77,6 +78,80 @@ describe("getProjectPipeline", () => {
     const pipeline = getProjectPipeline(t.db, project.id);
     const qaStage = pipeline.find((s) => s.key === "qa")!;
     assert.equal(qaStage.state, "BLOCKED");
+    t.close();
+  });
+});
+
+// Platform-hardening / runner-reliability follow-up, Phase 6 — the
+// second real AI Office pilot's owner saw "Idea/Requirements/
+// Architecture COMPLETE" in the pipeline alongside "Progress: 2/7
+// tasks" and read that as a contradiction. It never actually was one —
+// `getProjectPipeline`'s "Idea" entry is a hardcoded, always-COMPLETE
+// synthetic stage (the input, not a planned task) and was never counted
+// in `progress.completed`/`.total`, which is derived purely from the
+// real `tasks` table — but the confusion itself was real, so this locks
+// the already-correct invariant in permanently: both views must always
+// derive from the exact same task source and can never mathematically
+// disagree.
+describe("progress/pipeline consistency (Part 6 of the runner-reliability follow-up)", () => {
+  test("numeric progress never counts the synthetic 'Idea' pipeline stage as one of the real tasks", () => {
+    const t = createTestDb();
+    const owner = getOwner(t.db)!;
+    const { project } = createProjectWithIdea(t.db, { title: "P", rawIdeaText: "Build a small backend service with a database.", ownerId: owner.id });
+    createTask(t.db, { projectId: project.id, roleId: "backend-developer", title: "Implement backend" });
+    createTask(t.db, { projectId: project.id, roleId: "qa-agent", title: "Test" });
+
+    const detail = getProjectDetail(t.db, project.id)!;
+    const realTaskCount = listTasksForProject(t.db, project.id).length;
+    assert.equal(detail.progress.total, realTaskCount, "progress.total must equal the real task count — 'Idea' is never one of them");
+
+    const pipeline = getProjectPipeline(t.db, project.id);
+    assert.equal(pipeline.find((s) => s.key === "idea")?.state, "COMPLETE", "the Idea stage itself is always shown complete (it's the input, not a task)");
+    // "Idea" being COMPLETE must never inflate progress.total by one.
+    assert.notEqual(detail.progress.total, realTaskCount + 1);
+  });
+
+  test("progress.completed and every DONE-derived pipeline stage always agree — completing every real task makes both report full completion together", async () => {
+    const t = createTestDb();
+    const owner = getOwner(t.db)!;
+    const { project } = createProjectWithIdea(t.db, {
+      title: "Static Page",
+      rawIdeaText: "Build a small static webpage with a heading and a button. No backend or database is needed.",
+      ownerId: owner.id,
+    });
+    planProject(t.db, project.id);
+    await runToCompletion(t.db);
+
+    const detail = getProjectDetail(t.db, project.id)!;
+    assert.equal(detail.progress.completed, detail.progress.total, "every real task completed — progress must read fully done");
+
+    const pipeline = getProjectPipeline(t.db, project.id);
+    const nonSkippedNonIdea = pipeline.filter((s) => s.key !== "idea" && s.state !== "SKIPPED");
+    assert.ok(nonSkippedNonIdea.length > 0);
+    assert.ok(nonSkippedNonIdea.every((s) => s.state === "COMPLETE"), "every planned (non-skipped) stage must read COMPLETE exactly when progress reports 100%");
+  });
+
+  test("a partially-done project's progress fraction reflects exactly the real DONE task count, matching the pipeline's own ACTIVE/PENDING stages — the literal 2/7 scenario the owner saw", () => {
+    const t = createTestDb();
+    const owner = getOwner(t.db)!;
+    const { project } = createProjectWithIdea(t.db, { title: "TaskFlow", rawIdeaText: "Build a personal task manager.", ownerId: owner.id });
+    const roles = ["product-owner", "solution-architect", "backend-developer", "qa-agent", "security-reviewer", "code-reviewer", "release-agent"];
+    const tasks = roles.map((roleId) => createTask(t.db, { projectId: project.id, roleId, title: `Task for ${roleId}` }));
+    updateTaskStatus(t.db, tasks[0].id, "DONE");
+    updateTaskStatus(t.db, tasks[1].id, "DONE");
+    updateTaskStatus(t.db, tasks[2].id, "IN_PROGRESS");
+
+    const detail = getProjectDetail(t.db, project.id)!;
+    assert.equal(detail.progress.completed, 2);
+    assert.equal(detail.progress.total, 7);
+
+    const pipeline = getProjectPipeline(t.db, project.id);
+    const byKey = Object.fromEntries(pipeline.map((s) => [s.key, s.state]));
+    assert.equal(byKey.idea, "COMPLETE");
+    assert.equal(byKey.requirements, "COMPLETE");
+    assert.equal(byKey.architecture, "COMPLETE");
+    assert.equal(byKey.build, "ACTIVE");
+    assert.equal(byKey.qa, "PENDING");
     t.close();
   });
 });

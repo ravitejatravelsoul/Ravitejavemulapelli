@@ -29,6 +29,7 @@ import { getProjectModelPolicy } from "@/lib/ai-office/domain/model-routing";
 import { AGENT_ROLE_CATALOG } from "@/lib/ai-office/domain/agent-role-catalog";
 import { ProviderBadge } from "@/components/ai-office/provider-badge";
 import { ActivityTimeline } from "@/components/ai-office/dashboard/activity-timeline";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { generateReadme } from "@/lib/ai-office/workspace/readme-generator";
 import { Download } from "lucide-react";
 
@@ -192,9 +193,17 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-1 text-xs text-muted-foreground">
-          <span>
-            Progress: {progress.completed}/{progress.total} tasks
-          </span>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="cursor-help underline decoration-dotted underline-offset-4">
+                Progress: {progress.completed}/{progress.total} tasks
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>
+              This counts only the real, planned tasks below — &quot;Idea&quot; in the pipeline is the starting input, not one of the {progress.total} tasks, so it&apos;s never
+              part of this count.
+            </TooltipContent>
+          </Tooltip>
           <span>Simulated cost: ${simulatedCostUsd.toFixed(2)}</span>
           <span>LIVE cost: ${liveCostUsd.toFixed(2)}</span>
           {waitingForOwnerApproval && (
@@ -204,7 +213,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
             </span>
           )}
           {runnerOfflineBlockingProgress && (
-            <span className="font-medium text-destructive">Runner offline — projects cannot progress. Start it with `npm run ai-office:runner`.</span>
+            <span className="font-medium text-destructive">Runner offline — projects cannot progress. Start it with `npm run office:dev` (or `npm run ai-office:runner`).</span>
           )}
         </div>
 
