@@ -6,9 +6,8 @@ import { getAppDatabase } from "@/lib/ai-office/db/client";
 import { getOwner } from "@/lib/ai-office/domain/users";
 import { getOfficeStatus } from "@/lib/ai-office/domain/office";
 import { OfficeSidebarNav } from "@/components/ai-office/shell/office-sidebar-nav";
+import { LimitedProductionOffice } from "@/components/ai-office/shell/limited-production-office";
 import { TejaAssistant } from "@/components/ai-office/assistant/teja-assistant";
-import { GlassCard } from "@/components/common/glass-card";
-import { Badge } from "@/components/ui/badge";
 import { isAiOfficeOperationalModeEnabled } from "@/lib/ai-office/config/operational-mode";
 
 export const metadata: Metadata = {
@@ -32,6 +31,19 @@ export const metadata: Metadata = {
  * this group, so navigation between Office/Projects/Agents/Workspaces/
  * Models/Analytics/Settings never requires re-deriving the same auth/owner
  * lookups on each page.
+ *
+ * Production-shell boundary (the fix for the post-login Vercel 500): when
+ * `isAiOfficeOperationalModeEnabled()` is false, this layout renders
+ * *only* `<LimitedProductionOffice>` and returns early — it never calls
+ * `getAppDatabase()`/`getOwner()`/`getOfficeStatus()`, never renders
+ * `OfficeSidebarNav`/`TejaAssistant`, and critically never renders
+ * `children`. Every route under this group (`/office/projects`,
+ * `/office/agents`, `/office/workspaces`, ...) shares this one layout, so
+ * skipping `children` here is what keeps a production visitor from ever
+ * reaching a child page's own SQLite/filesystem-touching Server Component
+ * simply by typing its URL — there is no route inside this group that can
+ * bypass this check, because there is no route inside this group that
+ * renders without first passing through this layout.
  */
 export default async function OfficeProtectedLayout({ children }: { children: React.ReactNode }) {
   const session = await verifySession();
@@ -39,6 +51,13 @@ export default async function OfficeProtectedLayout({ children }: { children: Re
     redirect("/office/login");
   }
 
+  if (!isAiOfficeOperationalModeEnabled()) {
+    return <LimitedProductionOffice email={session.userId} signOut={logout} />;
+  }
+
+  // Reached only when isAiOfficeOperationalModeEnabled() is true (the
+  // early return above handles the disabled case) — local dev, tests, or
+  // a future durably-hosted production deployment.
   const db = getAppDatabase();
   const owner = getOwner(db);
   const officeStatus = getOfficeStatus(db);
@@ -47,23 +66,7 @@ export default async function OfficeProtectedLayout({ children }: { children: Re
     <div className="flex min-h-screen flex-col bg-background md:flex-row">
       <OfficeSidebarNav ownerEmail={owner?.email ?? "owner"} officeState={officeStatus?.state ?? "CLOSED"} signOut={logout} />
       <main className="min-w-0 flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
-        <div className="mx-auto w-full max-w-[1600px]">
-          {!isAiOfficeOperationalModeEnabled() && (
-            <GlassCard className="mb-4 !p-4">
-              <div className="flex flex-wrap items-center gap-3">
-                <Badge variant="destructive" className="font-mono text-xs uppercase">
-                  Local-only · production operations disabled
-                </Badge>
-                <p className="text-sm text-muted-foreground">
-                  This deployment has no durable production hosting configured for the private AI Office yet. You can view everything here, but creating
-                  projects, resuming execution, and approving paid work are turned off. Run <code className="font-mono">npm run office:dev</code> locally for the
-                  fully operational workspace.
-                </p>
-              </div>
-            </GlassCard>
-          )}
-          {children}
-        </div>
+        <div className="mx-auto w-full max-w-[1600px]">{children}</div>
       </main>
       <TejaAssistant assistantName={process.env.OWNER_ASSISTANT_NAME || "Teja"} />
     </div>
