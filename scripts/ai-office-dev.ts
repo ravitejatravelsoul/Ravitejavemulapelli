@@ -2,7 +2,15 @@ import "server-only";
 import { spawn, type ChildProcess } from "node:child_process";
 import { join } from "node:path";
 import { getAppDatabase } from "../lib/ai-office/db/client.ts";
-import { shouldSpawnRunner, beginDeadRunnerRecovery, completeRunnerRecovery, detectStaleHeartbeat, DEFAULT_SUPERVISOR_STALE_MS } from "../lib/ai-office/supervisor/supervisor.ts";
+import {
+  shouldSpawnRunner,
+  beginDeadRunnerRecovery,
+  completeRunnerRecovery,
+  detectStaleHeartbeat,
+  isActionableRunnerExit,
+  shouldBackstopAct,
+  DEFAULT_SUPERVISOR_STALE_MS,
+} from "../lib/ai-office/supervisor/supervisor.ts";
 
 /**
  * `npm run office:dev` (the single owner-friendly command the runner-
@@ -27,6 +35,21 @@ import { shouldSpawnRunner, beginDeadRunnerRecovery, completeRunnerRecovery, det
  * manually, or by another instance of this same script), this refuses
  * to spawn a second one. The Next.js app still starts normally either
  * way; only the runner spawn is skipped.
+ *
+ * Recovery mutex (added after a real, live-tested failure): the exit-event
+ * listener and the heartbeat-staleness backstop are two INDEPENDENT
+ * triggers that can each decide "the runner is dead." Without a mutex,
+ * both can fire within the same window and each spawn a replacement,
+ * producing two live runners that both claim and pay for the same task
+ * concurrently — this actually happened during live testing and wasted
+ * real Claude spend (two attempts for the same task created 725ms apart).
+ * `recoveryInFlight` + `isActionableRunnerExit`/`shouldBackstopAct` (pure,
+ * unit-tested in supervisor.ts) serialize the two triggers so only one
+ * recovery ever runs at a time. A stray, delayed OS exit event for a
+ * runner this script already superseded (e.g. one it deliberately killed
+ * while recovering a different dead runner) is also ignored, by comparing
+ * against the specific child each exit listener was attached to rather
+ * than a shared mutable "current runner" variable.
  */
 
 const repoRoot = join(import.meta.dirname, "..");
@@ -41,6 +64,7 @@ let nextChild: ChildProcess | null = null;
 let runnerChild: ChildProcess | null = null;
 let runnerId: string | null = null;
 let staleCheckTimer: ReturnType<typeof setInterval> | null = null;
+let recoveryInFlight = false;
 
 function log(message: string): void {
   console.log(`[office:dev] ${message}`);
@@ -71,14 +95,19 @@ function spawnRunnerIfSafe(confirmedDeadRunnerId?: string): string | null {
 
   const id = `runner-${process.pid}-${Date.now().toString(36)}`;
   runnerId = id;
-  runnerChild = spawn(process.execPath, [envFileArg, "--conditions=react-server", runnerScript], {
+  const child = spawn(process.execPath, [envFileArg, "--conditions=react-server", runnerScript], {
     stdio: "inherit",
     shell: false,
     cwd: repoRoot,
     env: { ...process.env, AI_OFFICE_RUNNER_ID_HINT: id },
   });
-  runnerChild.on("exit", (code, signal) => handleRunnerExit(code, signal));
-  log(`Started runner (pid ${runnerChild.pid}).`);
+  runnerChild = child;
+  // Capture `child` itself (not the shared mutable `runnerChild`/`runnerId`
+  // globals) so that a delayed OS exit event for THIS specific process is
+  // never misattributed to whatever runner happens to be "current" by the
+  // time the event finally fires — see `isActionableRunnerExit`.
+  child.on("exit", (code, signal) => handleRunnerExit(id, child, code, signal));
+  log(`Started runner (pid ${child.pid}).`);
   return id;
 }
 
@@ -86,15 +115,24 @@ function spawnRunnerIfSafe(confirmedDeadRunnerId?: string): string | null {
  * The primary dead-runner signal: a real, immediate OS `exit` event on
  * the child THIS script itself spawned — far more reliable than polling
  * a heartbeat, and available the instant the process actually dies.
- * Never fires during a deliberate shutdown (`shuttingDown` guards that).
+ * Guarded by `isActionableRunnerExit` (pure, unit-tested): ignores a
+ * stray/delayed exit from a runner already superseded, and never starts a
+ * second, overlapping recovery while one is already in flight.
  */
-function handleRunnerExit(code: number | null, signal: string | null): void {
-  if (shuttingDown) return;
+function handleRunnerExit(exitedRunnerId: string, exitedChild: ChildProcess, code: number | null, signal: string | null): void {
+  const actionable = isActionableRunnerExit({ shuttingDown, recoveryInFlight, exitedIsCurrentlyTracked: exitedChild === runnerChild });
+  if (!actionable) {
+    if (!shuttingDown) {
+      log(`Ignoring exit of runner "${exitedRunnerId}" (code=${code ?? "null"} signal=${signal ?? "null"}) — ${recoveryInFlight ? "a recovery is already in flight" : "it was already superseded by a newer runner"}.`);
+    }
+    return;
+  }
   log(`Runner exited unexpectedly (code=${code ?? "null"} signal=${signal ?? "null"}) — beginning recovery.`);
-  recoverAndRestartRunner(runnerId ?? "unknown-runner");
+  recoverAndRestartRunner(exitedRunnerId);
 }
 
 function recoverAndRestartRunner(deadRunnerId: string): void {
+  recoveryInFlight = true;
   const { incident, tasksRecovered } = beginDeadRunnerRecovery(db, deadRunnerId);
   log(`Recorded incident ${incident.id} — reclaimed ${tasksRecovered.length} task(s) held by the dead runner.`);
 
@@ -102,6 +140,7 @@ function recoverAndRestartRunner(deadRunnerId: string): void {
   if (!newRunnerId) {
     completeRunnerRecovery(db, incident.id, null);
     log(`Could not safely restart a runner — incident ${incident.id} escalated for owner attention.`);
+    recoveryInFlight = false;
     return;
   }
 
@@ -114,11 +153,13 @@ function recoverAndRestartRunner(deadRunnerId: string): void {
     if (stale.runnerId === newRunnerId && !stale.stale) {
       completeRunnerRecovery(db, incident.id, newRunnerId);
       log(`Verified fresh heartbeat from "${newRunnerId}" — incident ${incident.id} resolved.`);
+      recoveryInFlight = false;
       return;
     }
     if (Date.now() > deadline) {
       completeRunnerRecovery(db, incident.id, null);
       log(`Replacement runner never reported a fresh heartbeat within 15s — incident ${incident.id} escalated.`);
+      recoveryInFlight = false;
       return;
     }
     setTimeout(verify, 1000);
@@ -143,9 +184,9 @@ function recoverAndRestartRunner(deadRunnerId: string): void {
  */
 function startStaleHeartbeatBackstop(): void {
   staleCheckTimer = setInterval(() => {
-    if (shuttingDown) return;
     const stale = detectStaleHeartbeat(db, DEFAULT_SUPERVISOR_STALE_MS);
-    if (stale.stale && stale.runnerId) {
+    if (!shouldBackstopAct({ shuttingDown, recoveryInFlight, stale: stale.stale })) return;
+    if (stale.runnerId) {
       runnerId = stale.runnerId;
       log(`Heartbeat backstop: runner "${stale.runnerId}" has gone stale (${stale.ageMs}ms) — treating as dead/hung and recovering.`);
       if (runnerChild && !runnerChild.killed) runnerChild.kill();

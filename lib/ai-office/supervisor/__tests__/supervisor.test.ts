@@ -7,7 +7,7 @@ import { createTask, createTaskAttempt, createAgentRunForAttempt, claimTask, upd
 import { upsertRunnerHeartbeat } from "../../domain/workspace.ts";
 import { listOpenIncidents, listRecentIncidents } from "../../domain/office-incidents.ts";
 import { computeOfficeHealthStatus } from "../../engineer/office-engineer.ts";
-import { shouldSpawnRunner, detectStaleHeartbeat, beginDeadRunnerRecovery, completeRunnerRecovery, announceRunnerStarted, SYMPTOM_RUNNER_OFFLINE } from "../supervisor.ts";
+import { shouldSpawnRunner, detectStaleHeartbeat, beginDeadRunnerRecovery, completeRunnerRecovery, announceRunnerStarted, isActionableRunnerExit, shouldBackstopAct, SYMPTOM_RUNNER_OFFLINE } from "../supervisor.ts";
 
 process.env.OFFICE_OWNER_EMAIL = "test-owner@example.invalid";
 process.env.OFFICE_OWNER_PASSWORD_HASH = "synthetic-test-salt:synthetic-test-hash-not-a-real-scrypt-output";
@@ -197,5 +197,45 @@ describe("full self-healing sequence — runner healthy -> disappears -> detecte
     assert.equal(listRecentIncidents(t.db).length, 1);
 
     t.close();
+  });
+});
+
+// Real bug found during live testing of the actual ai-office-dev.ts
+// supervisor script — not a hypothetical. The runner-child `exit` event
+// and the periodic heartbeat-staleness backstop are two independent
+// triggers with no coordination; both fired within the same window and
+// each spawned a replacement runner, producing two live runners that
+// concurrently claimed and paid for the SAME task (two real Claude calls
+// for the same backend-developer attempt created 725ms apart — an
+// interval impossible for one serialized runner, whose poll interval is
+// 5s and whose calls take 45-60s). These pure functions are the exact
+// guard logic `ai-office-dev.ts` now uses to serialize the two triggers.
+describe("isActionableRunnerExit / shouldBackstopAct — the exact duplicate-spawn race fix", () => {
+  test("a tracked runner's exit is actionable when idle (no shutdown, no recovery already running)", () => {
+    assert.equal(isActionableRunnerExit({ shuttingDown: false, recoveryInFlight: false, exitedIsCurrentlyTracked: true }), true);
+  });
+
+  test("an exit is ignored while a recovery is already in flight — prevents the second trigger from spawning a duplicate runner", () => {
+    assert.equal(isActionableRunnerExit({ shuttingDown: false, recoveryInFlight: true, exitedIsCurrentlyTracked: true }), false);
+  });
+
+  test("a stray/delayed exit from a runner already superseded by a newer one is ignored — must never be treated as the current runner failing", () => {
+    assert.equal(isActionableRunnerExit({ shuttingDown: false, recoveryInFlight: false, exitedIsCurrentlyTracked: false }), false);
+  });
+
+  test("no exit is actionable during a deliberate shutdown", () => {
+    assert.equal(isActionableRunnerExit({ shuttingDown: true, recoveryInFlight: false, exitedIsCurrentlyTracked: true }), false);
+  });
+
+  test("the heartbeat backstop acts on a genuinely stale heartbeat when idle", () => {
+    assert.equal(shouldBackstopAct({ shuttingDown: false, recoveryInFlight: false, stale: true }), true);
+  });
+
+  test("the heartbeat backstop stays silent while the exit-event path already has a recovery in flight — this is the other half of the same race fix", () => {
+    assert.equal(shouldBackstopAct({ shuttingDown: false, recoveryInFlight: true, stale: true }), false);
+  });
+
+  test("the heartbeat backstop never acts on a fresh heartbeat regardless of other flags", () => {
+    assert.equal(shouldBackstopAct({ shuttingDown: false, recoveryInFlight: false, stale: false }), false);
   });
 });

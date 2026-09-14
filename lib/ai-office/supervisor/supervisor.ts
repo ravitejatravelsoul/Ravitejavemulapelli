@@ -26,6 +26,49 @@ import { recordEvent, recordAuditEntry } from "../domain/events.ts";
 export const SYMPTOM_RUNNER_OFFLINE = "runner-offline";
 
 /**
+ * Pure decision logic for whether a runner-child `exit` event should
+ * trigger a NEW recovery, extracted so the exact race this session's live
+ * testing actually hit (and which caused real, wasted paid Claude spend —
+ * see the regression test) is provable and testable outside a live child
+ * process.
+ *
+ * The real incident: `ai-office-dev.ts`'s `startStaleHeartbeatBackstop`
+ * (a `setInterval` poll) and its runner-child `exit` listener are two
+ * independent triggers that can each decide "the runner is dead" and each
+ * call `spawnRunnerIfSafe` — and because a just-spawned replacement has no
+ * heartbeat row yet, `shouldSpawnRunner`'s check does not block a SECOND
+ * concurrent caller from also deciding to spawn. The result, observed
+ * live: two runner processes started 8ms apart, and — far worse — TWO
+ * real paid Claude calls for the *same* backend-developer task attempt
+ * created 725ms apart (impossible for one serialized runner, whose poll
+ * interval is 5s and whose calls take 45-60s), i.e. real wasted spend.
+ *
+ * Two conditions must both hold for an exit event to be actionable:
+ *  - `recoveryInFlight` must be false — a recovery already in progress
+ *    (from either trigger) owns the current incident; a second trigger
+ *    must never start a second, overlapping recovery.
+ *  - the exited child must still be the one actively tracked as "the
+ *    current runner" — a delayed/stale OS exit event for a runner this
+ *    process already superseded (e.g. one it deliberately killed while
+ *    recovering a DIFFERENT dead runner) must never be treated as a fresh
+ *    failure of the CURRENT, healthy runner.
+ */
+export function isActionableRunnerExit(params: { shuttingDown: boolean; recoveryInFlight: boolean; exitedIsCurrentlyTracked: boolean }): boolean {
+  return !params.shuttingDown && !params.recoveryInFlight && params.exitedIsCurrentlyTracked;
+}
+
+/**
+ * Pure decision logic for whether the periodic heartbeat-staleness
+ * backstop should act on this tick. Must stay silent while a recovery
+ * triggered by the OTHER signal (the exit event) is already in flight —
+ * see `isActionableRunnerExit` for the full incident writeup; this is the
+ * other half of the same fix.
+ */
+export function shouldBackstopAct(params: { shuttingDown: boolean; recoveryInFlight: boolean; stale: boolean }): boolean {
+  return !params.shuttingDown && !params.recoveryInFlight && params.stale;
+}
+
+/**
  * A runner is "fresh" once its heartbeat is more recent than
  * `thresholdMs` ago. Deliberately configurable per caller rather than
  * reusing the dashboard's own `HEARTBEAT_STALE_MS` (20s) — that value is
