@@ -15,6 +15,7 @@ import {
   type SemanticRepairPlanRow,
 } from "../domain/semantic-repair.ts";
 import { detectSemanticFailureLoop, buildRepairPlan, type ClassificationEvidence } from "./semantic-failure-detection.ts";
+import { checkSemanticRepairConsistency } from "./semantic-repair-consistency.ts";
 import { recordEvent, recordAuditEntry } from "../domain/events.ts";
 import { retryEscalatedTask } from "../control/task-transitions.ts";
 import { executeTask, type ExecuteTaskResult } from "../agents/agent-runner.ts";
@@ -290,6 +291,8 @@ export function rejectSemanticRepairPlan(db: DatabaseSync, planId: string, actor
 export interface ExecuteApprovedRepairOptions {
   /** Test-injection point — same pattern as ExecuteTaskOptions.claudeClientOverride. Real (non-test) operation never sets this. */
   claudeClientOverride?: import("../providers/claude/claude-adapter.ts").ClaudeAdapterOptions["client"];
+  /** Test-injection point for the semantic-repair-consistency check's own Ollama call (separate from `claudeClientOverride`, which only covers the main repair call) — lets a test prove the scoped-guard plumbing deterministically, without depending on whether a real Ollama server happens to be reachable. Real (non-test) operation never sets this. */
+  intentCheckFetch?: typeof fetch;
 }
 
 export type SemanticRepairExecutionResult = { status: "repaired"; plan: SemanticRepairPlanRow; taskResult: ExecuteTaskResult } | { status: "failed"; plan: SemanticRepairPlanRow; reason: string };
@@ -334,7 +337,38 @@ export async function executeApprovedSemanticRepair(db: DatabaseSync, planId: st
   updateIncident(db, plan.incidentId, { status: "REPAIRING", repairAction: "Targeted semantic repair call (one bounded attempt).", repairProvider: "claude" });
   recordEvent(db, { projectId: task.projectId, type: "office_engineer.semantic_repair_repairing", payload: { taskId: task.id, planId }, actor: actorId });
 
-  const taskResult = await executeTask(db, task.id, { contextOverride: context, claudeClientOverride: options.claudeClientOverride });
+  // The generic whole-product retry-drift checker is deliberately
+  // replaced for this one bounded call — see agent-runner.ts's
+  // `retryDriftCheckOverride` docblock for the full incident this
+  // closes. `authoritativeUserRequest` here is still the REAL whole
+  // product request (from `evidence`, never redefined by the repair
+  // contract); the plan's own fields are passed as a SEPARATE, narrower
+  // scope constraint, never merged into one ambiguous string.
+  const retryDriftCheckOverride: NonNullable<Parameters<typeof executeTask>[2]>["retryDriftCheckOverride"] = async (authoritativeUserRequest, currentFiles, proposedOperations, fetchImpl) => {
+    const check = await checkSemanticRepairConsistency({
+      authoritativeUserRequest,
+      authoritativeContract: plan.authoritativeContract,
+      allowedFilePaths: plan.affectedFiles,
+      requiredChanges: plan.requiredChanges,
+      mustPreserve: plan.mustPreserve,
+      exactFailureReason: plan.rootCause,
+      currentFiles,
+      proposedOperations,
+      fetchImpl,
+    });
+    // "unavailable" fails OPEN here, matching checkRetryDriftBeforeMaterialization's
+    // own documented behavior for this exact checkpoint (a pre-write
+    // safety net, not the final claim of correctness — real QA remains
+    // authoritative) — only a real "inconsistent" verdict ever rejects.
+    return check.outcome === "inconsistent" ? { consistent: false, reason: check.reason } : { consistent: true };
+  };
+
+  const taskResult = await executeTask(db, task.id, {
+    contextOverride: context,
+    retryDriftCheckOverride,
+    claudeClientOverride: options.claudeClientOverride,
+    intentCheckFetch: options.intentCheckFetch,
+  });
 
   let actualRepairCostUsd: number | null = null;
   if (taskResult.agentRun) {

@@ -7,10 +7,10 @@ import { createTestDb } from "../../db/test-helpers.ts";
 import { getOwner } from "../../domain/users.ts";
 import { createProjectWithIdea } from "../../domain/projects.ts";
 import { createTask, getTask } from "../../domain/tasks.ts";
-import { recordFailure, createArtifact, listArtifactsForProject, listDecisionsForProject, createApproval, decideApproval } from "../../domain/project-outputs.ts";
+import { recordFailure, markFailureSuperseded, listFailuresForTask, createArtifact, listArtifactsForProject, listDecisionsForProject, createApproval, decideApproval } from "../../domain/project-outputs.ts";
 import { approveApproval } from "../../approvals/approval-service.ts";
 import { upsertRecommendedRouting, applyRecommendedRouting } from "../../domain/model-routing.ts";
-import { writeFile } from "../../workspace/workspace-service.ts";
+import { writeFile, listFiles } from "../../workspace/workspace-service.ts";
 import { upsertWorkspaceFileRecord } from "../../domain/workspace.ts";
 import { listOpenIncidents } from "../../domain/office-incidents.ts";
 import { listSemanticRepairPlansForTask, getSemanticRepairPlan } from "../../domain/semantic-repair.ts";
@@ -23,6 +23,8 @@ import {
   applyApprovedArchitectureRemediation,
   buildTargetedRepairContext,
 } from "../semantic-repair-execution.ts";
+import { executeTask } from "../../agents/agent-runner.ts";
+import type { AIProviderAdapter } from "../../providers/types.ts";
 
 process.env.OFFICE_OWNER_EMAIL = "test-owner@example.invalid";
 process.env.OFFICE_OWNER_PASSWORD_HASH = "synthetic-test-salt:synthetic-test-hash-not-a-real-scrypt-output";
@@ -88,6 +90,24 @@ const GOOD_REPAIR_OUTPUT = JSON.stringify({
   recommendedNextActions: [],
 });
 
+/** A real (test-double) provider that always fails with the given reason — used to build up real prior-attempt history (via the real executeTask/finishFailure path, never a manual recordFailure) so a subsequent repair call is a genuine attemptNumber > 1 corrective attempt, exactly like the real TaskFlow incident. */
+function failingAdapter(reason: string): AIProviderAdapter {
+  return {
+    name: "test-failing",
+    async runAgentTask() {
+      return {
+        status: "FAILED",
+        output: { summary: "", artifacts: [], decisions: [], testResults: [], events: [], fileOperations: [], recommendedNextActions: [], failure: { reason } },
+        usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+        raw: {},
+      };
+    },
+    estimateCost() {
+      return { estimatedInputTokens: 0, estimatedOutputTokens: 0, estimatedCostUsd: 0 };
+    },
+  };
+}
+
 describe("computeFailureSignature / detectSemanticFailureLoop", () => {
   test("a single semantic failure is not yet a loop", () => {
     const t = createTestDb();
@@ -123,6 +143,51 @@ describe("computeFailureSignature / detectSemanticFailureLoop", () => {
 
     const loop = detectSemanticFailureLoop(t.db, task);
     assert.equal(loop.detected, false, "operational noise must never be mistaken for a semantic loop");
+    t.close();
+  });
+
+  test("a superseded failure is excluded from the loop signature — the platform defect that caused it is fixed, even though this exact task was never retried after the fix", () => {
+    const t = createTestDb();
+    const { project } = setupHybridProject(t);
+    const task = createTask(t.db, { projectId: project.id, roleId: "backend-developer", title: "Implement backend" });
+    const stale = recordFailure(t.db, { projectId: project.id, taskId: task.id, reason: '"index.html" does not exist in the project workspace — nothing to load.' });
+    recordFailure(t.db, { projectId: project.id, taskId: task.id, reason: IDENTITY_REJECTION_1 });
+    recordFailure(t.db, { projectId: project.id, taskId: task.id, reason: IDENTITY_REJECTION_2 });
+
+    // Before superseding: 3 semantic failures, 2 distinct categories —
+    // the stale QA failure still pollutes the signature.
+    const before = detectSemanticFailureLoop(t.db, task);
+    assert.equal(before.semanticFailures.length, 3);
+
+    const superseded = markFailureSuperseded(t.db, stale.id, "The QA gate's hardcoded index.html assumption has since been fixed — this project never planned a frontend deliverable.");
+    assert.ok(superseded.supersededAt != null);
+    assert.equal(superseded.supersededReason, "The QA gate's hardcoded index.html assumption has since been fixed — this project never planned a frontend deliverable.");
+    // The row itself — reason, resolved, everything else — is untouched.
+    assert.equal(superseded.reason, '"index.html" does not exist in the project workspace — nothing to load.');
+    assert.equal(superseded.resolved, 0);
+
+    const after = detectSemanticFailureLoop(t.db, task);
+    assert.equal(after.semanticFailures.length, 2, "the superseded failure must no longer count toward the signature");
+    assert.ok(!after.semanticFailures.some((f) => f.id === stale.id));
+    assert.equal(after.signature, computeFailureSignature([IDENTITY_REJECTION_1, IDENTITY_REJECTION_2]));
+
+    // History is fully preserved — the row still exists, queryable.
+    const allFailures = listFailuresForTask(t.db, task.id);
+    assert.equal(allFailures.length, 3, "no failure row is ever deleted");
+    assert.ok(allFailures.some((f) => f.id === stale.id && f.supersededAt != null));
+
+    t.close();
+  });
+
+  test("markFailureSuperseded is idempotent — calling it twice never overwrites the first supersession reason", () => {
+    const t = createTestDb();
+    const { project } = setupHybridProject(t);
+    const task = createTask(t.db, { projectId: project.id, roleId: "backend-developer", title: "Implement backend" });
+    const failure = recordFailure(t.db, { projectId: project.id, taskId: task.id, reason: "stale" });
+
+    markFailureSuperseded(t.db, failure.id, "first reason");
+    const second = markFailureSuperseded(t.db, failure.id, "second reason (should not apply)");
+    assert.equal(second.supersededReason, "first reason");
     t.close();
   });
 
@@ -419,6 +484,110 @@ describe("paid repair cannot bypass approval / repair cost uses the normal budge
       assert.equal(getTask(t.db, task.id)?.status, "DONE");
       assert.equal(listOpenIncidents(t.db).find((i) => i.taskId === task.id), undefined, "the incident must be resolved, not left open");
 
+      t.close();
+    });
+  });
+
+  test("REGRESSION — reproduces the exact real TaskFlow defect: a repair touching BOTH allowed files, which the generic whole-product checker wrongly rejected live, now succeeds under the scoped guard", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const owner = getOwner(t.db)!;
+      const { project } = setupHybridProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "backend-developer", title: "Implement backend" });
+      await writeFile(project.id, "js/storage.js", "const Storage = { read() {}, write() {} };\nexport default Storage;");
+      await writeFile(project.id, "js/taskStore.js", "export class TaskStore { complete(id) {} }");
+      upsertWorkspaceFileRecord(t.db, { projectId: project.id, path: "js/storage.js", sizeBytes: 10, roleId: "backend-developer", taskId: task.id });
+      upsertWorkspaceFileRecord(t.db, { projectId: project.id, path: "js/taskStore.js", sizeBytes: 10, roleId: "backend-developer", taskId: task.id });
+      // Real prior attempts (via executeTask/finishFailure, never a
+      // manual recordFailure) so the repair below is a genuine
+      // attemptNumber > 1 corrective attempt — exactly like the real
+      // TaskFlow incident, and the only way the retry-drift check (and
+      // therefore this scoped guard) is even reached.
+      await executeTask(t.db, task.id, { provider: failingAdapter(IDENTITY_REJECTION_1) });
+      await executeTask(t.db, task.id, { provider: failingAdapter(IDENTITY_REJECTION_2) });
+
+      const proposed = await proposeSemanticRepair(t.db, task.id, "test");
+      if (proposed.status !== "proposed") throw new Error("unreachable");
+      assert.deepEqual(proposed.plan.affectedFiles.slice().sort(), ["js/storage.js", "js/taskStore.js"]);
+      approveSemanticRepairPlan(t.db, proposed.plan.id, owner.id);
+
+      const claudeApproval = createApproval(t.db, { projectId: project.id, kind: "paid_service_purchase", requestedBy: "system", context: {} });
+      approveApproval(t.db, { approvalId: claudeApproval.id, decidedByUserId: owner.id });
+      process.env.ANTHROPIC_API_KEY = "sk-ant-test-key-not-real";
+
+      // A real (mocked) Ollama judge that would ALSO be asked in the
+      // repair-scoped shape (never fails open by accident in this test).
+      const intentCheckFetch = (async () =>
+        ({ ok: true, status: 200, json: async () => ({ response: JSON.stringify({ productIntentPreserved: true, repairScopeSatisfied: true, outOfScopeChanges: [], reason: "in scope" }) }) }) as unknown as Response) as unknown as typeof fetch;
+
+      // The exact shape of the real failed attempt: a proposal touching
+      // BOTH storage.js and taskStore.js, staying within the allowed
+      // files and preserving the TaskStore class.
+      const repairOutput = JSON.stringify({
+        summary: "Fixed the complete() method and a supporting storage helper.",
+        artifacts: [],
+        decisions: [],
+        testResults: [],
+        events: [],
+        fileOperations: [
+          { kind: "file-operation", action: "write", path: "js/storage.js", content: "const Storage = { read() {}, write() {} };\nexport default Storage;\n// minor fix" },
+          { kind: "file-operation", action: "write", path: "js/taskStore.js", content: "export class TaskStore { complete(id) { /* fixed */ } }" },
+        ],
+        recommendedNextActions: [],
+      });
+
+      const result = await executeApprovedSemanticRepair(t.db, proposed.plan.id, owner.id, {
+        claudeClientOverride: claudeClient(() => claudeTextMessage(repairOutput)),
+        intentCheckFetch,
+      });
+
+      assert.equal(result.status, "repaired", "the exact real-world shape (both files, in-scope) must now succeed under the scoped guard");
+      if (result.status !== "repaired") throw new Error("unreachable");
+      assert.equal(getTask(t.db, task.id)?.status, "DONE");
+      t.close();
+    });
+  });
+
+  test("no safety regression: an out-of-scope proposal during a real repair attempt is still correctly rejected", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const owner = getOwner(t.db)!;
+      const { project } = setupHybridProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "backend-developer", title: "Implement backend" });
+      await writeFile(project.id, "js/taskStore.js", "export class TaskStore {}");
+      upsertWorkspaceFileRecord(t.db, { projectId: project.id, path: "js/taskStore.js", sizeBytes: 10, roleId: "backend-developer", taskId: task.id });
+      await executeTask(t.db, task.id, { provider: failingAdapter(IDENTITY_REJECTION_1) });
+      await executeTask(t.db, task.id, { provider: failingAdapter(IDENTITY_REJECTION_2) });
+
+      const proposed = await proposeSemanticRepair(t.db, task.id, "test");
+      if (proposed.status !== "proposed") throw new Error("unreachable");
+      approveSemanticRepairPlan(t.db, proposed.plan.id, owner.id);
+
+      const claudeApproval = createApproval(t.db, { projectId: project.id, kind: "paid_service_purchase", requestedBy: "system", context: {} });
+      approveApproval(t.db, { approvalId: claudeApproval.id, decidedByUserId: owner.id });
+      process.env.ANTHROPIC_API_KEY = "sk-ant-test-key-not-real";
+
+      const outOfScopeOutput = JSON.stringify({
+        summary: "Replaced task management with a brand new module.",
+        artifacts: [],
+        decisions: [],
+        testResults: [],
+        events: [],
+        fileOperations: [{ kind: "file-operation", action: "write", path: "js/unrelatedNewModule.js", content: "export class UnrelatedNewModule {}" }],
+        recommendedNextActions: [],
+      });
+
+      const result = await executeApprovedSemanticRepair(t.db, proposed.plan.id, owner.id, {
+        claudeClientOverride: claudeClient(() => claudeTextMessage(outOfScopeOutput)),
+      });
+
+      assert.equal(result.status, "failed");
+      if (result.status !== "failed") throw new Error("unreachable");
+      assert.match(result.reason, /REPAIR SCOPE REJECTED/);
+      assert.equal(result.plan.status, "ESCALATED");
+      assert.notEqual(getTask(t.db, task.id)?.status, "DONE", "an out-of-scope repair must never silently succeed the task");
+      const files = await listFiles(project.id);
+      assert.ok(!files.includes("js/unrelatedNewModule.js"), "the out-of-scope file must never actually be written to the workspace");
       t.close();
     });
   });

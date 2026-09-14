@@ -63,7 +63,14 @@ export interface SemanticFailureLoopEvidence {
  * repeat is the actual loop this capability exists to break.
  */
 export function detectSemanticFailureLoop(db: DatabaseSync, task: TaskRow): SemanticFailureLoopEvidence {
-  const failures = listFailuresForTask(db, task.id).filter((f) => !f.resolved);
+  // Excludes superseded failures (markFailureSuperseded) as well as
+  // resolved ones — a failure whose underlying PLATFORM defect has since
+  // been fixed must never keep polluting a signature computed today,
+  // even if that exact task was never itself retried after the fix. Real
+  // incident: a stale pre-QA-fix "index.html does not exist" failure on
+  // TaskFlow's backend-developer task kept appearing in its signature
+  // long after the QA gate bug that produced it was fixed.
+  const failures = listFailuresForTask(db, task.id).filter((f) => !f.resolved && !f.supersededAt);
   const semanticFailures = failures.filter((f) => !isOperationalFailureReason(f.reason));
   if (semanticFailures.length < MIN_SEMANTIC_FAILURES_FOR_LOOP) {
     return { detected: false, signature: "", semanticFailures: [] };
@@ -90,7 +97,7 @@ export interface ClassificationEvidence {
 // manages tasks array...", the exact real phrasing that prompted this).
 const STRUCTURE_NAME_PATTERNS = [/\b(?:class|interface|struct)\s+([A-Z]\w+)/g, /\b([A-Z]\w+)\s+(?:class|interface|struct)\b/g];
 
-function extractStructureNames(text: string): Set<string> {
+export function extractStructureNames(text: string): Set<string> {
   const names = new Set<string>();
   for (const pattern of STRUCTURE_NAME_PATTERNS) {
     for (const match of text.matchAll(pattern)) names.add(match[1]);

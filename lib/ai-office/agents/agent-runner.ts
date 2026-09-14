@@ -415,16 +415,37 @@ export interface ExecuteTaskOptions {
    * request, the relevant architecture section, only the directly
    * affected files, and the exact rejection being repaired — for the
    * normal per-role `buildTaskContext()` output, so a repair call never
-   * sends the whole project. Deliberately the ONLY difference from a
-   * normal attempt: every gate below this point (approval, LIVE budget,
-   * context-budget optimization, provider routing, retry-drift
-   * intent-consistency, fileOperations application, ai_usage/audit
-   * recording, the real retry-ceiling accounting) runs completely
-   * unchanged — a repair is executed as literally "another attempt at
-   * this task," never a separate, weaker, or privileged paid path.
-   * Real (non-test, non-repair) runner operation never sets this.
+   * sends the whole project. Every other gate below this point
+   * (approval, LIVE budget, context-budget optimization, provider
+   * routing, fileOperations application, ai_usage/audit recording, the
+   * real retry-ceiling accounting) runs completely unchanged — a repair
+   * is executed as literally "another attempt at this task," never a
+   * separate, weaker, or privileged paid path. The one deliberate
+   * exception is the retry-drift check itself — see
+   * `retryDriftCheckOverride` immediately below, added after a real
+   * repair attempt was wrongly rejected by the generic whole-product
+   * checker. Real (non-test, non-repair) runner operation never sets
+   * this.
    */
   contextOverride?: import("../providers/types.ts").TaskContext;
+  /**
+   * Substitutes `checkRetryDriftBeforeMaterialization` (the generic,
+   * whole-product "does this candidate still serve the authoritative
+   * request" checker) with a caller-supplied one — added for Office
+   * Engineer's semantic-repair capability
+   * (lib/ai-office/engineer/semantic-repair-consistency.ts's
+   * `checkSemanticRepairConsistency`), after a real live repair attempt
+   * was rejected by the generic checker for the wrong reason: that
+   * checker is designed to catch whole-product drift, not to validate
+   * compliance with a narrow, already-approved repair contract, and it
+   * ended up inventing a contradictory reinterpretation of the original
+   * request rather than judging the repair's actual scope. Every OTHER
+   * caller of `executeTask` — every normal agent attempt, every normal
+   * retry — leaves this unset and keeps using the existing, unmodified,
+   * unweakened generic checker exactly as before; this is purely an
+   * additive escape hatch, never a change to default behavior.
+   */
+  retryDriftCheckOverride?: typeof checkRetryDriftBeforeMaterialization;
   /** Test-injection point for the real ClaudeAdapter's own Anthropic client when executeTask constructs it internally via the controlled Claude LIVE pilot's provider-routing/approval/budget gate (separate from `options.provider`, which bypasses that gate entirely). Real (non-test) runner operation never sets this; ignored when `options.provider` is already given. Still requires `isClaudeConfigured()` to hold (a real or test `ANTHROPIC_API_KEY`/pricing configuration) — this only replaces the HTTP client, never the configuration check itself. */
   claudeClientOverride?: import("../providers/claude/claude-adapter.ts").ClaudeAdapterOptions["client"];
 }
@@ -1003,9 +1024,10 @@ export async function executeTask(
   // like checkpoint 1 (a pre-write safety net, not the final claim of
   // correctness — real QA, checkpoint 2, remains the authoritative
   // gate); only a real "inconsistent" verdict rejects.
+  const retryDriftChecker = options.retryDriftCheckOverride ?? checkRetryDriftBeforeMaterialization;
   const retryDrift =
     result.status === "SUCCEEDED" && isDevelopmentRole(role) && usedRealProvider && (attempt.attemptNumber ?? 1) > 1
-      ? await checkRetryDriftBeforeMaterialization(
+      ? await retryDriftChecker(
           context.authoritativeUserRequest,
           context.remediationContext?.currentFiles ?? [],
           result.output.fileOperations,
@@ -1014,6 +1036,15 @@ export async function executeTask(
       : { consistent: true as const };
 
   if (!retryDrift.consistent) {
+    // A caller-supplied checker (semantic repair) already returns a
+    // precise, structural reason (e.g. "REPAIR SCOPE REJECTED —
+    // Out-of-scope file: ...") — wrapping it in the generic whole-
+    // product "it would have changed the product's identity" framing
+    // would reintroduce exactly the vagueness this override exists to
+    // avoid. The default (generic) checker's message is unchanged.
+    const failureReason = options.retryDriftCheckOverride
+      ? `Semantic repair rejected before applying: ${retryDrift.reason}`
+      : `Corrective attempt rejected before applying — it would have changed the product's identity: ${retryDrift.reason}`;
     result = {
       status: "FAILED",
       output: {
@@ -1024,7 +1055,7 @@ export async function executeTask(
         events: [],
         fileOperations: [],
         recommendedNextActions: [],
-        failure: { reason: `Corrective attempt rejected before applying — it would have changed the product's identity: ${retryDrift.reason}` },
+        failure: { reason: failureReason },
       },
       usage: result.usage,
       raw: { retryDriftBlocked: true },

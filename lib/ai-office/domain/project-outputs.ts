@@ -76,6 +76,9 @@ export interface FailureRow {
   agentRunId: string | null;
   reason: string;
   resolved: 0 | 1;
+  /** Set only via markFailureSuperseded — a SEPARATE concept from `resolved` (see migration 014's docblock): the underlying platform defect that produced this failure has since been fixed, independent of whether this exact task was ever retried. The row itself is never edited otherwise or deleted. */
+  supersededAt: number | null;
+  supersededReason: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -205,6 +208,24 @@ export function recordFailure(
 
 export function resolveFailure(db: DatabaseSync, id: string): FailureRow {
   db.prepare("UPDATE failures SET resolved = 1, updatedAt = ? WHERE id = ?").run(Date.now(), id);
+  return db.prepare("SELECT * FROM failures WHERE id = ?").get(id) as unknown as FailureRow;
+}
+
+/**
+ * Marks a failure as superseded — a SEPARATE concept from `resolveFailure`
+ * (see migration 014's docblock): the PLATFORM defect that produced this
+ * failure has since been fixed, independent of whether this exact task
+ * was ever retried. The row's `reason`/`resolved`/every other field is
+ * left completely untouched — full history preserved, never deleted or
+ * rewritten, only annotated. Safe to call more than once (idempotent).
+ */
+export function markFailureSuperseded(db: DatabaseSync, id: string, reason: string): FailureRow {
+  db.prepare("UPDATE failures SET supersededAt = ?, supersededReason = ?, updatedAt = ? WHERE id = ? AND supersededAt IS NULL").run(
+    Date.now(),
+    reason,
+    Date.now(),
+    id,
+  );
   return db.prepare("SELECT * FROM failures WHERE id = ?").get(id) as unknown as FailureRow;
 }
 

@@ -24,7 +24,7 @@ describe("clean DB creation + migrations from zero", () => {
     const db = openDatabase(join(dir, "fresh.db"));
 
     const result = runMigrations(db);
-    assert.equal(result.version, 13);
+    assert.equal(result.version, 14);
     assert.deepEqual(result.applied, [
       "001-init.sql",
       "002-budget-and-approval-scope.sql",
@@ -39,8 +39,9 @@ describe("clean DB creation + migrations from zero", () => {
       "011-add-task-retry-baseline.sql",
       "012-add-office-engineer.sql",
       "013-add-semantic-repair.sql",
+      "014-add-superseded-failures.sql",
     ]);
-    assert.equal(getSchemaVersion(db), 13);
+    assert.equal(getSchemaVersion(db), 14);
 
     const tableCount = db
       .prepare("SELECT COUNT(*) as count FROM sqlite_master WHERE type = 'table' AND name != 'sqlite_sequence'")
@@ -57,11 +58,11 @@ describe("migrations are idempotent / safe to run repeatedly", () => {
     const t = createTestDb({ seed: false });
     const first = runMigrations(t.db); // no-op, createTestDb already migrated
     assert.deepEqual(first.applied, []);
-    assert.equal(first.version, 13);
+    assert.equal(first.version, 14);
 
     const second = runMigrations(t.db);
     assert.deepEqual(second.applied, []);
-    assert.equal(second.version, 13);
+    assert.equal(second.version, 14);
     t.close();
   });
 });
@@ -89,6 +90,7 @@ describe("schema version is inspectable", () => {
       { version: 11, name: "011-add-task-retry-baseline.sql" },
       { version: 12, name: "012-add-office-engineer.sql" },
       { version: 13, name: "013-add-semantic-repair.sql" },
+      { version: 14, name: "014-add-superseded-failures.sql" },
     ]);
     t.close();
   });
@@ -138,8 +140,9 @@ describe("migrations 002+003+004+005 apply cleanly on top of an existing v1 data
       "011-add-task-retry-baseline.sql",
       "012-add-office-engineer.sql",
       "013-add-semantic-repair.sql",
+      "014-add-superseded-failures.sql",
     ]);
-    assert.equal(getSchemaVersion(db), 13);
+    assert.equal(getSchemaVersion(db), 14);
 
     // The pre-existing rows survive, unmodified except for the new
     // columns now existing (and being NULL, since this data predates
@@ -235,6 +238,18 @@ describe("migrations 002+003+004+005 apply cleanly on top of an existing v1 data
        VALUES ('sp1','i1','p1','t1','frontend-developer','SIG','IMPLEMENTATION_WRONG','root','contract','[]','[]','[]','[]','PROPOSED',?,?)`,
     ).run(now, now);
     assert.ok(db.prepare("SELECT * FROM semantic_repair_plans WHERE id = 'sp1'").get());
+
+    // Migration 014's new nullable columns are fully usable afterward too.
+    const failureCols = (db.prepare("PRAGMA table_info(failures)").all() as Array<{ name: string }>).map((c) => c.name);
+    assert.ok(failureCols.includes("supersededAt"));
+    assert.ok(failureCols.includes("supersededReason"));
+    db.prepare(
+      "INSERT INTO failures (id, projectId, taskId, agentRunId, reason, resolved, createdAt, updatedAt) VALUES ('f1','p1','t1',NULL,'stale reason',0,?,?)",
+    ).run(now, now);
+    db.prepare("UPDATE failures SET supersededAt = ?, supersededReason = ? WHERE id = 'f1'").run(now, "platform defect fixed");
+    const failure = db.prepare("SELECT * FROM failures WHERE id = 'f1'").get() as { supersededAt: number; supersededReason: string };
+    assert.equal(failure.supersededAt, now);
+    assert.equal(failure.supersededReason, "platform defect fixed");
 
     db.close();
     rmSync(dir, { recursive: true, force: true });
@@ -387,7 +402,7 @@ describe("DB survives reopen/reconnect", () => {
     t.db.close();
 
     const reopened = reopenTestDb(dir);
-    assert.equal(getSchemaVersion(reopened), 13);
+    assert.equal(getSchemaVersion(reopened), 14);
     const roles = reopened.prepare("SELECT COUNT(*) as count FROM agent_roles").get() as { count: number };
     assert.equal(roles.count, AGENT_ROLE_CATALOG.length);
     reopened.close();
