@@ -9,7 +9,7 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "test:ai-office": "node --conditions=react-server --test \"lib/ai-office/**/*.test.ts\"",
-    "test:ai-office:e2e": "node --conditions=react-server --test lib/ai-office/e2e/office-navigation.e2e.ts",
+    "test:ai-office:e2e": "node --conditions=react-server --test \"lib/ai-office/e2e/*.e2e.ts\"",
     "ai-office:runner": "node --env-file-if-exists=.env.local --conditions=react-server lib/ai-office/runner/start.ts",
     "office:dev": "node --conditions=react-server scripts/ai-office-dev.ts",
     "ai-office:dev": "node --conditions=react-server scripts/ai-office-dev.ts"

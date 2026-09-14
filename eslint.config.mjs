@@ -12,11 +12,13 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
-    // The AI Office e2e suite's isolated build output (a custom `distDir`
-    // so it can run alongside an interactive `next dev`, see
-    // lib/ai-office/e2e/office-navigation.e2e.ts) — same reason `.next/`
-    // itself is ignored above: generated build artifacts, not source.
+    // The AI Office e2e suites' isolated build output (a custom `distDir`
+    // so each can run alongside an interactive `next dev`, see
+    // lib/ai-office/e2e/office-navigation.e2e.ts and
+    // office-limited-production.e2e.ts) — same reason `.next/` itself is
+    // ignored above: generated build artifacts, not source.
     ".next-e2e/**",
+    ".next-e2e-limited/**",
   ]),
 ]);
 
