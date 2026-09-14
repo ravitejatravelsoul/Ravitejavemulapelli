@@ -58,7 +58,6 @@ import {
 import { applyFileOperations } from "../workspace/apply-file-operations.ts";
 import { workspaceExists, listFiles } from "../workspace/workspace-service.ts";
 import { validateWorkspaceIntegrity, describeIntegrityFailure } from "../workspace/workspace-integrity.ts";
-import { runQABrowserVerification } from "../workspace/qa-browser-verification.ts";
 import { getWorkspace, listWorkspaceFileRecords, setDeliveryState } from "../domain/workspace.ts";
 import { HumanEscalationService } from "../escalation/escalation-service.ts";
 
@@ -1194,6 +1193,20 @@ export async function executeTask(
   // structurally has no such role.
   const projectPlannedBrowserDeliverable = listTasksForProject(db, project.id).some((t) => t.roleId === "frontend-developer");
   if (role.id === "qa-agent" && workspaceExists(project.id) && projectPlannedBrowserDeliverable) {
+    // Dynamic import, not a top-level one — see qa-browser-verification.ts's
+    // real `import { chromium } from "playwright"`. agent-runner.ts is
+    // statically reachable from app/office/(protected)/page.tsx (via
+    // office-engineer.ts → semantic-repair-execution.ts), so a top-level
+    // import here would pull Playwright into that route's serverless
+    // function bundle regardless of whether QA ever actually runs —
+    // confirmed as the real cause of a live Vercel
+    // FUNCTION_INVOCATION_FAILED ("Cannot find module
+    // '.../playwright-core/browsers.json'") on the authenticated,
+    // limited-production /office request. This way, Playwright is only
+    // ever resolved when a qa-agent task with a real browser deliverable
+    // is actually executed — which never happens when operational mode
+    // is disabled.
+    const { runQABrowserVerification } = await import("../workspace/qa-browser-verification.ts");
     const verification = await runQABrowserVerification(project.id);
     let finalStatus = verification.status;
     let finalSummary = verification.summary;

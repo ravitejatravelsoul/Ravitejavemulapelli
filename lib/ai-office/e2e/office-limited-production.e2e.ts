@@ -5,6 +5,7 @@ import { randomBytes, scryptSync } from "node:crypto";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { chromium, type Browser } from "playwright";
 
 /**
@@ -30,19 +31,34 @@ function hashOwnerPassword(password: string): string {
  * This suite spawns its own real production build (`next build` + `next
  * start`, exactly like office-navigation.e2e.ts) with operational mode
  * left at its safe default (disabled, since no `AI_OFFICE_OPERATIONAL_MODE`
- * override is set and the child runs with `NODE_ENV=production`) AND a
+ * override is set and the child runs with `NODE_ENV=production`), a
  * deliberately poisoned `AI_OFFICE_DB_PATH` (nested under a plain file,
  * not a directory — `getAppDatabase()` would throw immediately if ever
- * called). Every test below succeeding despite that poisoned path is the
- * direct, structural proof that the authenticated limited-production
- * render path never touches SQLite — not just that it happens to work
- * with a healthy database.
+ * called), AND Playwright made unresolvable at the server's runtime via
+ * `block-playwright-loader.mjs` (`NODE_OPTIONS=--import ...`) —
+ * reproducing the real, confirmed live Vercel failure: `/office`'s
+ * serverless function returned `FUNCTION_INVOCATION_FAILED` ("Cannot
+ * find module '.../playwright-core/browsers.json'") because
+ * `lib/ai-office/agents/agent-runner.ts` used to statically import
+ * `runQABrowserVerification` (which has a real top-level `import {
+ * chromium } from "playwright"`) — and agent-runner.ts is statically
+ * reachable from app/office/(protected)/page.tsx via office-engineer.ts
+ * → semantic-repair-execution.ts, so Playwright entered that route's
+ * bundle regardless of whether QA ever actually ran. Every test below
+ * succeeding despite BOTH the poisoned DB path and blocked Playwright is
+ * the direct, structural proof that the authenticated limited-production
+ * render path neither touches SQLite nor loads Playwright — not just
+ * that it happens to work with a healthy database and a working
+ * Playwright install.
  *
  * A separate spawned server (own port, own build dir) from
  * office-navigation.e2e.ts's, which explicitly opts back into full
  * operational mode to test the real local workspace — that suite's
  * behavior is unchanged and still the source of truth for local/
- * operational-mode-enabled regression coverage.
+ * operational-mode-enabled regression coverage. (It deliberately does
+ * NOT get either blocking loader — operational mode enabled genuinely
+ * needs SQLite and, when QA actually runs, Playwright, on a runtime that
+ * supports both.)
  */
 
 const PORT = Number(process.env.AI_OFFICE_E2E_LIMITED_PORT) || 3912;
@@ -121,9 +137,18 @@ before(async () => {
     throw new Error(`next build failed for the limited-production e2e suite (exit code ${build.status}).`);
   }
 
+  // Only the *runtime* (next start) gets Playwright blocked, not the
+  // build above — mirrors the reasoning for the poisoned DB path applying
+  // everywhere but this loader applying only at serve time: what must be
+  // proven is that *serving a request* to the limited shell never needs
+  // Playwright, which is exactly what production traffic against the
+  // already-built app exercises.
+  const playwrightLoaderUrl = pathToFileURL(join(import.meta.dirname, "block-playwright-loader.mjs")).href;
+  const runtimeEnv: NodeJS.ProcessEnv = { ...sharedEnv, NODE_OPTIONS: `--import ${playwrightLoaderUrl}` };
+
   server = spawn(process.execPath, [nextBin, "start", "--port", String(PORT)], {
     cwd: process.cwd(),
-    env: sharedEnv,
+    env: runtimeEnv,
     stdio: "ignore",
   });
   await waitForServerReady(60_000);
