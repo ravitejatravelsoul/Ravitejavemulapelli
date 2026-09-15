@@ -16,7 +16,10 @@ import {
   REMOTE_SYNTHETIC_OWNER_ID,
 } from "@/lib/ai-office/remote/remote-state-store";
 import { readProjectsIndex } from "@/lib/ai-office/remote/remote-dashboard-store";
-import { GitHubClient } from "@/lib/ai-office/remote/github-client";
+import { GitHubClient, GitHubContentConflictError } from "@/lib/ai-office/remote/github-client";
+
+/** Bounded — see remote-approvals.ts's identical constant/reasoning: `state/projects-index.json` and `state/office.json` are shared across every remote project, so two concurrent creations can genuinely race to update them. */
+const MAX_WRITE_ATTEMPTS = 3;
 
 /**
  * Remote Mode's "Start New Project" — every action here independently
@@ -89,16 +92,46 @@ export async function createRemoteProjectAction(_prevState: CreateRemoteProjectS
   await writeProjectBundle(remoteConfig, bundle, null);
 
   const gh = new GitHubClient(remoteConfig);
-  const existingIndex = await readProjectsIndex(remoteConfig);
-  const indexFile = await gh.getFile("state/projects-index.json");
-  existingIndex.push({ id: project.id, title: project.title, status: project.status, updatedAt: new Date().toISOString() });
-  await gh.putFile("state/projects-index.json", JSON.stringify({ projects: existingIndex, updatedAt: new Date().toISOString() }, null, 2) + "\n", {
-    message: `chore(state): add ${project.id} to projects index`,
-    expectedSha: indexFile?.sha,
-  });
 
-  const officeRes = await readOfficeState(remoteConfig);
-  await writeOfficeState(remoteConfig, newOffice, officeRes.sha);
+  // Bounded retry — state/projects-index.json is shared across every
+  // remote project, so two owners (or two tabs) creating a project at
+  // nearly the same time can genuinely race to update it; re-read the
+  // current index and re-append on conflict rather than silently
+  // overwriting (or losing) a concurrently-created entry.
+  for (let attempt = 1; attempt <= MAX_WRITE_ATTEMPTS; attempt++) {
+    const existingIndex = await readProjectsIndex(remoteConfig);
+    const indexFile = await gh.getFile("state/projects-index.json");
+    existingIndex.push({ id: project.id, title: project.title, status: project.status, updatedAt: new Date().toISOString() });
+    try {
+      await gh.putFile("state/projects-index.json", JSON.stringify({ projects: existingIndex, updatedAt: new Date().toISOString() }, null, 2) + "\n", {
+        message: `chore(state): add ${project.id} to projects index`,
+        expectedSha: indexFile?.sha,
+      });
+      break;
+    } catch (error) {
+      if (error instanceof GitHubContentConflictError && attempt < MAX_WRITE_ATTEMPTS) continue;
+      // The project itself is already created and durable — only its
+      // listing in the index failed. Not fatal: it will still show up
+      // once hydrateAllRemoteProjects (or a retry of this same action
+      // path) re-derives the index, but surface this honestly rather
+      // than silently pretending the index update succeeded.
+      return { error: "Project created, but the projects list could not be updated (it will still appear once the list is refreshed). Please refresh." };
+    }
+  }
+
+  for (let attempt = 1; attempt <= MAX_WRITE_ATTEMPTS; attempt++) {
+    const officeRes = await readOfficeState(remoteConfig);
+    try {
+      await writeOfficeState(remoteConfig, newOffice, officeRes.sha);
+      break;
+    } catch (error) {
+      if (error instanceof GitHubContentConflictError && attempt < MAX_WRITE_ATTEMPTS) continue;
+      // office.json didn't actually change in a way that matters here
+      // (this action never modifies office-wide budget/status) unless a
+      // concurrent request did — safe to proceed without it.
+      break;
+    }
+  }
 
   // Dispatch the first worker run — the project is now QUEUED to run in
   // the background; this request returns immediately after, per the

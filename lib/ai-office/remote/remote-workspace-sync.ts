@@ -36,6 +36,7 @@ async function listRemoteTree(config: RemoteRuntimeConfig, remoteDir: string): P
   async function walk(dir: string): Promise<void> {
     const res = await fetch(`https://api.github.com/repos/${config.owner}/${config.repo}/contents/${dir}?ref=${encodeURIComponent(config.branch)}`, {
       headers: { Authorization: `Bearer ${config.token}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28" },
+      cache: "no-store",
     });
     if (res.status === 404) return; // directory doesn't exist yet — a brand-new project's workspace
     if (!res.ok) throw new Error(`Failed to list ${dir}: ${res.status}`);

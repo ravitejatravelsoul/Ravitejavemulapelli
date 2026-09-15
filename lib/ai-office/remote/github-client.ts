@@ -66,10 +66,20 @@ export class GitHubClient {
     return `${GITHUB_API_BASE}/repos/${this.config.owner}/${this.config.repo}${path}`;
   }
 
-  /** Returns `null` (not an error) when the file does not exist yet. */
+  /**
+   * Returns `null` (not an error) when the file does not exist yet.
+   * `cache: "no-store"` is required, not optional — caught by real
+   * testing, not inferred: Next.js caches `fetch()` calls made from
+   * Server Components by default, so without this, an owner could see
+   * stale project/approval state on a legitimate reload after a
+   * background worker (or their own just-submitted decision) changed it
+   * — actively dangerous for state a background system is constantly
+   * mutating out from under the page.
+   */
   async getFile(path: string): Promise<GitHubFile | null> {
     const res = await fetch(this.repoUrl(`/contents/${path}?ref=${encodeURIComponent(this.config.branch)}`), {
       headers: authHeaders(this.config.token),
+      cache: "no-store",
     });
     if (res.status === 404) return null;
     if (!res.ok) {
@@ -141,6 +151,7 @@ export class GitHubClient {
   > {
     const res = await fetch(this.repoUrl(`/actions/workflows/${workflowFileName}/runs?per_page=${opts.perPage ?? 10}&branch=${encodeURIComponent(this.config.branch)}`), {
       headers: authHeaders(this.config.token),
+      cache: "no-store",
     });
     if (!res.ok) {
       throw new GitHubClientError(`list workflow runs failed: ${res.status} ${await safeBody(res)}`, res.status);
