@@ -49,7 +49,7 @@ export const DEFAULT_OFFICE_REMOTE_STATE: OfficeRemoteState = {
   updatedAt: new Date(0).toISOString(),
 };
 
-function seedSyntheticOwner(db: DatabaseSync): void {
+export function seedSyntheticOwner(db: DatabaseSync): void {
   const now = Date.now();
   db.prepare(
     `INSERT OR IGNORE INTO users (id, email, passwordHash, role, createdAt, updatedAt)

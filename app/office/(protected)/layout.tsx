@@ -6,6 +6,7 @@ import { OfficeSidebarNav } from "@/components/ai-office/shell/office-sidebar-na
 import { LimitedProductionOffice } from "@/components/ai-office/shell/limited-production-office";
 import { TejaAssistant } from "@/components/ai-office/assistant/teja-assistant";
 import { isAiOfficeOperationalModeEnabled } from "@/lib/ai-office/config/operational-mode";
+import { isRemoteExecutionMode } from "@/lib/ai-office/remote/execution-mode";
 
 export const metadata: Metadata = {
   title: {
@@ -42,22 +43,33 @@ export const metadata: Metadata = {
  * bypass this check, because there is no route inside this group that
  * renders without first passing through this layout.
  *
- * `getAppDatabase`/`getOwner`/`getOfficeStatus` are deliberately *dynamic*
- * `import()`s below, not static top-level imports — this is what actually
- * keeps the disabled branch above import-safe, not just call-safe.
- * `lib/ai-office/db/client.ts` has a real (non-`import type`) top-level
- * `import { DatabaseSync } from "node:sqlite"`; `node:sqlite` requires
- * Node.js ≥22.5 (unflagged only from ≥22.13 — see
+ * `getAppDatabase`/`getOwner`/`getOfficeStatus` (and, in the Remote Mode
+ * branch below, `RemoteOfficeShell`) are deliberately *dynamic*
+ * `import()`s, not static top-level imports — this is what actually
+ * keeps the disabled/limited-production branch import-safe, not just
+ * call-safe. `lib/ai-office/db/client.ts` has a real (non-`import type`)
+ * top-level `import { DatabaseSync } from "node:sqlite"`; `node:sqlite`
+ * requires Node.js ≥22.5 (unflagged only from ≥22.13 — see
  * https://nodejs.org/api/sqlite.html), and Vercel still offers 20.x as a
  * selectable Functions runtime. A static top-level import of `client.ts`
- * here would have made *this module's own evaluation* throw on such a
- * runtime — before the `isAiOfficeOperationalModeEnabled()` check above
- * ever ran — exactly the bug a plain "early return" doesn't fix: ES
- * module imports are hoisted and evaluated eagerly regardless of which
- * branch actually executes. A dynamic `import()` inside the `if` block
- * below only ever resolves `client.ts` (and transitively `node:sqlite`)
- * when this code path is actually reached, which never happens once
- * operational mode is disabled.
+ * (or of anything that transitively reaches it, which
+ * `RemoteOfficeShell` does — it hydrates an ephemeral SQLite database
+ * for dashboard reads, see lib/ai-office/remote/remote-dashboard-store.ts)
+ * here would make *this module's own evaluation* throw on such a
+ * runtime — before either mode check below ever ran — exactly the bug a
+ * plain "early return" doesn't fix: ES module imports are hoisted and
+ * evaluated eagerly regardless of which branch actually executes. A
+ * dynamic `import()` inside each `if` block only ever resolves that
+ * branch's own dependencies when the branch is actually reached, which
+ * never happens for either one when both Remote Mode and operational
+ * mode are off — today's real default.
+ *
+ * `isRemoteExecutionMode()` (lib/ai-office/remote/execution-mode.ts) is
+ * checked separately from, and before,
+ * `isAiOfficeOperationalModeEnabled()` — they answer different
+ * questions (see execution-mode.ts's docblock) and neither implies the
+ * other. `execution-mode.ts` itself has no risky imports (just reads one
+ * env var), so importing it statically is safe.
  */
 export default async function OfficeProtectedLayout({ children }: { children: React.ReactNode }) {
   const session = await verifySession();
@@ -65,13 +77,17 @@ export default async function OfficeProtectedLayout({ children }: { children: Re
     redirect("/office/login");
   }
 
+  if (isRemoteExecutionMode()) {
+    const { RemoteOfficeShell } = await import("@/components/ai-office/remote/remote-office-shell");
+    return <RemoteOfficeShell email={session.userId} signOut={logout} />;
+  }
+
   if (!isAiOfficeOperationalModeEnabled()) {
     return <LimitedProductionOffice email={session.userId} signOut={logout} />;
   }
 
-  // Reached only when isAiOfficeOperationalModeEnabled() is true (the
-  // early return above handles the disabled case) — local dev, tests, or
-  // a future durably-hosted production deployment.
+  // Reached only when neither branch above applies — local dev, tests,
+  // or a future durably-hosted, fully local-mode production deployment.
   const [{ getAppDatabase }, { getOwner }, { getOfficeStatus }] = await Promise.all([
     import("@/lib/ai-office/db/client"),
     import("@/lib/ai-office/domain/users"),
