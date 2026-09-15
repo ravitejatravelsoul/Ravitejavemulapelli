@@ -117,15 +117,48 @@ export function dumpProjectBundle(db: DatabaseSync, projectId: string): ProjectB
   };
 }
 
-/** Inserts every row from `bundle` into `db` (already migrated + seeded — see remote-state-store.ts). */
+/**
+ * Inserts every row from `bundle` into `db` (already migrated + seeded —
+ * see remote-state-store.ts).
+ *
+ * `task_attempts.agentRunId` <-> `agent_runs.taskAttemptId` is a
+ * deliberate circular foreign-key reference at the schema level (see
+ * migrations/001-init.sql's comment on `task_attempts`): a real attempt
+ * is inserted with `agentRunId = NULL` first, then its `agent_runs` row
+ * is created, then `agentRunId` is updated to point to it — so once a
+ * task has actually executed, restoring `task_attempts` (which now has
+ * a real, non-null `agentRunId`) *before* the `agent_runs` row it points
+ * to exists yet trips SQLite's immediate FK check. This does not depend
+ * on `PROJECT_SCOPED_TABLES`' declared order — no static order can
+ * satisfy a genuine cycle. `PRAGMA defer_foreign_keys = ON` (scoped to
+ * this one transaction; SQLite resets it automatically at COMMIT) is
+ * the correct tool for exactly this case: every row is still fully FK
+ * -validated, just at COMMIT time instead of per-INSERT, so bulk-loading
+ * an already-internally-consistent snapshot (it was valid when dumped,
+ * by construction — see `dumpProjectBundle`) succeeds regardless of
+ * insertion order, while a genuinely corrupt bundle still fails loudly
+ * at COMMIT. Confirmed as the real cause via an actual GitHub Actions
+ * run's stack trace, not inferred — the bug did not reproduce locally
+ * because that first hydration had no executed tasks yet (every
+ * `task_attempts` row, if any, still had `agentRunId = NULL`, so there
+ * was nothing yet to violate).
+ */
 export function restoreProjectBundle(db: DatabaseSync, bundle: ProjectBundle): void {
-  for (const table of PROJECT_SCOPED_TABLES) {
-    const rows = bundle.tables[table];
-    if (!rows || rows.length === 0) continue;
-    insertRows(db, table, rows);
-  }
-  if (bundle.projectBudgetRecords.length > 0) {
-    insertRows(db, "budget_records", bundle.projectBudgetRecords);
+  db.exec("PRAGMA defer_foreign_keys = ON");
+  db.exec("BEGIN");
+  try {
+    for (const table of PROJECT_SCOPED_TABLES) {
+      const rows = bundle.tables[table];
+      if (!rows || rows.length === 0) continue;
+      insertRows(db, table, rows);
+    }
+    if (bundle.projectBudgetRecords.length > 0) {
+      insertRows(db, "budget_records", bundle.projectBudgetRecords);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
   }
 }
 
