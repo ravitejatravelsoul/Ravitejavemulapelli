@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Plus } from "lucide-react";
-import { getAppDatabase } from "@/lib/ai-office/db/client";
+import { getOfficeDb } from "@/lib/ai-office/office-db";
 import { getProjectSummaries } from "@/lib/ai-office/dashboard/dashboard-data";
 import { ProjectsBoard } from "@/components/ai-office/dashboard/projects-board";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,7 @@ export const metadata: Metadata = { title: "Projects" };
 
 /** The project portfolio (Section 26) — every project the Office has ever planned, filterable and searchable, all from real, already-persisted state. */
 export default async function ProjectsPage() {
-  const db = getAppDatabase();
+  const db = await getOfficeDb();
   const projects = getProjectSummaries(db);
 
   return (

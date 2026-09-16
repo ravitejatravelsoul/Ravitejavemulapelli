@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { getAppDatabase } from "@/lib/ai-office/db/client";
+import { getOfficeDb } from "@/lib/ai-office/office-db";
+import { readOfficeWorkspaceFile } from "@/lib/ai-office/office-workspace-read";
 import { getProjectDetail } from "@/lib/ai-office/dashboard/project-detail-data";
 import { getPendingApprovalsView, getRunnerActivityView } from "@/lib/ai-office/dashboard/dashboard-data";
 import { getOfficeFloorView } from "@/lib/ai-office/dashboard/office-floor-data";
 import { getPreviewStatusLabel } from "@/lib/ai-office/dashboard/delivery-status";
 import { signPreviewToken } from "@/lib/ai-office/auth/preview-token";
-import { readFile } from "@/lib/ai-office/workspace/workspace-service";
 import { highlightFileContent } from "@/lib/ai-office/workspace/code-highlight";
 import { GlassCard } from "@/components/common/glass-card";
 import { Badge } from "@/components/ui/badge";
@@ -24,6 +24,7 @@ import { FileBrowser, type WorkspaceFileEntry } from "@/components/ai-office/wor
 import { PreviewPanel } from "@/components/ai-office/workspace/preview-panel";
 import { ModelPolicyPanel } from "@/components/ai-office/workspace/model-policy-panel";
 import { pauseProjectAction, resumeProjectAction } from "@/app/office/actions/projects";
+import { isRemoteExecutionMode } from "@/lib/ai-office/remote/execution-mode";
 import { checkOllamaHealth } from "@/lib/ai-office/providers/ollama/health";
 import { getProjectModelPolicy } from "@/lib/ai-office/domain/model-routing";
 import { AGENT_ROLE_CATALOG } from "@/lib/ai-office/domain/agent-role-catalog";
@@ -41,7 +42,7 @@ function formatDate(ms: number): string {
 
 export default async function ProjectDetailPage({ params }: { params: Promise<{ projectId: string }> }) {
   const { projectId } = await params;
-  const db = getAppDatabase();
+  const db = await getOfficeDb();
   const detail = getProjectDetail(db, projectId);
   if (!detail) notFound();
 
@@ -101,8 +102,16 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
   // never for one that's paused or already at a terminal state, where an
   // offline runner is irrelevant.
   const NON_ACTIVE_STATUSES = new Set(["PAUSED", "READY_FOR_REVIEW", "APPROVED", "FAILED", "ARCHIVED", "DRAFT"]);
+  const remoteMode = isRemoteExecutionMode();
   const runnerActivity = getRunnerActivityView(db);
-  const runnerOfflineBlockingProgress = !NON_ACTIVE_STATUSES.has(project.status) && !waitingForOwnerApproval && runnerActivity.runnerStatus === "OFFLINE";
+  // `runner_heartbeats` is deliberately excluded from the remote project
+  // bundle (it describes a local standalone-runner process that doesn't
+  // exist in Remote Mode — GitHub Actions is the execution engine there
+  // instead), so it always reads OFFLINE remotely. Reporting that as
+  // "blocking progress" would be dishonest for a remote project actually
+  // progressing fine via a dispatched workflow run.
+  const runnerOfflineBlockingProgress = !remoteMode && !NON_ACTIVE_STATUSES.has(project.status) && !waitingForOwnerApproval && runnerActivity.runnerStatus === "OFFLINE";
+  const isActiveRemoteProject = remoteMode && !NON_ACTIVE_STATUSES.has(project.status) && !waitingForOwnerApproval;
 
   const modelPolicy = project.provider === "ollama" ? getProjectModelPolicy(db, project.id) : null;
   const ollamaHealth = project.provider === "ollama" ? await checkOllamaHealth() : null;
@@ -113,7 +122,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
   const hasOwnReadme = workspaceFilePaths.some((p) => p.toLowerCase() === "readme.md");
   const generatedReadme = workspace.hasWorkspace
     ? hasOwnReadme
-      ? await readFile(project.id, workspace.files.find((f) => f.path.toLowerCase() === "readme.md")!.path)
+      ? await readOfficeWorkspaceFile(project.id, workspace.files.find((f) => f.path.toLowerCase() === "readme.md")!.path)
       : generateReadme({ projectTitle: project.title, ideaText, files: workspaceFilePaths })
     : null;
   const workspaceTotalBytes = workspace.files.reduce((sum, f) => sum + f.sizeBytes, 0);
@@ -124,12 +133,12 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
   const fileEntries: WorkspaceFileEntry[] = workspace.hasWorkspace
     ? await Promise.all(
         workspace.files.map(async (file) => {
-          const content = await readFile(project.id, file.path);
+          const content = await readOfficeWorkspaceFile(project.id, file.path);
           return {
             path: file.path,
             sizeBytes: file.sizeBytes,
             lastModifiedByRoleId: file.lastModifiedByRoleId,
-            html: await highlightFileContent(file.path, content),
+            html: await highlightFileContent(file.path, content ?? ""),
           };
         }),
       )
@@ -163,6 +172,11 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
               {runnerOfflineBlockingProgress && (
                 <Badge variant="destructive" className="font-mono text-[0.6rem] uppercase">
                   Runner offline
+                </Badge>
+              )}
+              {isActiveRemoteProject && (
+                <Badge variant="outline" className="font-mono text-[0.6rem] uppercase">
+                  Running via GitHub Actions
                 </Badge>
               )}
               {hasRevocableApproval && (
@@ -262,7 +276,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
                   </div>
                   <div className="mt-3 flex gap-2">
                     <ActionButton
-                      action={approveApprovalAction.bind(null, approval.id)}
+                      action={approveApprovalAction.bind(null, approval.id, projectId)}
                       size="sm"
                       successMessage="Approved."
                       confirmMessage="Approve this action? Only this exact request becomes eligible to proceed."
@@ -270,7 +284,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
                       Approve
                     </ActionButton>
                     <ActionButton
-                      action={rejectApprovalAction.bind(null, approval.id)}
+                      action={rejectApprovalAction.bind(null, approval.id, projectId)}
                       variant="outline"
                       size="sm"
                       successMessage="Rejected."

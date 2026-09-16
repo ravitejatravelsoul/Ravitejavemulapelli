@@ -7,6 +7,8 @@ import { GlassCard } from "@/components/common/glass-card";
 import { Badge } from "@/components/ui/badge";
 import { NotificationPolicyForm } from "@/components/ai-office/escalation/notification-policy-form";
 import { EscalationHistory } from "@/components/ai-office/escalation/escalation-history";
+import { isRemoteExecutionMode } from "@/lib/ai-office/remote/execution-mode";
+import { LocalOnlyNotice } from "@/components/ai-office/shell/local-only-notice";
 
 export const metadata: Metadata = { title: "Communications" };
 
@@ -24,6 +26,15 @@ export const metadata: Metadata = { title: "Communications" };
  * pattern-matching, not a real reasoning model — see intent-parser.ts).
  */
 export default async function CommunicationsPage() {
+  if (isRemoteExecutionMode()) {
+    return (
+      <LocalOnlyNotice
+        title="Communications"
+        reason="SMS/call escalation (Twilio) and the notification policy are configured against this local machine's environment — Remote Mode has no telephony configuration to show or edit."
+      />
+    );
+  }
+
   const db = getAppDatabase();
   const notificationPolicy = getEffectiveNotificationPolicy(db);
   const escalations = listRecentEscalations(db, 30);

@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { getAppDatabase } from "@/lib/ai-office/db/client";
+import { getOfficeDb } from "@/lib/ai-office/office-db";
 import { getOfficeAnalytics } from "@/lib/ai-office/dashboard/analytics-data";
 import { GlassCard } from "@/components/common/glass-card";
 
@@ -16,7 +16,7 @@ function Stat({ label, value, tone }: { label: string; value: string; tone?: "de
 
 /** Office-wide analytics (Section 28) — every number is a real aggregation over persisted state; an office with no paid usage yet reports honest zeros, not omitted sections. */
 export default async function AnalyticsPage() {
-  const db = getAppDatabase();
+  const db = await getOfficeDb();
   const a = getOfficeAnalytics(db);
 
   return (

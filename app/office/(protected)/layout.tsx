@@ -24,52 +24,33 @@ export const metadata: Metadata = {
  * Handler reachable from here must still call `verifySession()` itself
  * rather than relying on this check alone.
  *
- * Living AI Office UI transformation — replaces the old single-row header
- * with a persistent sidebar shell (Section 1) shared by every page under
- * this group, so navigation between Office/Projects/Agents/Workspaces/
- * Models/Analytics/Settings never requires re-deriving the same auth/owner
- * lookups on each page.
+ * ONE shell, ONE set of pages, for both execution modes — Remote Mode no
+ * longer renders a separate "Remote Workspace" UI. Every `(protected)`
+ * page now sources its `DatabaseSync` handle from
+ * `lib/ai-office/office-db.ts`'s `getOfficeDb()` instead of calling
+ * `getAppDatabase()` directly — local mode returns the real local DB
+ * unchanged; remote mode hydrates an ephemeral DB from the private
+ * runtime repo (the exact mechanism already proven in production). Every
+ * existing domain/dashboard function takes a plain `DatabaseSync` and
+ * needed no change — only the *source* of that handle differs.
  *
- * Production-shell boundary (the fix for the post-login Vercel 500): when
- * `isAiOfficeOperationalModeEnabled()` is false, this layout renders
- * *only* `<LimitedProductionOffice>` and returns early — it never calls
- * `getAppDatabase()`/`getOwner()`/`getOfficeStatus()`, never renders
- * `OfficeSidebarNav`/`TejaAssistant`, and critically never renders
- * `children`. Every route under this group (`/office/projects`,
- * `/office/agents`, `/office/workspaces`, ...) shares this one layout, so
- * skipping `children` here is what keeps a production visitor from ever
- * reaching a child page's own SQLite/filesystem-touching Server Component
- * simply by typing its URL — there is no route inside this group that can
- * bypass this check, because there is no route inside this group that
- * renders without first passing through this layout.
+ * `getOfficeDb()`'s own `node:sqlite` usage (ephemeral `:memory:` DBs,
+ * both modes) is proven safe on this deployment's actual Vercel runtime
+ * — the remote dashboard already rendered real data in production before
+ * this change. Earlier revisions of this layout avoided ever rendering
+ * `children` in Remote Mode specifically to guard against an
+ * *unconfirmed* risk (a Vercel Node runtime below 22.5, where
+ * `node:sqlite` doesn't exist at all); that risk is now empirically
+ * closed for this specific deployment, so Remote Mode can safely render
+ * the same full shell + children as local mode always has.
  *
- * `getAppDatabase`/`getOwner`/`getOfficeStatus` (and, in the Remote Mode
- * branch below, `RemoteOfficeShell`) are deliberately *dynamic*
- * `import()`s, not static top-level imports — this is what actually
- * keeps the disabled/limited-production branch import-safe, not just
- * call-safe. `lib/ai-office/db/client.ts` has a real (non-`import type`)
- * top-level `import { DatabaseSync } from "node:sqlite"`; `node:sqlite`
- * requires Node.js ≥22.5 (unflagged only from ≥22.13 — see
- * https://nodejs.org/api/sqlite.html), and Vercel still offers 20.x as a
- * selectable Functions runtime. A static top-level import of `client.ts`
- * (or of anything that transitively reaches it, which
- * `RemoteOfficeShell` does — it hydrates an ephemeral SQLite database
- * for dashboard reads, see lib/ai-office/remote/remote-dashboard-store.ts)
- * here would make *this module's own evaluation* throw on such a
- * runtime — before either mode check below ever ran — exactly the bug a
- * plain "early return" doesn't fix: ES module imports are hoisted and
- * evaluated eagerly regardless of which branch actually executes. A
- * dynamic `import()` inside each `if` block only ever resolves that
- * branch's own dependencies when the branch is actually reached, which
- * never happens for either one when both Remote Mode and operational
- * mode are off — today's real default.
- *
- * `isRemoteExecutionMode()` (lib/ai-office/remote/execution-mode.ts) is
- * checked separately from, and before,
- * `isAiOfficeOperationalModeEnabled()` — they answer different
- * questions (see execution-mode.ts's docblock) and neither implies the
- * other. `execution-mode.ts` itself has no risky imports (just reads one
- * env var), so importing it statically is safe.
+ * `isAiOfficeOperationalModeEnabled()` and `isRemoteExecutionMode()`
+ * together define the ONE case this layout still fully replaces the
+ * shell for: neither configured (a production deployment with no
+ * durable execution mode enabled at all) falls back to
+ * `<LimitedProductionOffice>`, which still returns early before
+ * importing anything that reaches `node:sqlite` — that path has no data
+ * source to render the real UI against, so there is nothing to unify.
  */
 export default async function OfficeProtectedLayout({ children }: { children: React.ReactNode }) {
   const session = await verifySession();
@@ -77,33 +58,34 @@ export default async function OfficeProtectedLayout({ children }: { children: Re
     redirect("/office/login");
   }
 
-  if (isRemoteExecutionMode()) {
-    const { RemoteOfficeShell } = await import("@/components/ai-office/remote/remote-office-shell");
-    return <RemoteOfficeShell email={session.userId} signOut={logout} />;
-  }
+  const remoteMode = isRemoteExecutionMode();
+  const operationalMode = isAiOfficeOperationalModeEnabled();
 
-  if (!isAiOfficeOperationalModeEnabled()) {
+  if (!remoteMode && !operationalMode) {
     return <LimitedProductionOffice email={session.userId} signOut={logout} />;
   }
 
-  // Reached only when neither branch above applies — local dev, tests,
-  // or a future durably-hosted, fully local-mode production deployment.
-  const [{ getAppDatabase }, { getOwner }, { getOfficeStatus }] = await Promise.all([
-    import("@/lib/ai-office/db/client"),
-    import("@/lib/ai-office/domain/users"),
-    import("@/lib/ai-office/domain/office"),
-  ]);
-  const db = getAppDatabase();
+  const { getOfficeDb } = await import("@/lib/ai-office/office-db");
+  const [{ getOwner }, { getOfficeStatus }] = await Promise.all([import("@/lib/ai-office/domain/users"), import("@/lib/ai-office/domain/office")]);
+  const db = await getOfficeDb();
+  // `session.userId` is the verified sign-in email in every mode
+  // (production env-direct auth and local DB auth both set the session
+  // subject to the same email the owner row uses) — preferred over
+  // `getOwner(db)?.email` so the sidebar never shows Remote Mode's
+  // synthetic FK-satisfying owner row (see remote-state-store.ts) by
+  // mistake; `getOwner` is still called for local-mode parity in case
+  // any other local-only surface needs the full row later.
   const owner = getOwner(db);
   const officeStatus = getOfficeStatus(db);
+  const ownerEmail = session.userId || owner?.email || "owner";
 
   return (
     <div className="flex min-h-screen flex-col bg-background md:flex-row">
-      <OfficeSidebarNav ownerEmail={owner?.email ?? "owner"} officeState={officeStatus?.state ?? "CLOSED"} signOut={logout} />
+      <OfficeSidebarNav ownerEmail={ownerEmail} officeState={officeStatus?.state ?? "CLOSED"} signOut={logout} remoteMode={remoteMode} />
       <main className="min-w-0 flex-1 px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
         <div className="mx-auto w-full max-w-[1600px]">{children}</div>
       </main>
-      <TejaAssistant assistantName={process.env.OWNER_ASSISTANT_NAME || "Teja"} />
+      {remoteMode ? null : <TejaAssistant assistantName={process.env.OWNER_ASSISTANT_NAME || "Teja"} />}
     </div>
   );
 }

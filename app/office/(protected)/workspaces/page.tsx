@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { getAppDatabase } from "@/lib/ai-office/db/client";
+import { getOfficeDb } from "@/lib/ai-office/office-db";
 import { listProjects } from "@/lib/ai-office/domain/projects";
 import { getWorkspace, listWorkspaceFileRecords } from "@/lib/ai-office/domain/workspace";
-import { readFile } from "@/lib/ai-office/workspace/workspace-service";
+import { readOfficeWorkspaceFile } from "@/lib/ai-office/office-workspace-read";
 import { highlightFileContent } from "@/lib/ai-office/workspace/code-highlight";
 import { GlassCard } from "@/components/common/glass-card";
 import { Badge } from "@/components/ui/badge";
@@ -20,7 +20,7 @@ export const metadata: Metadata = { title: "Workspaces" };
  */
 export default async function WorkspacesPage({ searchParams }: { searchParams: Promise<{ project?: string }> }) {
   const { project: selectedProjectId } = await searchParams;
-  const db = getAppDatabase();
+  const db = await getOfficeDb();
 
   const projectsWithWorkspaces = listProjects(db)
     .map((project) => ({ project, workspace: getWorkspace(db, project.id) }))
@@ -32,8 +32,8 @@ export default async function WorkspacesPage({ searchParams }: { searchParams: P
   const fileEntries: WorkspaceFileEntry[] = selected
     ? await Promise.all(
         listWorkspaceFileRecords(db, selected.project.id).map(async (file) => {
-          const content = await readFile(selected.project.id, file.path);
-          return { path: file.path, sizeBytes: file.sizeBytes, lastModifiedByRoleId: file.lastModifiedByRoleId, html: await highlightFileContent(file.path, content) };
+          const content = await readOfficeWorkspaceFile(selected.project.id, file.path);
+          return { path: file.path, sizeBytes: file.sizeBytes, lastModifiedByRoleId: file.lastModifiedByRoleId, html: await highlightFileContent(file.path, content ?? "") };
         }),
       )
     : [];

@@ -49,7 +49,7 @@ export function ApprovalsPanel({ approvals }: { approvals: PendingApprovalView[]
 
               <div className="mt-3 flex gap-2">
                 <ActionButton
-                  action={approveApprovalAction.bind(null, approval.id)}
+                  action={approveApprovalAction.bind(null, approval.id, approval.projectId)}
                   size="sm"
                   successMessage="Approved."
                   confirmMessage="Approve this action? Only this exact request becomes eligible to proceed."
@@ -57,7 +57,7 @@ export function ApprovalsPanel({ approvals }: { approvals: PendingApprovalView[]
                   Approve
                 </ActionButton>
                 <ActionButton
-                  action={rejectApprovalAction.bind(null, approval.id)}
+                  action={rejectApprovalAction.bind(null, approval.id, approval.projectId)}
                   variant="outline"
                   size="sm"
                   successMessage="Rejected."

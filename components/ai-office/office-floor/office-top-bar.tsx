@@ -25,6 +25,7 @@ export function OfficeTopBar({
   liveCostUsd,
   liveCapUsd,
   engineerStatus,
+  remoteMode = false,
 }: {
   officeState: OfficeState;
   runnerActivity: RunnerActivityView;
@@ -32,14 +33,31 @@ export function OfficeTopBar({
   liveCostUsd: number;
   liveCapUsd: number;
   engineerStatus: OfficeHealthStatus;
+  remoteMode?: boolean;
 }) {
   const isOpen = officeState === "OPEN";
   const project = floor.selectedProject;
   const percent = project && project.progress.total > 0 ? Math.round((project.progress.completed / project.progress.total) * 100) : null;
 
-  const runnerLabel =
-    runnerActivity.runnerStatus === "ONLINE_WORKING" ? "Working" : runnerActivity.runnerStatus === "ONLINE_IDLE" ? "Idle" : "Offline";
-  const runnerTone: ChipTone = runnerActivity.runnerStatus === "OFFLINE" ? "bad" : runnerActivity.runnerStatus === "ONLINE_WORKING" ? "good" : "neutral";
+  // `runner_heartbeats` describes the local standalone-runner process,
+  // which doesn't exist in Remote Mode (GitHub Actions is the execution
+  // engine there) — it always reads OFFLINE remotely, so this chip and
+  // the "no runner" banner below are replaced with an honest remote
+  // status instead of a false "offline" alarm.
+  const runnerLabel = remoteMode
+    ? "GitHub Actions"
+    : runnerActivity.runnerStatus === "ONLINE_WORKING"
+      ? "Working"
+      : runnerActivity.runnerStatus === "ONLINE_IDLE"
+        ? "Idle"
+        : "Offline";
+  const runnerTone: ChipTone = remoteMode
+    ? "neutral"
+    : runnerActivity.runnerStatus === "OFFLINE"
+      ? "bad"
+      : runnerActivity.runnerStatus === "ONLINE_WORKING"
+        ? "good"
+        : "neutral";
 
   return (
     <div className={cn("glass flex flex-col gap-2 rounded-xl px-3.5 py-2.5 text-xs transition-opacity", !isOpen && "opacity-80")}>
@@ -50,7 +68,7 @@ export function OfficeTopBar({
           label={project ? project.displayStatusLabel : "No project"}
           tone={project?.isStalledWithNoDeliverable ? "bad" : "neutral"}
         />
-        <Chip icon={Activity} label={`Runner ${runnerLabel}`} tone={runnerTone} title={runnerActivity.message} />
+        <Chip icon={Activity} label={remoteMode ? runnerLabel : `Runner ${runnerLabel}`} tone={runnerTone} title={remoteMode ? "Remote execution runs in GitHub Actions, not a local runner process." : runnerActivity.message} />
         {project && <Chip icon={Sliders} label={project.aiPolicyMode.replace("_", " ")} tone="neutral" />}
         {project && <Chip icon={Users} label={`${floor.activeAgentCount}/11 active`} tone="neutral" />}
         {percent !== null && <Chip icon={TrendingUp} label={`${percent}%`} tone="neutral" />}
@@ -87,7 +105,7 @@ export function OfficeTopBar({
           OFFICE CLOSED — all work preserved, no new agent or model execution will start until reopened.
         </p>
       )}
-      {isOpen && runnerActivity.runnerStatus === "OFFLINE" && project && project.progress.completed < project.progress.total && (
+      {!remoteMode && isOpen && runnerActivity.runnerStatus === "OFFLINE" && project && project.progress.completed < project.progress.total && (
         <p className="rounded-lg bg-muted/60 px-2.5 py-1.5 text-[0.7rem] text-muted-foreground">
           This project has pending work, but no runner is currently processing it.
         </p>

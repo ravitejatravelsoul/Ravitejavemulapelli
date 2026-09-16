@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { getAppDatabase } from "@/lib/ai-office/db/client";
+import { getOfficeDb } from "@/lib/ai-office/office-db";
 import { getOfficeFloorView } from "@/lib/ai-office/dashboard/office-floor-data";
 import { listAgentRoles } from "@/lib/ai-office/domain/agent-roles";
 import { AgentsGrid, type AgentCardData } from "@/components/ai-office/dashboard/agents-grid";
@@ -15,7 +15,7 @@ export const metadata: Metadata = { title: "Agents" };
  * not per-project drill-down (that's the project detail page's job).
  */
 export default async function AgentsPage() {
-  const db = getAppDatabase();
+  const db = await getOfficeDb();
   const roles = listAgentRoles(db);
   const floor = getOfficeFloorView(db);
 

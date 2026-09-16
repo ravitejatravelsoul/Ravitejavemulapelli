@@ -10,6 +10,8 @@ import { GlassCard } from "@/components/common/glass-card";
 import { Badge } from "@/components/ui/badge";
 import { ActionButton } from "@/components/ai-office/action-button";
 import { approveSemanticRepairAction, rejectSemanticRepairAction, executeSemanticRepairAction } from "@/app/office/actions/semantic-repair";
+import { isRemoteExecutionMode } from "@/lib/ai-office/remote/execution-mode";
+import { LocalOnlyNotice } from "@/components/ai-office/shell/local-only-notice";
 
 export const metadata: Metadata = { title: "Office Engineer" };
 
@@ -137,6 +139,15 @@ function SemanticRepairPlanCard({ plan }: { plan: SemanticRepairPlanRow }) {
  * display.
  */
 export default async function OfficeEngineerPage() {
+  if (isRemoteExecutionMode()) {
+    return (
+      <LocalOnlyNotice
+        title="Office Engineer"
+        reason="Office-wide incident history and semantic-repair plans are platform-level state tracked in the local SQLite database, not part of any per-project remote bundle — Remote Mode has nothing to show here yet."
+      />
+    );
+  }
+
   const db = getAppDatabase();
   const status = computeOfficeHealthStatus(db);
   const incidents = listRecentIncidents(db, 50);

@@ -59,7 +59,7 @@ function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
-function Brand() {
+function Brand({ remoteMode }: { remoteMode: boolean }) {
   return (
     <div className="flex items-center gap-2.5">
       <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
@@ -67,7 +67,12 @@ function Brand() {
       </div>
       <div className="min-w-0 leading-tight">
         <p className="truncate text-sm font-semibold tracking-tight">Teja&apos;s AI Office</p>
-        <p className="font-mono text-[0.6rem] tracking-widest text-muted-foreground uppercase">Private Workspace</p>
+        <div className="flex items-center gap-1.5">
+          <p className="font-mono text-[0.6rem] tracking-widest text-muted-foreground uppercase">Private Workspace</p>
+          <Badge variant={remoteMode ? "default" : "outline"} className="font-mono text-[0.55rem] tracking-widest uppercase">
+            {remoteMode ? "Remote" : "Local"}
+          </Badge>
+        </div>
       </div>
     </div>
   );
@@ -101,14 +106,24 @@ function OwnerFooter({ ownerEmail, officeState, signOut }: { ownerEmail: string;
  * afford. Server-provided `ownerEmail`/`officeState` are the only two
  * real, dynamic values — everything else here is static navigation.
  */
-export function OfficeSidebarNav({ ownerEmail, officeState, signOut }: { ownerEmail: string; officeState: "OPEN" | "CLOSED"; signOut: () => void }) {
+export function OfficeSidebarNav({
+  ownerEmail,
+  officeState,
+  signOut,
+  remoteMode = false,
+}: {
+  ownerEmail: string;
+  officeState: "OPEN" | "CLOSED";
+  signOut: () => void;
+  remoteMode?: boolean;
+}) {
   const [mobileOpen, setMobileOpen] = useState(false);
 
   return (
     <>
       {/* Mobile top bar — visible only below the `md` breakpoint. */}
       <div className="glass sticky top-0 z-40 flex items-center justify-between gap-3 border-b border-border/60 px-4 py-3 md:hidden">
-        <Brand />
+        <Brand remoteMode={remoteMode} />
         <Button variant="outline" size="icon" aria-label="Open navigation" onClick={() => setMobileOpen(true)}>
           <Menu className="size-4" />
         </Button>
@@ -116,7 +131,7 @@ export function OfficeSidebarNav({ ownerEmail, officeState, signOut }: { ownerEm
       <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
         <SheetContent side="left" className="flex w-72 flex-col gap-4 p-4">
           <SheetTitle className="sr-only">AI Office navigation</SheetTitle>
-          <Brand />
+          <Brand remoteMode={remoteMode} />
           <NavLinks onNavigate={() => setMobileOpen(false)} />
           <div className="mt-auto">
             <OwnerFooter ownerEmail={ownerEmail} officeState={officeState} signOut={signOut} />
@@ -126,7 +141,7 @@ export function OfficeSidebarNav({ ownerEmail, officeState, signOut }: { ownerEm
 
       {/* Desktop/tablet persistent sidebar. */}
       <aside className="glass sticky top-0 hidden h-screen w-60 shrink-0 flex-col gap-4 overflow-y-auto border-r border-border/60 p-4 md:flex">
-        <Brand />
+        <Brand remoteMode={remoteMode} />
         <NavLinks />
         <div className="mt-auto">
           <OwnerFooter ownerEmail={ownerEmail} officeState={officeState} signOut={signOut} />

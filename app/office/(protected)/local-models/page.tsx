@@ -10,6 +10,8 @@ import { isClaudeConfigured, getConfiguredClaudeModel } from "@/lib/ai-office/pr
 import { GlassCard } from "@/components/common/glass-card";
 import { Badge } from "@/components/ui/badge";
 import { BenchmarkControls } from "@/components/ai-office/benchmark/benchmark-controls";
+import { isRemoteExecutionMode } from "@/lib/ai-office/remote/execution-mode";
+import { LocalOnlyNotice } from "@/components/ai-office/shell/local-only-notice";
 
 export const metadata: Metadata = { title: "AI Models & Routing" };
 
@@ -20,6 +22,15 @@ function formatDate(ms: number): string {
 const STATUS_BADGE: Record<string, "default" | "secondary" | "destructive"> = { PASS: "secondary", PARTIAL: "default", FAIL: "destructive" };
 
 export default async function LocalModelsPage() {
+  if (isRemoteExecutionMode()) {
+    return (
+      <LocalOnlyNotice
+        title="AI Models & Routing"
+        reason="Ollama benchmarking and model routing require a locally-installed Ollama server — Remote Mode's projects always run SIMULATED, so there is nothing to benchmark or route here."
+      />
+    );
+  }
+
   const db = getAppDatabase();
   const health = await checkOllamaHealth();
   const results = listBenchmarkResults(db);

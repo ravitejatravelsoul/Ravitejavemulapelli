@@ -17,7 +17,7 @@ const initialState: CreateProjectState = {};
 type Provider = "simulated" | "ollama";
 type AiPolicyMode = "LOCAL_ONLY" | "HYBRID" | "CLAUDE_ONLY";
 
-export function NewProjectForm() {
+export function NewProjectForm({ remoteMode = false }: { remoteMode?: boolean }) {
   const [state, formAction, isPending] = useActionState(createProjectAction, initialState);
   // Platform-hardening phase, Part 6/8 — a real owner submitting a real
   // idea without noticing this toggle used to silently get SIMULATED
@@ -50,10 +50,11 @@ export function NewProjectForm() {
   // `selectProvider`, which would also redundantly call `setProvider`
   // with the value it's already initialized to).
   useEffect(() => {
+    if (remoteMode) return;
     startChecking(async () => {
       setHealth(await checkOllamaHealthAction());
     });
-  }, []);
+  }, [remoteMode]);
 
   function selectAiPolicyMode(next: AiPolicyMode) {
     setAiPolicyMode(next);
@@ -90,90 +91,99 @@ export function NewProjectForm() {
           />
         </div>
 
-        <div className="flex flex-col gap-1.5">
-          <Label>AI Provider</Label>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => selectProvider("simulated")}
-              className={cn(
-                "flex-1 rounded-lg border px-3 py-2 text-left text-sm transition-colors",
-                provider === "simulated" ? "border-primary bg-primary/5 font-medium" : "border-border text-muted-foreground hover:border-primary/40",
-              )}
-            >
-              Simulation
-              <p className="text-xs font-normal text-muted-foreground">For testing the Office itself — scripted, deterministic output. No AI model is ever called; nothing here reasons about your idea.</p>
-            </button>
-            <button
-              type="button"
-              onClick={() => selectProvider("ollama")}
-              className={cn(
-                "flex-1 rounded-lg border px-3 py-2 text-left text-sm transition-colors",
-                provider === "ollama" ? "border-accent-2 bg-accent-2/5 font-medium" : "border-border text-muted-foreground hover:border-accent-2/40",
-              )}
-            >
-              Ollama Local
-              <p className="text-xs font-normal text-muted-foreground">Real local LLM · $0 API cost</p>
-            </button>
-          </div>
-          <input type="hidden" name="provider" value={provider} />
+        {remoteMode ? (
+          <p className="rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+            Remote projects always run SIMULATED (deterministic, $0 cost) and execute in the background via GitHub Actions — Ollama and Claude
+            require a local machine and are not available in Remote Mode.
+          </p>
+        ) : (
+          <>
+            <div className="flex flex-col gap-1.5">
+              <Label>AI Provider</Label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => selectProvider("simulated")}
+                  className={cn(
+                    "flex-1 rounded-lg border px-3 py-2 text-left text-sm transition-colors",
+                    provider === "simulated" ? "border-primary bg-primary/5 font-medium" : "border-border text-muted-foreground hover:border-primary/40",
+                  )}
+                >
+                  Simulation
+                  <p className="text-xs font-normal text-muted-foreground">For testing the Office itself — scripted, deterministic output. No AI model is ever called; nothing here reasons about your idea.</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => selectProvider("ollama")}
+                  className={cn(
+                    "flex-1 rounded-lg border px-3 py-2 text-left text-sm transition-colors",
+                    provider === "ollama" ? "border-accent-2 bg-accent-2/5 font-medium" : "border-border text-muted-foreground hover:border-accent-2/40",
+                  )}
+                >
+                  Ollama Local
+                  <p className="text-xs font-normal text-muted-foreground">Real local LLM · $0 API cost</p>
+                </button>
+              </div>
+              <input type="hidden" name="provider" value={provider} />
 
-          {provider === "ollama" && (
-            <p className="mt-1 font-mono text-[0.7rem] tracking-wide uppercase">
-              {checking && <span className="text-muted-foreground">Checking Ollama…</span>}
-              {!checking && health && health.online && (
-                <span className="text-accent-2">
-                  {health.models.length > 0
-                    ? `Ollama online · installed: ${health.models.join(", ")} — routed automatically per role`
-                    : "Ollama online · no models installed"}
-                </span>
+              {provider === "ollama" && (
+                <p className="mt-1 font-mono text-[0.7rem] tracking-wide uppercase">
+                  {checking && <span className="text-muted-foreground">Checking Ollama…</span>}
+                  {!checking && health && health.online && (
+                    <span className="text-accent-2">
+                      {health.models.length > 0
+                        ? `Ollama online · installed: ${health.models.join(", ")} — routed automatically per role`
+                        : "Ollama online · no models installed"}
+                    </span>
+                  )}
+                  {!checking && health && !health.online && <span className="text-destructive">Ollama offline — start it before running this project</span>}
+                </p>
               )}
-              {!checking && health && !health.online && <span className="text-destructive">Ollama offline — start it before running this project</span>}
-            </p>
-          )}
-        </div>
+            </div>
 
-        <div className="flex flex-col gap-1.5">
-          <Label>AI Policy</Label>
-          <div className="flex flex-col gap-2 sm:flex-row">
-            {(
-              [
-                { value: "LOCAL_ONLY" as const, label: "Local Only", desc: "Every role runs on local/simulated models. Never spends money." },
-                { value: "HYBRID" as const, label: "Hybrid", desc: "Local where qualified; Claude only for capabilities with no qualified local model, after your approval." },
-                { value: "CLAUDE_ONLY" as const, label: "Claude Only", desc: "Every role routes to Claude. Requires your approval and real spend." },
-              ]
-            ).map((opt) => (
-              <button
-                key={opt.value}
-                type="button"
-                onClick={() => selectAiPolicyMode(opt.value)}
-                className={cn(
-                  "flex-1 rounded-lg border px-3 py-2 text-left text-sm transition-colors",
-                  aiPolicyMode === opt.value ? "border-primary bg-primary/5 font-medium" : "border-border text-muted-foreground hover:border-primary/40",
-                )}
-              >
-                {opt.label}
-                <p className="text-xs font-normal text-muted-foreground">{opt.desc}</p>
-              </button>
-            ))}
-          </div>
-          <input type="hidden" name="aiPolicyMode" value={aiPolicyMode} />
+            <div className="flex flex-col gap-1.5">
+              <Label>AI Policy</Label>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                {(
+                  [
+                    { value: "LOCAL_ONLY" as const, label: "Local Only", desc: "Every role runs on local/simulated models. Never spends money." },
+                    { value: "HYBRID" as const, label: "Hybrid", desc: "Local where qualified; Claude only for capabilities with no qualified local model, after your approval." },
+                    { value: "CLAUDE_ONLY" as const, label: "Claude Only", desc: "Every role routes to Claude. Requires your approval and real spend." },
+                  ]
+                ).map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => selectAiPolicyMode(opt.value)}
+                    className={cn(
+                      "flex-1 rounded-lg border px-3 py-2 text-left text-sm transition-colors",
+                      aiPolicyMode === opt.value ? "border-primary bg-primary/5 font-medium" : "border-border text-muted-foreground hover:border-primary/40",
+                    )}
+                  >
+                    {opt.label}
+                    <p className="text-xs font-normal text-muted-foreground">{opt.desc}</p>
+                  </button>
+                ))}
+              </div>
+              <input type="hidden" name="aiPolicyMode" value={aiPolicyMode} />
 
-          {aiPolicyMode !== "LOCAL_ONLY" && (
-            <p className="mt-1 font-mono text-[0.7rem] tracking-wide uppercase">
-              {checkingClaude && <span className="text-muted-foreground">Checking Claude configuration…</span>}
-              {!checkingClaude && claudeConfigured === true && (
-                <span className="text-accent-2">Claude configured · project LIVE budget will be capped at $3.00 · owner approval required before any spend</span>
+              {aiPolicyMode !== "LOCAL_ONLY" && (
+                <p className="mt-1 font-mono text-[0.7rem] tracking-wide uppercase">
+                  {checkingClaude && <span className="text-muted-foreground">Checking Claude configuration…</span>}
+                  {!checkingClaude && claudeConfigured === true && (
+                    <span className="text-accent-2">Claude configured · project LIVE budget will be capped at $3.00 · owner approval required before any spend</span>
+                  )}
+                  {!checkingClaude && claudeConfigured === false && (
+                    <span className="text-destructive">
+                      Claude is NOT configured on this server — this project can be created, but any Claude-routed role will show a clean blocked state
+                      until an administrator sets the required credentials.
+                    </span>
+                  )}
+                </p>
               )}
-              {!checkingClaude && claudeConfigured === false && (
-                <span className="text-destructive">
-                  Claude is NOT configured on this server — this project can be created, but any Claude-routed role will show a clean blocked state
-                  until an administrator sets the required credentials.
-                </span>
-              )}
-            </p>
-          )}
-        </div>
+            </div>
+          </>
+        )}
 
         {state.error && <p className="text-sm text-destructive">{state.error}</p>}
 

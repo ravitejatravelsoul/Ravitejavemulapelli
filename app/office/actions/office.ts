@@ -6,6 +6,8 @@ import { getAppDatabase } from "@/lib/ai-office/db/client";
 import { getOwner } from "@/lib/ai-office/domain/users";
 import { openOffice, closeOffice } from "@/lib/ai-office/control/office-control";
 import { isAiOfficeOperationalModeEnabled, OPERATIONAL_MODE_DISABLED_MESSAGE } from "@/lib/ai-office/config/operational-mode";
+import { isRemoteExecutionMode } from "@/lib/ai-office/remote/execution-mode";
+import { withRemoteOfficeMutation, REMOTE_SYNTHETIC_OWNER_ID } from "@/lib/ai-office/remote/remote-state-store";
 
 /**
  * Office Open/Close — bound to `<form action={...}>` buttons on the
@@ -23,6 +25,16 @@ export interface OfficeControlActionState {
 export async function openOfficeAction(): Promise<OfficeControlActionState> {
   const session = await verifySession();
   if (!session) return { error: "You must be signed in." };
+
+  if (isRemoteExecutionMode()) {
+    const result = await withRemoteOfficeMutation((db) => {
+      openOffice(db, REMOTE_SYNTHETIC_OWNER_ID);
+      return { ok: true, value: undefined };
+    });
+    revalidatePath("/office");
+    return result.ok ? {} : { error: result.error };
+  }
+
   if (!isAiOfficeOperationalModeEnabled()) return { error: OPERATIONAL_MODE_DISABLED_MESSAGE };
 
   const db = getAppDatabase();
@@ -37,6 +49,15 @@ export async function openOfficeAction(): Promise<OfficeControlActionState> {
 export async function closeOfficeAction(): Promise<OfficeControlActionState> {
   const session = await verifySession();
   if (!session) return { error: "You must be signed in." };
+
+  if (isRemoteExecutionMode()) {
+    const result = await withRemoteOfficeMutation((db) => {
+      closeOffice(db, REMOTE_SYNTHETIC_OWNER_ID);
+      return { ok: true, value: undefined };
+    });
+    revalidatePath("/office");
+    return result.ok ? {} : { error: result.error };
+  }
 
   const db = getAppDatabase();
   const owner = getOwner(db);
