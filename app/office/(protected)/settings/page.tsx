@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { getAppDatabase } from "@/lib/ai-office/db/client";
+import { getOfficeDb } from "@/lib/ai-office/office-db";
 import { getOfficeStatus } from "@/lib/ai-office/domain/office";
 import { getBudgetSnapshot } from "@/lib/ai-office/budget/budget-service";
 import { isClaudeConfigured } from "@/lib/ai-office/providers/claude/claude-adapter";
@@ -20,7 +20,7 @@ export const metadata: Metadata = { title: "Settings" };
  * dump, no destructive controls.
  */
 export default async function SettingsPage() {
-  const db = getAppDatabase();
+  const db = await getOfficeDb();
   const officeStatus = getOfficeStatus(db);
   const isOpen = officeStatus?.state === "OPEN";
   const budget = getBudgetSnapshot(db);

@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { getAppDatabase } from "@/lib/ai-office/db/client";
+import { getOfficeDb } from "@/lib/ai-office/office-db";
+import { readOfficeWorkspaceFile } from "@/lib/ai-office/office-workspace-read";
 import {
   getOfficeOverview,
   getProjectSummaries,
@@ -13,10 +14,10 @@ import { getProjectDetail, getRecentHandoff } from "@/lib/ai-office/dashboard/pr
 import { getRolePerformance, deriveNextSteps } from "@/lib/ai-office/dashboard/agent-workspace-data";
 import { getRoleSpecialization } from "@/lib/ai-office/agents/role-specializations";
 import { listAgentRoles } from "@/lib/ai-office/domain/agent-roles";
-import { readFile } from "@/lib/ai-office/workspace/workspace-service";
 import { highlightFileContent } from "@/lib/ai-office/workspace/code-highlight";
 import { OfficeTopBar } from "@/components/ai-office/office-floor/office-top-bar";
 import { computeOfficeHealthStatus } from "@/lib/ai-office/engineer/office-engineer";
+import { isRemoteExecutionMode } from "@/lib/ai-office/remote/execution-mode";
 import { OfficeFloor } from "@/components/ai-office/office-floor/office-floor";
 import { OfficeProjectStrip } from "@/components/ai-office/office-floor/office-project-strip";
 import { AgentsList } from "@/components/ai-office/office-floor/agents-list";
@@ -52,7 +53,7 @@ export default async function OfficeHomePage({
   searchParams: Promise<{ project?: string; officeDebug?: string; agent?: string }>;
 }) {
   const { project: selectedProjectId, officeDebug, agent: selectedRoleId } = await searchParams;
-  const db = getAppDatabase();
+  const db = await getOfficeDb();
 
   const overview = getOfficeOverview(db);
   const runnerActivity = getRunnerActivityView(db);
@@ -79,12 +80,15 @@ export default async function OfficeHomePage({
   let fileEntries: WorkspaceFileEntry[] = [];
   if (agentDetail && floor.selectedProject) {
     fileEntries = await Promise.all(
-      agentDetail.filesChanged.map(async (file) => ({
-        path: file.path,
-        sizeBytes: file.sizeBytes,
-        lastModifiedByRoleId: file.lastModifiedByRoleId,
-        html: await highlightFileContent(file.path, await readFile(floor.selectedProject!.id, file.path)),
-      })),
+      agentDetail.filesChanged.map(async (file) => {
+        const content = await readOfficeWorkspaceFile(floor.selectedProject!.id, file.path);
+        return {
+          path: file.path,
+          sizeBytes: file.sizeBytes,
+          lastModifiedByRoleId: file.lastModifiedByRoleId,
+          html: await highlightFileContent(file.path, content ?? ""),
+        };
+      }),
     );
   }
 
@@ -129,6 +133,7 @@ export default async function OfficeHomePage({
             liveCostUsd={budget.liveSpendUsd}
             liveCapUsd={budget.capUsd}
             engineerStatus={computeOfficeHealthStatus(db)}
+            remoteMode={isRemoteExecutionMode()}
           />
         </div>
         <SideCommandPanel sections={sections} pendingApprovalCount={approvals.length} />

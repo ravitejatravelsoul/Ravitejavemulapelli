@@ -161,3 +161,108 @@ export async function writeProjectBundle(config: RemoteRuntimeConfig, bundle: Pr
 }
 
 export { GitHubContentConflictError };
+
+/** Bounded — never an unbounded retry loop. */
+const MAX_WRITE_ATTEMPTS = 3;
+
+export interface RemoteMutationResult<T> {
+  ok: true;
+  value: T;
+}
+export interface RemoteMutationError {
+  ok: false;
+  error: string;
+}
+
+/**
+ * The one shared "hydrate one project, run a domain mutation against it,
+ * flush back with bounded optimistic-concurrency retry, optionally
+ * dispatch a worker run" pattern — every Remote Mode action (approve/
+ * reject/revoke, pause/resume, create) uses this instead of hand-rolling
+ * its own hydrate/flush/retry loop. `mutate` receives the ephemeral
+ * `DatabaseSync` and returns either `{ ok: true, value }` (proceeds to
+ * flush) or `{ ok: false, error }` (aborts before ever writing — a
+ * rejected decision, an invalid transition, etc. never reaches GitHub at
+ * all). `mutate` is called once per attempt against FRESH state, so it
+ * must be safe to call more than once for the same request — true of
+ * every domain function this is used with, all already idempotent-safe
+ * against a re-applied decision (see approval-service.ts's own docs).
+ */
+export async function withRemoteProjectMutation<T>(
+  projectId: string,
+  mutate: (db: DatabaseSync) => { ok: true; value: T } | { ok: false; error: string },
+  opts: { dispatchContinue?: boolean } = {},
+): Promise<RemoteMutationResult<T> | RemoteMutationError> {
+  let remoteConfig: RemoteRuntimeConfig;
+  try {
+    remoteConfig = remoteClientFromEnv();
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "Remote Mode is not configured." };
+  }
+
+  for (let attempt = 1; attempt <= MAX_WRITE_ATTEMPTS; attempt++) {
+    const [{ state: office }, { bundle, sha }] = await Promise.all([readOfficeState(remoteConfig), readProjectBundle(remoteConfig, projectId)]);
+    if (!bundle) return { ok: false, error: "Project not found." };
+
+    const db = hydrateEphemeralDb(office, bundle);
+    const result = mutate(db);
+    if (!result.ok) return { ok: false, error: result.error };
+
+    const newBundle = flushProjectBundle(db, projectId);
+    try {
+      await writeProjectBundle(remoteConfig, newBundle, sha);
+    } catch (error) {
+      if (error instanceof GitHubContentConflictError && attempt < MAX_WRITE_ATTEMPTS) continue;
+      return { ok: false, error: "This project changed while saving. Please refresh and try again." };
+    }
+
+    if (opts.dispatchContinue) {
+      const gh = new GitHubClient(remoteConfig);
+      await gh.dispatchWorkflow("ai-office-remote-worker.yml", { projectId, taskId: "", runId: crypto.randomUUID(), action: "continue" });
+    }
+
+    return { ok: true, value: result.value };
+  }
+
+  return { ok: false, error: "This project changed while saving. Please refresh and try again." };
+}
+
+/**
+ * The office-wide equivalent of `withRemoteProjectMutation` — for
+ * mutations that touch only `state/office.json` (open/close, budget cap)
+ * and need no specific project's bundle. Hydrates a synthetic-owner-only
+ * ephemeral DB (no project bundle restored), runs `mutate`, flushes just
+ * the office state back with the same bounded optimistic-concurrency
+ * retry. Never dispatches a workflow — office-wide state changes don't
+ * correspond to any one project's GitHub Actions run.
+ */
+export async function withRemoteOfficeMutation<T>(
+  mutate: (db: DatabaseSync) => { ok: true; value: T } | { ok: false; error: string },
+): Promise<RemoteMutationResult<T> | RemoteMutationError> {
+  let remoteConfig: RemoteRuntimeConfig;
+  try {
+    remoteConfig = remoteClientFromEnv();
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "Remote Mode is not configured." };
+  }
+
+  for (let attempt = 1; attempt <= MAX_WRITE_ATTEMPTS; attempt++) {
+    const { state: office, sha } = await readOfficeState(remoteConfig);
+    const db = hydrateEphemeralDb(office, null);
+
+    const result = mutate(db);
+    if (!result.ok) return { ok: false, error: result.error };
+
+    const newOffice = flushOfficeState(db);
+    try {
+      await writeOfficeState(remoteConfig, newOffice, sha);
+    } catch (error) {
+      if (error instanceof GitHubContentConflictError && attempt < MAX_WRITE_ATTEMPTS) continue;
+      return { ok: false, error: "Office state changed while saving. Please refresh and try again." };
+    }
+
+    return { ok: true, value: result.value };
+  }
+
+  return { ok: false, error: "Office state changed while saving. Please refresh and try again." };
+}

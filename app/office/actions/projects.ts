@@ -10,6 +10,9 @@ import { createProjectWithIdea } from "@/lib/ai-office/domain/projects";
 import { planProject } from "@/lib/ai-office/orchestrator/orchestrator";
 import { pauseProject, resumeProject } from "@/lib/ai-office/control/project-transitions";
 import { isAiOfficeOperationalModeEnabled, OPERATIONAL_MODE_DISABLED_MESSAGE } from "@/lib/ai-office/config/operational-mode";
+import { isRemoteExecutionMode } from "@/lib/ai-office/remote/execution-mode";
+import { withRemoteProjectMutation, REMOTE_SYNTHETIC_OWNER_ID as REMOTE_OWNER_FALLBACK } from "@/lib/ai-office/remote/remote-state-store";
+import { createRemoteProjectAction } from "@/app/office/actions/remote-projects";
 
 /**
  * "Start New Project" + Pause/Resume — every action here independently
@@ -52,6 +55,20 @@ export interface CreateProjectState {
 export async function createProjectAction(_prevState: CreateProjectState | undefined, formData: FormData): Promise<CreateProjectState> {
   const session = await verifySession();
   if (!session) return { error: "You must be signed in." };
+
+  // Remote Mode has no local operational-mode flag, no Ollama/Claude
+  // provider choice (createRemoteProjectAction is deliberately
+  // SIMULATED-only, LOCAL_ONLY policy — see that file's docblock), and
+  // persists to GitHub instead of getAppDatabase(); reusing it here keeps
+  // this the SAME "Start New Project" form/route for both modes rather
+  // than a second remote-only page.
+  if (isRemoteExecutionMode()) {
+    const result = await createRemoteProjectAction(undefined, formData);
+    if (result.error) return { error: result.error };
+    if (result.projectId) redirect(`/office/projects/${result.projectId}`);
+    return { error: "Project creation did not return a project id." };
+  }
+
   if (!isAiOfficeOperationalModeEnabled()) return { error: OPERATIONAL_MODE_DISABLED_MESSAGE };
 
   const parsed = newProjectSchema.safeParse({
@@ -101,9 +118,22 @@ async function withOwnerSession(): Promise<{ error: string } | { db: ReturnType<
 }
 
 export async function pauseProjectAction(projectId: string): Promise<ProjectTransitionActionState> {
+  const session = await verifySession();
+  if (!session) return { error: "You must be signed in." };
+  if (typeof projectId !== "string" || projectId.length === 0) return { error: "Invalid project." };
+
+  if (isRemoteExecutionMode()) {
+    const result = await withRemoteProjectMutation(projectId, (db) => {
+      const r = pauseProject(db, projectId, REMOTE_OWNER_FALLBACK);
+      return r.ok ? { ok: true, value: undefined } : { ok: false, error: r.reason };
+    });
+    revalidatePath("/office");
+    revalidatePath(`/office/projects/${projectId}`);
+    return result.ok ? {} : { error: result.error };
+  }
+
   const ctx = await withOwnerSession();
   if ("error" in ctx) return ctx;
-  if (typeof projectId !== "string" || projectId.length === 0) return { error: "Invalid project." };
 
   const result = pauseProject(ctx.db, projectId, ctx.ownerId);
   revalidatePath("/office");
@@ -112,10 +142,27 @@ export async function pauseProjectAction(projectId: string): Promise<ProjectTran
 }
 
 export async function resumeProjectAction(projectId: string): Promise<ProjectTransitionActionState> {
+  const session = await verifySession();
+  if (!session) return { error: "You must be signed in." };
+  if (typeof projectId !== "string" || projectId.length === 0) return { error: "Invalid project." };
+
+  if (isRemoteExecutionMode()) {
+    const result = await withRemoteProjectMutation(
+      projectId,
+      (db) => {
+        const r = resumeProject(db, projectId, REMOTE_OWNER_FALLBACK);
+        return r.ok ? { ok: true, value: undefined } : { ok: false, error: r.reason };
+      },
+      { dispatchContinue: true },
+    );
+    revalidatePath("/office");
+    revalidatePath(`/office/projects/${projectId}`);
+    return result.ok ? {} : { error: result.error };
+  }
+
   const ctx = await withOwnerSession();
   if ("error" in ctx) return ctx;
   if (!isAiOfficeOperationalModeEnabled()) return { error: OPERATIONAL_MODE_DISABLED_MESSAGE };
-  if (typeof projectId !== "string" || projectId.length === 0) return { error: "Invalid project." };
 
   const result = resumeProject(ctx.db, projectId, ctx.ownerId);
   revalidatePath("/office");

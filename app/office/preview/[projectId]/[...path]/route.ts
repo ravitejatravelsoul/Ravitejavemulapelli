@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { verifySession } from "@/lib/ai-office/auth/dal";
 import { verifyPreviewToken } from "@/lib/ai-office/auth/preview-token";
-import { readFile, workspaceExists, WorkspacePathError, getContentType } from "@/lib/ai-office/workspace/workspace-service";
+import { readOfficeWorkspaceFile } from "@/lib/ai-office/office-workspace-read";
+import { getContentType } from "@/lib/ai-office/workspace/workspace-service";
 import { rewriteLocalResourceLinks } from "@/lib/ai-office/workspace/rewrite-preview-links";
 
 // Never statically cached — every response depends on a session/token
@@ -39,17 +40,13 @@ export async function GET(request: Request, { params }: { params: Promise<{ proj
 
   const relativePath = pathSegments.join("/") || "index.html";
 
-  if (!workspaceExists(projectId)) {
-    return NextResponse.json({ error: "No workspace exists for this project." }, { status: 404 });
-  }
-
-  let content: string;
-  try {
-    content = await readFile(projectId, relativePath);
-  } catch (error) {
-    if (error instanceof WorkspacePathError) {
-      return NextResponse.json({ error: "Invalid path." }, { status: 400 });
-    }
+  // readOfficeWorkspaceFile (local filesystem or, in Remote Mode, the
+  // GitHub Contents API — lib/ai-office/office-workspace-read.ts) never
+  // throws; a missing workspace and a missing file are indistinguishable
+  // here (both just "no content"), which is fine — either way the
+  // correct response is 404.
+  let content = await readOfficeWorkspaceFile(projectId, relativePath);
+  if (content === null) {
     return NextResponse.json({ error: "File not found." }, { status: 404 });
   }
 
