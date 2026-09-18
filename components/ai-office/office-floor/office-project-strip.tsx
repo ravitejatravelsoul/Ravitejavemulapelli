@@ -1,4 +1,5 @@
 "use client";
+import { isActiveVisualState } from "@/lib/ai-office/dashboard/office-visual-state";
 
 import { useRouter, usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -26,7 +27,7 @@ export function OfficeProjectStrip({ floor }: { floor: OfficeFloorView }) {
 
   const { title, progress, provider, displayStatusLabel, isStalledWithNoDeliverable } = floor.selectedProject;
   const percent = progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0;
-  const workingAgent = floor.agents.find((a) => a.status === "WORKING" || a.status === "THINKING" || a.status === "REVIEWING");
+  const workingAgent = floor.agents.find((a) => isActiveVisualState(a.status));
   const waitingCount = floor.agents.filter((a) => a.status === "WAITING").length;
   const activityLine = workingAgent
     ? `${workingAgent.roleName}${workingAgent.currentTaskTitle ? ` — ${workingAgent.currentTaskTitle}` : " is on it"}`

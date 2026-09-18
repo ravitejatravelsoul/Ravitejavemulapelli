@@ -19,6 +19,7 @@ const eslintConfig = defineConfig([
     // ignored above: generated build artifacts, not source.
     ".next-e2e/**",
     ".next-e2e-limited/**",
+    ".next-e2e-living/**",
   ]),
 ]);
 

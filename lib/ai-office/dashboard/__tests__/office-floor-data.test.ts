@@ -47,7 +47,7 @@ describe("getOfficeFloorView — fresh plan, nothing executed yet", () => {
     assert.equal(orchestrator.status, "IDLE");
 
     const productOwner = view.agents.find((a) => a.roleId === "product-owner")!;
-    assert.equal(productOwner.status, "WAITING");
+    assert.equal(productOwner.status, "QUEUED");
     assert.equal(productOwner.currentTaskTitle, findTask(tasks, "product-owner").title);
   });
 
@@ -80,12 +80,12 @@ describe("getOfficeFloorView — task status mapping", () => {
     assert.equal(view.agents.find((a) => a.roleId === "product-owner")!.status, "THINKING");
   });
 
-  test("IN_PROGRESS on a review role (qa-agent) reads REVIEWING", () => {
+  test("IN_PROGRESS on QA reads TESTING", () => {
     const { t, project, tasks } = setup();
     const qa = findTask(tasks, "qa-agent");
     updateTaskStatus(t.db, qa.id, "IN_PROGRESS");
     const view = getOfficeFloorView(t.db, project.id);
-    assert.equal(view.agents.find((a) => a.roleId === "qa-agent")!.status, "REVIEWING");
+    assert.equal(view.agents.find((a) => a.roleId === "qa-agent")!.status, "TESTING");
   });
 
   test("BLOCKED task reads BLOCKED", () => {

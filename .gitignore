@@ -111,3 +111,5 @@ public/projects/chillpay/ChillPay Icon.jpg
 # aren't referenced by the app at runtime
 public/rv-favicon-source-512.png
 public/rv-monogram-square.png
+
+/.next-e2e-living/

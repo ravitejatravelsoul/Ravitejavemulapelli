@@ -123,7 +123,7 @@ export default async function OfficeHomePage({
 
   return (
     <div className="flex flex-col gap-4">
-      {overview.activeProjects > 0 && <AutoRefresh />}
+      <AutoRefresh intervalMs={overview.activeProjects > 0 || floor.agents.some(a => a.status === "DONE") ? 5000 : 30000} />
       <div className="flex flex-wrap items-center gap-2">
         <div className="min-w-0 flex-1">
           <OfficeTopBar
@@ -139,10 +139,10 @@ export default async function OfficeHomePage({
         <SideCommandPanel sections={sections} pendingApprovalCount={approvals.length} />
       </div>
 
-      <div className="hidden md:block">
+      <div className="hidden lg:block">
         <OfficeFloor floor={floor} officeState={overview.officeState} recentHandoff={recentHandoff} debugEnabled={debugEnabled} />
       </div>
-      <div className="md:hidden">
+      <div className="lg:hidden">
         <OfficeProjectStrip floor={floor} />
         <div className="mt-3">
           <AgentsList floor={floor} />

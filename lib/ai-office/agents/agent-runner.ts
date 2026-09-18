@@ -304,6 +304,8 @@ async function runFreeModelWithFallback(
 
     attempts += 1;
     finalCandidate = candidate;
+    // Publish the actual in-flight fallback route for read-only office telemetry.
+    updateAgentRunProviderModel(db, ctx.agentRunId, { provider: candidate.provider, model: candidate.modelId });
     const startedAt = Date.now();
     const result = await runAdapterOnce(adapter, ctx.buildInput(), ctx.timeoutMs);
     const latencyMs = Date.now() - startedAt;

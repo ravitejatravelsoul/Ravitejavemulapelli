@@ -4,7 +4,7 @@ import { listAgentRoles, getAgentRole, type AgentRoleRow } from "../domain/agent
 import { isReviewRole, isDevelopmentRole } from "../agents/remediation.ts";
 import { isOperationalFailureReason } from "../agents/failure-classification.ts";
 import { listProjects, getProject, type ProjectRow, type ProjectStatus } from "../domain/projects.ts";
-import { listTasksForProject, listTaskAttempts, getAgentRun, type TaskRow, type AgentRunRow } from "../domain/tasks.ts";
+import { listTaskDependencies, listTasksForProject, listTaskAttempts, getAgentRun, type TaskRow, type AgentRunRow } from "../domain/tasks.ts";
 import {
   listArtifactsForProject,
   listTestResultsForTask,
@@ -29,7 +29,8 @@ import { getHonestStatusLabel, isUnverifiedCompletionClaim, isStalledWithNoDeliv
  * IDLE — there is no code path that invents activity.
  */
 
-export type OfficeAgentVisualStatus = "IDLE" | "WORKING" | "THINKING" | "REVIEWING" | "WAITING" | "BLOCKED" | "DONE" | "PAUSED";
+export type { OfficeAgentVisualStatus } from "./office-visual-state.ts";
+import { mapAgentVisualState, isActiveVisualState, type OfficeAgentVisualStatus } from "./office-visual-state.ts";
 
 export interface OfficeAgentView {
   roleId: string;
@@ -38,8 +39,12 @@ export interface OfficeAgentView {
   currentTaskTitle: string | null;
   lastCompletedTaskTitle: string | null;
   attemptCount: number;
-  /** The provider that produced (or will produce) this role's work in the selected project — "simulated" | "ollama" | null when nothing has run yet and nothing is scheduled. */
+  /** Actual persisted run provider; null until assigned. Never inferred from project policy. */
   provider: string | null;
+  model?: string | null;
+  taskId?: string | null;
+  maxAttempts?: number;
+  completedAt?: number | null;
 }
 
 export interface OfficeFloorProjectOption {
@@ -64,24 +69,13 @@ export interface OfficeFloorView {
   } | null;
   projects: OfficeFloorProjectOption[];
   agents: OfficeAgentView[];
-  /** How many of the 11 catalog roles are currently doing real work on the selected project — WORKING/THINKING/REVIEWING only, never counting WAITING/IDLE. 0 with no project selected. */
+  /** How many of the 11 catalog roles are currently doing real work on the selected project — Active worker states only; excludes the command desk and WAITING/IDLE. 0 with no project selected. */
   activeAgentCount: number;
-}
-
-/** A DONE task still reads as a brief "DONE" pulse for this long after completing (this is a page-render snapshot, refreshed by the existing 5s AutoRefresh poll — not a live timer). After that it settles to IDLE with lastCompletedTaskTitle set. */
-const RECENT_DONE_WINDOW_MS = 15_000;
-
-/** Roles whose output is analysis/design rather than typing-code or reviewing — a real, catalog-derived (not hardcoded-id) split so IN_PROGRESS work reads as "thinking" vs "working" vs "reviewing" without inventing any new state. */
-const THINKING_OUTPUTS = ["requirements", "research-notes", "architecture", "ux-spec"];
-
-function isThinkingRole(role: AgentRoleRow): boolean {
-  const outputs = JSON.parse(role.allowedOutputs) as string[];
-  return outputs.some((o) => THINKING_OUTPUTS.includes(o));
 }
 
 /** The provider label for a project's own (not-yet-run) work — the project's configured `provider` column ("simulated" | "ollama"), or "live" for a (currently unreachable) LIVE-mode project. */
 function projectProviderLabel(project: ProjectRow): string {
-  return project.aiMode === "LIVE" ? "live" : project.provider;
+  return project.routingMode === "FREE_MULTI_MODEL" ? "Free multi-model" : project.aiMode === "LIVE" ? "live" : project.provider;
 }
 
 function idleAgent(role: AgentRoleRow): OfficeAgentView {
@@ -103,71 +97,28 @@ function pickDefaultProject(projects: ProjectRow[]): ProjectRow | null {
 }
 
 function buildAgentView(
-  db: DatabaseSync,
-  role: AgentRoleRow,
-  project: ProjectRow,
-  task: TaskRow | undefined,
-  ctx: { mostRecentDoneAt: number; now: number },
+  db: DatabaseSync, role: AgentRoleRow, project: ProjectRow, task: TaskRow | undefined,
+  ctx: { now: number; tasks: TaskRow[]; pendingApprovalCount: number },
 ): OfficeAgentView {
-  // The Orchestrator never gets a task row of its own (it plans the graph,
-  // it doesn't execute a step in it) — its only observable real state is
-  // "the project is currently in the synchronous planning phase."
-  if (role.id === "orchestrator") {
-    const planning = project.status === "PLANNING";
-    return {
-      roleId: role.id,
-      roleName: role.name,
-      status: planning ? "WORKING" : "IDLE",
-      currentTaskTitle: null,
-      lastCompletedTaskTitle: null,
-      attemptCount: 0,
-      provider: planning ? projectProviderLabel(project) : null,
-    };
-  }
-
-  if (!task) return idleAgent(role);
-
-  const latestRun = getLatestAgentRunForTask(db, task.id);
-  const provider = latestRun?.provider ?? (task.status === "PENDING" ? null : projectProviderLabel(project));
-
-  if (project.status === "PAUSED" && task.status !== "DONE") {
-    return {
-      roleId: role.id,
-      roleName: role.name,
-      status: "PAUSED",
-      currentTaskTitle: task.title,
-      lastCompletedTaskTitle: null,
-      attemptCount: task.attemptCount,
-      provider,
-    };
-  }
-
-  if (task.status === "BLOCKED") {
-    return { roleId: role.id, roleName: role.name, status: "BLOCKED", currentTaskTitle: task.title, lastCompletedTaskTitle: null, attemptCount: task.attemptCount, provider };
-  }
-
-  if (task.status === "DONE") {
-    const isRecent = task.updatedAt === ctx.mostRecentDoneAt && ctx.now - task.updatedAt <= RECENT_DONE_WINDOW_MS;
-    return {
-      roleId: role.id,
-      roleName: role.name,
-      status: isRecent ? "DONE" : "IDLE",
-      currentTaskTitle: null,
-      lastCompletedTaskTitle: task.title,
-      attemptCount: task.attemptCount,
-      provider,
-    };
-  }
-
-  if (task.status === "IN_PROGRESS") {
-    const status: OfficeAgentVisualStatus = isReviewRole(role) ? "REVIEWING" : isThinkingRole(role) ? "THINKING" : "WORKING";
-    return { roleId: role.id, roleName: role.name, status, currentTaskTitle: task.title, lastCompletedTaskTitle: null, attemptCount: task.attemptCount, provider };
-  }
-
-  // PENDING (and the currently-unused ASSIGNED/IN_REVIEW/FAILED values) —
-  // whether or not its dependencies are satisfied, this reads the same:
-  // the role hasn't started yet.
-  return { roleId: role.id, roleName: role.name, status: "WAITING", currentTaskTitle: task.title, lastCompletedTaskTitle: null, attemptCount: task.attemptCount, provider };
+  const run = task ? getLatestAgentRunForTask(db, task.id) : null;
+  const dependenciesSatisfied = !!task && listTaskDependencies(db, task.id).every(edge =>
+    ctx.tasks.some(t => t.id === edge.dependsOnTaskId && t.status === "DONE"));
+  const status = mapAgentVisualState({ roleId: role.id, projectStatus: project.status, task,
+    dependenciesSatisfied, pendingApproval: ctx.pendingApprovalCount > 0 && (role.id === "orchestrator" || task?.status === "PENDING" || task?.status === "ASSIGNED"),
+    runningTaskCount: ctx.tasks.filter(t => t.status === "IN_PROGRESS" && (!t.leaseExpiresAt || t.leaseExpiresAt > ctx.now)).length,
+    blockedTaskCount: ctx.tasks.filter(t => t.status === "BLOCKED").length, now: ctx.now });
+  // No project-provider fallback. A route is unknown until a real run records it.
+  // Pending retry rows retain old run history, but never advertise it as the next model.
+  const currentRun = task && !["PENDING", "ASSIGNED"].includes(task.status) ? run : null;
+  return { roleId: role.id, roleName: role.name, status,
+    taskId: task?.id ?? null,
+    currentTaskTitle: role.id === "orchestrator"
+      ? status === "WAITING" ? "Waiting for owner approval" : status === "WORKING" ? "Coordinating active tasks" : status === "THINKING" ? "Planning the project" : status === "BLOCKED" ? "Review blocked work" : null
+      : task && task.status !== "DONE" ? task.title : null,
+    lastCompletedTaskTitle: task?.status === "DONE" ? task.title : null,
+    attemptCount: task?.attemptCount ?? 0, maxAttempts: role.maxRetries + (task?.retryBaselineAttemptCount ?? 0),
+    completedAt: task?.status === "DONE" ? task.updatedAt : null,
+    provider: currentRun?.provider ?? null, model: currentRun?.model ?? null };
 }
 
 /**
@@ -188,11 +139,15 @@ export function getOfficeFloorView(db: DatabaseSync, selectedProjectId?: string,
   }
 
   const tasks = listTasksForProject(db, project.id);
-  const taskByRoleId = new Map(tasks.map((t) => [t.roleId, t]));
-  const doneAtValues = tasks.filter((t) => t.status === "DONE").map((t) => t.updatedAt);
-  const mostRecentDoneAt = doneAtValues.length > 0 ? Math.max(...doneAtValues) : 0;
+  // Prefer current work when a role has multiple historical tasks.
+  const rank: Record<string, number> = { IN_PROGRESS: 0, IN_REVIEW: 1, BLOCKED: 2, FAILED: 3, ASSIGNED: 4, PENDING: 5, DONE: 6 };
+  const taskByRoleId = new Map<string, TaskRow>();
+  for (const task of [...tasks].sort((a, b) => (rank[a.status] ?? 9) - (rank[b.status] ?? 9) || b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))) {
+    if (!taskByRoleId.has(task.roleId)) taskByRoleId.set(task.roleId, task);
+  }
+  const pendingApprovalCount = listApprovalsForProject(db, project.id).filter(a => a.status === "PENDING").length;
 
-  const agents = roles.map((role) => buildAgentView(db, role, project, taskByRoleId.get(role.id), { mostRecentDoneAt, now }));
+  const agents = roles.map((role) => buildAgentView(db, role, project, taskByRoleId.get(role.id), { tasks, pendingApprovalCount, now }));
   const completed = tasks.filter((t) => t.status === "DONE").length;
 
   const workspaceRow = getWorkspace(db, project.id);
@@ -219,7 +174,7 @@ export function getOfficeFloorView(db: DatabaseSync, selectedProjectId?: string,
     },
     projects,
     agents,
-    activeAgentCount: agents.filter((a) => a.status === "WORKING" || a.status === "THINKING" || a.status === "REVIEWING").length,
+    activeAgentCount: agents.filter((a) => a.roleId !== "orchestrator" && isActiveVisualState(a.status)).length,
   };
 }
 
@@ -335,7 +290,7 @@ export function getAgentDetail(db: DatabaseSync, roleId: string, selectedProject
 
   if (project) {
     const tasks = listTasksForProject(db, project.id);
-    const task = tasks.find((t) => t.roleId === roleId);
+    const task = tasks.find((t) => t.id === agent.taskId);
     taskStatus = task?.status ?? null;
 
     const artifacts = listArtifactsForProject(db, project.id).filter((a: ArtifactRow) => a.taskId === task?.id);
@@ -356,7 +311,7 @@ export function getAgentDetail(db: DatabaseSync, roleId: string, selectedProject
       const latest = testResults[testResults.length - 1];
       latestTestResult = latest ? { ...latest } : null;
 
-      model = getLatestAgentRunForTask(db, task.id)?.model ?? null;
+      model = agent.model ?? null;
       currentTaskSteps = buildCurrentTaskSteps(role, task, filesChanged, latestTestResult);
       failureHistory = listFailuresForTask(db, task.id).map((f) => ({
         reason: f.reason,
