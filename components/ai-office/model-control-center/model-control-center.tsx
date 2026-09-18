@@ -27,7 +27,7 @@ export interface ModelRegistryRowView {
   provider: string;
   modelId: string;
   displayName: string;
-  freeTier: boolean;
+  freeEligibility: "LOCAL_FREE" | "PROVIDER_FREE_ROUTE" | "OWNER_CONFIRMED_FREE_TIER" | null;
   enabled: boolean;
   capabilities: string[];
   health: "HEALTHY" | "DEGRADED" | "UNAVAILABLE" | "UNKNOWN";
@@ -127,9 +127,9 @@ export function ModelRegistryTable({ rows }: { rows: ModelRegistryRowView[] }) {
                 <td className="py-2 pr-3 font-mono uppercase">{row.provider}</td>
                 <td className="py-2 px-3 font-mono">
                   {row.modelId}
-                  {row.freeTier && (
+                  {row.freeEligibility && (
                     <Badge variant="outline" className="ml-1.5 font-mono text-[0.55rem]">
-                      {row.provider === "ollama" ? "LOCAL" : "FREE"}
+                      {row.freeEligibility === "LOCAL_FREE" ? "LOCAL FREE" : row.freeEligibility === "PROVIDER_FREE_ROUTE" ? "FREE ROUTE" : "OWNER-CONFIRMED FREE TIER"}
                     </Badge>
                   )}
                 </td>

@@ -21,7 +21,7 @@ setProviderEnabled(db,'groq',false);
 const other=selectFreeModel(db,{capability:'GENERAL',requiredCapabilities:capabilities});
 setProviderEnabled(db,'groq',true);
 assert.equal(other?.provider,'openrouter');
-const {project}=createProjectWithIdea(db,{title:'Live cross-provider fallback probe',rawIdeaText:'Define requirements for a Hello World page with a heading, description, and a button that changes visible text.',ownerId:getOwner(db)!.id,provider:'ollama',aiPolicyMode:'LOCAL_ONLY',freeModelOrchestration:true});
+const {project}=createProjectWithIdea(db,{title:'Live cross-provider fallback probe',rawIdeaText:'Define requirements for a Hello World page with a heading, description, and a button that changes visible text.',ownerId:getOwner(db)!.id,provider:'ollama',aiPolicyMode:'LOCAL_ONLY',routingMode:'FREE_MULTI_MODEL'});
 const task=createTask(db,{projectId:project.id,roleId:'product-owner',title:'Define requirements'});
 const injected: string[]=[]; const live: string[]=[];
 const result=await executeTask(db,task.id,{freeProviderFetchImpl:async(url,init)=>{

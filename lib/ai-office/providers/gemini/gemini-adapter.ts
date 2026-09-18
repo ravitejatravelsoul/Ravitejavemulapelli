@@ -1,3 +1,4 @@
+import { isFreeModelAllowed } from "../free/free-provider-config.ts";
 import "server-only";
 // Relative + extension-explicit — see lib/ai-office/db/client.ts's comment.
 import type { AIProviderAdapter, AgentTaskInput, AgentTaskResult, CostEstimate } from "../types.ts";
@@ -13,10 +14,8 @@ import { buildPrompt, malformedResult, parseStructuredOutput } from "../shared/s
  * `parseStructuredOutput`/`malformedResult` from
  * structured-output-contract.ts, identical to every other provider.
  *
- * `usage.costUsd` is always 0 — this adapter is only ever constructed
- * for Gemini's free tier; its usage rows must never enter the LIVE
- * budget ledger (domain/budget.ts's FREE_PROVIDERS exclusion, extended
- * by this phase to include "gemini").
+ * Zero cost is conditional on explicit free eligibility checked before estimation
+ * and every request. Groq/Gemini rely on owner-confirmed free-tier billing.
  */
 
 const DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
@@ -64,11 +63,17 @@ export class GeminiAdapter implements AIProviderAdapter {
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
+  private assertFreeEligibility(): void {
+    if (!isFreeModelAllowed("gemini", this.model)) throw new Error("Route is not explicitly free-eligible; unknown/paid pricing is refused.");
+  }
+
   estimateCost(): CostEstimate {
+    this.assertFreeEligibility();
     return { estimatedInputTokens: 0, estimatedOutputTokens: 0, estimatedCostUsd: 0 };
   }
 
   async runAgentTask(input: AgentTaskInput): Promise<AgentTaskResult> {
+    this.assertFreeEligibility();
     const prompt = buildPrompt(input);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);

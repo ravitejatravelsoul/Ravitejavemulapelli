@@ -30,7 +30,7 @@ export async function benchmarkFreeProviderModel(
 ): Promise<BenchmarkFreeModelResult> {
   const row = getModelRegistryEntry(db, input.provider, input.modelId);
   if (!row?.enabled || !row.freeTier || !isProviderEnabled(db, input.provider) || !isFreeModelAllowed(input.provider, input.modelId)) {
-    return { ok: false, error: "Model must be discovered, enabled and verified free before benchmarking." };
+    return { ok: false, error: "Model must be discovered, enabled and explicitly free-eligible before benchmarking." };
   }
   const adapter = createFreeProviderAdapter(input.provider, input.modelId);
   if (!adapter) return { ok: false, error: `Provider "${input.provider}" is not configured (missing API key).` };

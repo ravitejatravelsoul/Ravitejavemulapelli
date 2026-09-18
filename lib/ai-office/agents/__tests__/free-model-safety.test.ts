@@ -1,3 +1,5 @@
+process.env.AI_OFFICE_GROQ_FREE_TIER_CONFIRMED = "true";
+process.env.AI_OFFICE_GROQ_FREE_MODELS = "m";
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createTestDb } from '../../db/test-helpers.ts';

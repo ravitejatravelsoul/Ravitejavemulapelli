@@ -32,7 +32,7 @@ if(process.env.PILOT_FIRST_PROVIDER) process.env.AI_OFFICE_CONTEXT_BUDGET_OVERRI
 const db=openDatabase('.data/free-pilot/pilot.db');runMigrations(db);seedAll(db);
 const owner=getOwner(db)!;
 const projectId=process.env.PILOT_PROJECT_ID ?? createProjectWithIdea(db,{
- title:'Free API Hello World pilot', ownerId:owner.id,provider:'ollama',aiPolicyMode:'LOCAL_ONLY',freeModelOrchestration:true,
+ title:'Free API Hello World pilot', ownerId:owner.id,provider:'ollama',aiPolicyMode:'LOCAL_ONLY',routingMode:'FREE_MULTI_MODEL',
  rawIdeaText:'Create a simple static Hello World webpage. Include a heading, one descriptive paragraph and one button. Clicking the button must change visible text to Clicked!. Use only index.html, style.css and script.js. No backend or external services. Keep the implementation small.',
 }).project.id;
 if(getProject(db,projectId)?.status==='DRAFT') console.log('Plan',JSON.stringify(planProject(db,projectId).selectedRoles));

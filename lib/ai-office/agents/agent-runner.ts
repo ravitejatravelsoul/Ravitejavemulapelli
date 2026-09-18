@@ -1,3 +1,5 @@
+import { getFreeEligibility } from "../providers/free/free-provider-config.ts";
+import { isFreeRouting } from "../domain/projects.ts";
 import "server-only";
 import type { DatabaseSync } from "node:sqlite";
 // Relative + extension-explicit imports throughout this file — required
@@ -309,6 +311,7 @@ async function runFreeModelWithFallback(
     recordAiUsage(db, { agentRunId: ctx.agentRunId, projectId: ctx.projectId, provider: candidate.provider, ...result.usage });
     recordEvent(db, { projectId: ctx.projectId, type: "model.request", actor: "system", payload: {
       agentRunId: ctx.agentRunId, provider: candidate.provider, model: candidate.modelId,
+      freeEligibility: getFreeEligibility(candidate.provider, candidate.modelId),
       latencyMs, status: result.status, structuredOutputValid: !(result.raw as { malformed?: boolean; threw?: boolean } | undefined)?.malformed && !(result.raw as { threw?: boolean } | undefined)?.threw, ...result.usage,
     } });
     const failureReason = result.output.failure?.reason ?? "";
@@ -973,7 +976,7 @@ export async function executeTask(
   // further down, which is the only thing allowed to move to a
   // different candidate mid-attempt.
   const freeCapabilities = requiredCapabilitiesForTask(role.id, task.title);
-  const freeContext = project.freeModelOrchestration === 1
+  const freeContext = isFreeRouting(project)
     ? await optimizeContextForPaidCall({ db, role, task, context, capability: capabilityForRole(role.id) }) : null;
   let freeModelSelection: SelectFreeModelResult | null = null;
   let freeRoutingDecisionId: string | null = null;
@@ -984,7 +987,7 @@ export async function executeTask(
   } else if (claudeCall) {
     adapter = claudeCall.adapter;
     modelForRun = claudeCall.adapter.model;
-  } else if (project.provider === "ollama" && project.freeModelOrchestration === 1) {
+  } else if (isFreeRouting(project)) {
     const capability = freeCapabilities[0]!;
     freeModelSelection = freeContext?.ok ? selectFreeModel(db, {
       capability, requiredCapabilities: freeCapabilities,
@@ -1044,7 +1047,7 @@ export async function executeTask(
   // the project's own base `provider` column can never reflect (a HYBRID
   // project's base provider is typically "simulated"; only specific
   // roles route to Claude).
-  const usedRealProvider = project.provider === "ollama" || claudeCall !== null;
+  const usedRealProvider = isFreeRouting(project) || project.provider === "ollama" || claudeCall !== null;
 
   const releaseReadiness =
     !modelSelectionFailureReason && role.id === "release-agent" ? checkReleaseReadiness(db, project.id) : { ready: true as const };
@@ -1055,7 +1058,7 @@ export async function executeTask(
 
   let result: import("../providers/types.ts").AgentTaskResult;
   if (modelSelectionFailureReason) {
-    if (project.freeModelOrchestration === 1) {
+    if (isFreeRouting(project)) {
       freeRoutingDecisionId = recordRoutingDecision(db, {
         projectId: project.id, taskId: task.id, roleId: role.id,
         requiredCapability: freeCapabilities.join(" + "), candidateModels: [],

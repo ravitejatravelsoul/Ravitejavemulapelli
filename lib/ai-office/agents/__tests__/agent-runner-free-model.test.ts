@@ -20,6 +20,7 @@ import { executeTask } from "../agent-runner.ts";
 
 process.env.OFFICE_OWNER_EMAIL = "test-owner@example.invalid";
 process.env.OFFICE_OWNER_PASSWORD_HASH = "synthetic-test-salt:synthetic-test-hash-not-a-real-scrypt-output";
+process.env.AI_OFFICE_CLAUDE_ENABLED = "true";
 process.env.GROQ_API_KEY = "test-groq-key";
 process.env.GEMINI_API_KEY = "test-gemini-key";
 
@@ -29,9 +30,9 @@ function setupFreeOrchestrationProject(t: ReturnType<typeof createTestDb>) {
     title: "Free multi-model pilot",
     rawIdeaText: "A tiny deterministic test project for the free multi-model orchestration phase.",
     ownerId: owner.id,
-    provider: "ollama",
-    aiPolicyMode: "LOCAL_ONLY",
-    freeModelOrchestration: true,
+    provider: "simulated",
+    aiPolicyMode: "CLAUDE_ONLY",
+    routingMode: "FREE_MULTI_MODEL",
   });
   return { owner, project };
 }
@@ -228,4 +229,27 @@ test('malformed first model falls back and preserves both providers token usage'
   assert.equal(decision.attempts,2);assert.equal(decision.inputTokens,28);assert.equal(decision.outputTokens,32);
   assert.match(decision.selectionReason,/Fallback/);
  }finally{t.close();}
+});
+
+
+test("all free candidates fail: bounded retry with no paid fallback even under CLAUDE_ONLY", async () => {
+  const t = createTestDb();
+  let freeCalls = 0;
+  let paidCalls = 0;
+  try {
+    const { project } = setupFreeOrchestrationProject(t);
+    for (const modelId of ["down-a", "down-b", "down-c", "down-d"]) {
+      upsertModelRegistryEntry(t.db, { provider: "groq", modelId, displayName: modelId, capabilities: ["GENERAL"] });
+    }
+    const task = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "Define requirements" });
+    const result = await executeTask(t.db, task.id, {
+      freeProviderFetchImpl: (async () => { freeCalls++; return new Response("Unavailable", { status: 429 }); }) as typeof fetch,
+      claudeClientOverride: { messages: { create: async () => { paidCalls++; throw new Error("Forbidden paid call"); } } } as never,
+    });
+    assert.ok(["retried", "escalated"].includes(result.outcome));
+    assert.equal(freeCalls, 3);
+    assert.equal(paidCalls, 0);
+    assert.equal(listRoutingDecisions(t.db, { projectId: project.id })[0]!.attempts, 3);
+    assert.ok(listAiUsageForProject(t.db, project.id).every(row => row.provider === "groq" && row.costUsd === 0));
+  } finally { t.close(); }
 });

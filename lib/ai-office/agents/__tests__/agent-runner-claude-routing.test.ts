@@ -705,3 +705,18 @@ describe("Revoke-approval capability — second Claude LIVE pilot safety gap", (
 function getApprovalStatusFor(db: DatabaseSync, approvalId: string): string | undefined {
   return (db.prepare("SELECT status FROM approvals WHERE id = ?").get(approvalId) as { status: string } | undefined)?.status;
 }
+
+
+test("CLAUDE_ONLY with Claude disabled produces zero Anthropic calls through executeTask", async () => {
+  const t = createTestDb();
+  process.env.AI_OFFICE_CLAUDE_ENABLED = "false";
+  process.env.ANTHROPIC_API_KEY = "synthetic-test-key";
+  let calls = 0;
+  try {
+    const { project } = createProjectWithIdea(t.db, { title: "Disabled Claude", rawIdeaText: "Define a tiny tool", ownerId: getOwner(t.db)!.id, aiPolicyMode: "CLAUDE_ONLY" });
+    const task = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "Requirements" });
+    await executeTask(t.db, task.id, { claudeClientOverride: claudeClient(() => { calls++; throw new Error("Forbidden Anthropic request"); }) });
+    assert.equal(calls, 0);
+    assert.ok(listAiUsageForProject(t.db, project.id).every(row => row.provider !== "anthropic"));
+  } finally { t.close(); }
+});

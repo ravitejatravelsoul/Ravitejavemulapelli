@@ -1,3 +1,5 @@
+process.env.AI_OFFICE_GEMINI_FREE_TIER_CONFIRMED = "true";
+process.env.AI_OFFICE_GEMINI_FREE_MODELS = "gemini-2.0-flash";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { GeminiAdapter, GeminiRateLimitError, GeminiTimeoutError, GeminiConnectionError } from "../gemini/gemini-adapter.ts";

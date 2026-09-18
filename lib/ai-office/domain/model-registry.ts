@@ -24,6 +24,7 @@ export interface ModelRegistryRow {
   provider: string;
   modelId: string;
   displayName: string;
+  /** Catalog eligibility flag, not independent proof of account billing. See getFreeEligibility. */
   freeTier: 0 | 1;
   enabled: 0 | 1;
   capabilities: string; // JSON array of TaskCapability
@@ -71,7 +72,7 @@ export function upsertModelRegistryEntry(db: DatabaseSync, entry: ModelRegistryS
       JSON.stringify(entry.capabilities),
       entry.contextWindow ?? null,
       entry.structuredOutput ? 1 : 0,
-      entry.freeTier === false ? 0 : 1,
+      entry.freeTier === false || !["ollama", "groq", "gemini", "openrouter"].includes(entry.provider) ? 0 : 1,
       now,
       id,
     );
@@ -85,7 +86,7 @@ export function upsertModelRegistryEntry(db: DatabaseSync, entry: ModelRegistryS
       entry.provider,
       entry.modelId,
       entry.displayName,
-      entry.freeTier === false ? 0 : 1,
+      entry.freeTier === false || !["ollama", "groq", "gemini", "openrouter"].includes(entry.provider) ? 0 : 1,
       JSON.stringify(entry.capabilities),
       entry.contextWindow ?? null,
       entry.structuredOutput ? 1 : 0,

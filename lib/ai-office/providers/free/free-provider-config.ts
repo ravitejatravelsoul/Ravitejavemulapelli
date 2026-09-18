@@ -49,11 +49,17 @@ export function listConfiguredFreeProviders(): FreeProviderConfig[] {
 
 /** Groq/Gemini discovery cannot attest billing. The owner must confirm a free account
  * and configure eligible chat-model IDs; an API key alone never authorizes inference. */
-export function isFreeModelAllowed(provider: string, modelId: string): boolean {
-  if (provider === "ollama") return true;
-  if (provider === "openrouter") return modelId.endsWith(":free") || modelId === "openrouter/free";
-  if (provider !== "groq" && provider !== "gemini") return false;
+export type FreeEligibility = "LOCAL_FREE" | "PROVIDER_FREE_ROUTE" | "OWNER_CONFIRMED_FREE_TIER";
+
+export function getFreeEligibility(provider: string, modelId: string): FreeEligibility | null {
+  if (provider === "ollama") return "LOCAL_FREE";
+  if (provider === "openrouter") return modelId.endsWith(":free") || modelId === "openrouter/free" ? "PROVIDER_FREE_ROUTE" : null;
+  if (provider !== "groq" && provider !== "gemini") return null;
   const prefix = provider.toUpperCase();
   return process.env[`AI_OFFICE_${prefix}_FREE_TIER_CONFIRMED`] === "true"
-    && (process.env[`AI_OFFICE_${prefix}_FREE_MODELS`] ?? "").split(",").map(s => s.trim()).includes(modelId);
+    && (process.env[`AI_OFFICE_${prefix}_FREE_MODELS`] ?? "").split(",").map(s => s.trim()).includes(modelId) ? "OWNER_CONFIRMED_FREE_TIER" : null;
+}
+
+export function isFreeModelAllowed(provider: string, modelId: string): boolean {
+  return getFreeEligibility(provider, modelId) !== null;
 }

@@ -1,3 +1,4 @@
+import { isFreeRouting } from "../domain/projects.ts";
 import "server-only";
 import type { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
@@ -137,7 +138,7 @@ export function planProject(db: DatabaseSync, projectId: string): PlanProjectRes
   try {
     for (const node of planNodes) {
       insertTaskRow(db, { id: node.id, projectId, roleId: node.roleId, title: node.title });
-      if (project.freeModelOrchestration === 1) recordEvent(db, {
+      if (isFreeRouting(project)) recordEvent(db, {
         projectId, type: "task.classified", actor: "orchestrator",
         payload: { taskId: node.id, roleId: node.roleId, requiredCapabilities: requiredCapabilitiesForTask(node.roleId, node.title) },
       });

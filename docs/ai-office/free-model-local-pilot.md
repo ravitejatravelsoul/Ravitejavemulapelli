@@ -114,3 +114,12 @@ The small Ollama model remains unqualified in the new registry rather than being
 misrepresented as reliable. Existing local adapters and intent checks still run.
 No guarantee is made that free providers have uninterrupted capacity; exhausted
 eligible models flow through the existing bounded failure/escalation path.
+
+
+## Focused hardening
+
+Projects now store routingMode (STANDARD or FREE_MULTI_MODEL) independently of their standard provider. Migration 016 upgrades previous opt-ins; existing standard projects retain their behavior. Actual selected provider/model remains in runs, routing decisions and request events.
+
+Free eligibility distinguishes LOCAL_FREE, PROVIDER_FREE_ROUTE and OWNER_CONFIRMED_FREE_TIER. Groq/Gemini require current owner confirmation plus the model allowlist; this is an owner attestation, not independently verified billing. OpenRouter uses free-route IDs, catalog zero-price filtering and request max-price constraints. Unknown or paid routes are refused before requests or zero-cost estimates. Request events record the eligibility basis.
+
+Deterministic coverage exercises non-Ollama free projects, legacy migration, owner-confirmation revocation, unknown-price rejection, disabled Claude under CLAUDE_ONLY, and exhausted free fallback. No additional real API calls are needed for this hardening pass.

@@ -13,7 +13,7 @@ import { BenchmarkControls } from "@/components/ai-office/benchmark/benchmark-co
 import { isRemoteExecutionMode } from "@/lib/ai-office/remote/execution-mode";
 import { LocalOnlyNotice } from "@/components/ai-office/shell/local-only-notice";
 import { isClaudeEnabledByConfig } from "@/lib/ai-office/providers/claude/claude-adapter";
-import { listAllFreeProviderConfigs } from "@/lib/ai-office/providers/free/free-provider-config";
+import { listAllFreeProviderConfigs, getFreeEligibility } from "@/lib/ai-office/providers/free/free-provider-config";
 import { listModelRegistryEntries, isProviderEnabled, isCurrentlyRateLimited, listRoutingDecisions } from "@/lib/ai-office/domain/model-registry";
 import {
   ProviderStatusRow,
@@ -69,7 +69,7 @@ export default async function LocalModelsPage() {
     provider: r.provider,
     modelId: r.modelId,
     displayName: r.displayName,
-    freeTier: r.freeTier === 1,
+    freeEligibility: r.freeTier ? getFreeEligibility(r.provider, r.modelId) : null,
     enabled: r.enabled === 1,
     capabilities: JSON.parse(r.capabilities) as string[],
     health: r.health,

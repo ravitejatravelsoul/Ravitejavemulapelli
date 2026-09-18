@@ -1,3 +1,4 @@
+import { isFreeModelAllowed } from "../free/free-provider-config.ts";
 import "server-only";
 import { z } from "zod";
 // Relative + extension-explicit — see lib/ai-office/db/client.ts's comment.
@@ -18,10 +19,8 @@ import { buildPrompt, malformedResult, parseStructuredOutput, structuredOutputSc
  * identical instructions/response-format contract as every other
  * provider.
  *
- * `usage.costUsd` is always 0 — every provider this adapter is
- * constructed for is a free-tier API; its usage rows must never enter
- * the LIVE budget ledger (see domain/budget.ts's FREE_PROVIDERS
- * exclusion, which this phase extends to include these provider names).
+ * Zero cost is conditional on explicit free eligibility checked before estimation
+ * and every request. Groq/Gemini rely on owner-confirmed free-tier billing.
  */
 
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -77,11 +76,17 @@ export class OpenAICompatibleAdapter implements AIProviderAdapter {
     this.extraHeaders = options.extraHeaders ?? {};
   }
 
+  private assertFreeEligibility(): void {
+    if (!isFreeModelAllowed(this.name, this.model)) throw new Error("Route is not explicitly free-eligible; unknown/paid pricing is refused.");
+  }
+
   estimateCost(): CostEstimate {
+    this.assertFreeEligibility();
     return { estimatedInputTokens: 0, estimatedOutputTokens: 0, estimatedCostUsd: 0 };
   }
 
   async runAgentTask(input: AgentTaskInput): Promise<AgentTaskResult> {
+    this.assertFreeEligibility();
     const prompt = buildPrompt(input);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);

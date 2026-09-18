@@ -32,10 +32,8 @@ const newProjectSchema = z.object({
   // never pre-selects HYBRID or CLAUDE_ONLY, so an owner must explicitly
   // opt a project into paid AI.
   aiPolicyMode: z.enum(["LOCAL_ONLY", "HYBRID", "CLAUDE_ONLY"]).default("LOCAL_ONLY"),
-  // Free multi-model orchestration phase — only meaningful when
-  // provider === "ollama"; an explicit owner opt-in, never the default,
-  // so every project created without touching this checkbox keeps the
-  // exact existing LocalModelRouter/OllamaAdapter behavior.
+  routingMode: z.enum(["STANDARD", "FREE_MULTI_MODEL"]).optional(),
+  // Legacy form submissions remain supported.
   freeModelOrchestration: z
     .string()
     .optional()
@@ -83,6 +81,7 @@ export async function createProjectAction(_prevState: CreateProjectState | undef
     title: formData.get("title"),
     ideaText: formData.get("ideaText"),
     provider: formData.get("provider") || undefined,
+    routingMode: formData.get("routingMode") || undefined,
     aiPolicyMode: formData.get("aiPolicyMode") || undefined,
     freeModelOrchestration: formData.get("freeModelOrchestration") || undefined,
   });
@@ -101,7 +100,7 @@ export async function createProjectAction(_prevState: CreateProjectState | undef
     provider: parsed.data.provider,
     aiPolicyMode: parsed.data.aiPolicyMode,
     monthlyBudgetCapUsd: parsed.data.aiPolicyMode === "LOCAL_ONLY" ? null : DEFAULT_LIVE_PROJECT_BUDGET_CAP_USD,
-    freeModelOrchestration: parsed.data.provider === "ollama" && parsed.data.freeModelOrchestration,
+    routingMode: parsed.data.routingMode ?? (parsed.data.freeModelOrchestration ? "FREE_MULTI_MODEL" : "STANDARD"),
   });
 
   try {

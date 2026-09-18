@@ -1,3 +1,4 @@
+import { isFreeRouting } from "../domain/projects.ts";
 import "server-only";
 import type { DatabaseSync } from "node:sqlite";
 import { getAppliedRouting, NO_QUALIFIED_MODEL } from "../domain/model-routing.ts";
@@ -40,7 +41,7 @@ function capabilityHasQualifiedLocalModel(db: DatabaseSync, capability: ModelCap
 
 export interface RouteProviderInput {
   role: string;
-  project: { aiPolicyMode: AiPolicyMode; freeModelOrchestration?: number };
+  project: { aiPolicyMode: AiPolicyMode; freeModelOrchestration?: number; routingMode?: import("../domain/projects.ts").RoutingMode };
 }
 
 /**
@@ -53,7 +54,7 @@ export interface RouteProviderInput {
  */
 export function routeProvider(db: DatabaseSync, input: RouteProviderInput): ProviderRoutingDecision {
   const capability = capabilityForRole(input.role);
-  if (input.project.freeModelOrchestration === 1) {
+  if (isFreeRouting(input.project)) {
     return { provider: "LOCAL", capability, reason: "Free-model orchestration excludes all paid providers." };
   }
 

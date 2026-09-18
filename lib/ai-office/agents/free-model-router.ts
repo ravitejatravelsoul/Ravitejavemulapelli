@@ -1,7 +1,7 @@
 import "server-only";
 import type { DatabaseSync } from "node:sqlite";
 import { listModelRegistryEntries, isProviderEnabled, type ModelRegistryRow } from "../domain/model-registry.ts";
-import { isFreeModelAllowed, getFreeProviderConfig } from "../providers/free/free-provider-config.ts";
+import { isFreeModelAllowed, getFreeEligibility, getFreeProviderConfig } from "../providers/free/free-provider-config.ts";
 import type { TaskCapability } from "./free-model-capabilities.ts";
 
 /** Deterministic extension of ProviderRouter/LocalModelRouter used by opted-in
@@ -70,7 +70,7 @@ function scoreModel(row: ModelRegistryRow, input: SelectFreeModelInput, now: num
   if (row.rateLimitedUntil && row.rateLimitedUntil > now) return null;
   if (row.contextWindow && input.estimatedInputTokens && input.estimatedInputTokens + (input.estimatedOutputTokens ?? 0) > row.contextWindow) return null;
 
-  const reasons: string[] = [`covers ${input.capability}`];
+  const reasons: string[] = [`covers ${input.capability}`, `eligibility: ${getFreeEligibility(row.provider, row.modelId)}`];
   let score = 40; // capability-match baseline — every remaining candidate already cleared this gate
 
   if (row.qualified) {

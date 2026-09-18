@@ -1,3 +1,5 @@
+process.env.AI_OFFICE_GROQ_FREE_TIER_CONFIRMED = "true";
+process.env.AI_OFFICE_GROQ_FREE_MODELS = "m1,llama-x";
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { OpenAICompatibleAdapter, OpenAICompatibleRateLimitError, OpenAICompatibleTimeoutError, OpenAICompatibleConnectionError } from "../openai-compatible/openai-compatible-adapter.ts";
