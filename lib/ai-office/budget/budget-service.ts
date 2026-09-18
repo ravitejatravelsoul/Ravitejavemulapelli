@@ -14,6 +14,8 @@ import {
   sumSimulatedCostForOffice,
   countLocalRunsForOffice,
   sumLocalCostForOffice,
+  countFreeApiRunsForOffice,
+  sumFreeApiCostForOffice,
   createBudgetReservation,
   getBudgetReservation,
   reconcileBudgetReservation,
@@ -464,6 +466,9 @@ export interface BudgetSnapshot {
   /** Ollama runs — always $0, tracked separately from both simulated and LIVE so the UI can show a distinct "LOCAL" figure rather than folding it into either. */
   localRuns: number;
   localCostUsd: number;
+  /** Free multi-model orchestration phase — Groq/Gemini/OpenRouter combined; always $0, tracked separately from Ollama since it's free-over-the-network rather than free-and-fully-local. */
+  freeApiRuns: number;
+  freeApiCostUsd: number;
   status: "SAFE" | "WARNING" | "AT_CAP";
 }
 
@@ -493,6 +498,8 @@ export function getBudgetSnapshot(db: DatabaseSync): BudgetSnapshot {
     simulatedCostUsd: sumSimulatedCostForOffice(db),
     localRuns: countLocalRunsForOffice(db),
     localCostUsd: sumLocalCostForOffice(db),
+    freeApiRuns: countFreeApiRunsForOffice(db),
+    freeApiCostUsd: sumFreeApiCostForOffice(db),
     status,
   };
 }

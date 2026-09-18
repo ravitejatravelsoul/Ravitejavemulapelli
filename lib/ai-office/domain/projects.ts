@@ -33,17 +33,28 @@ export type ProjectProvider = "simulated" | "ollama";
  */
 export type AiPolicyMode = "LOCAL_ONLY" | "HYBRID" | "CLAUDE_ONLY";
 
+export type RoutingMode = "STANDARD" | "FREE_MULTI_MODEL";
+
+/** Legacy inputs remain readable; an explicit routing mode takes precedence. */
+export function isFreeRouting(project: { routingMode?: RoutingMode; freeModelOrchestration?: number }): boolean {
+  return project.routingMode ? project.routingMode === "FREE_MULTI_MODEL" : project.freeModelOrchestration === 1;
+}
+
 export interface ProjectRow {
   id: string;
   title: string;
   status: ProjectStatus;
   aiMode: AiMode;
+  /** Default adapter for STANDARD routing; never the selected provider of a free run. */
   provider: ProjectProvider;
+  routingMode: RoutingMode;
   aiPolicyMode: AiPolicyMode;
   monthlyBudgetCapUsd: number | null;
   ownerId: string;
   createdAt: number;
   updatedAt: number;
+  /** @deprecated Compatibility mirror; use routingMode for execution policy. */
+  freeModelOrchestration: 0 | 1;
 }
 
 export interface ProjectIdeaRow {
@@ -70,6 +81,9 @@ export function createProjectWithIdea(
     provider?: ProjectProvider;
     aiPolicyMode?: AiPolicyMode;
     monthlyBudgetCapUsd?: number | null;
+    /** Free multi-model orchestration phase — see `ProjectRow.freeModelOrchestration`'s docblock. Defaults to false (off) for every existing/new caller that doesn't explicitly opt in. */
+    freeModelOrchestration?: boolean;
+    routingMode?: RoutingMode;
   },
 ): { project: ProjectRow; idea: ProjectIdeaRow } {
   const now = Date.now();
@@ -79,13 +93,15 @@ export function createProjectWithIdea(
   const provider = input.provider ?? "simulated";
   const aiPolicyMode = input.aiPolicyMode ?? "LOCAL_ONLY";
   const monthlyBudgetCapUsd = input.monthlyBudgetCapUsd ?? null;
+  const routingMode = input.routingMode ?? (input.freeModelOrchestration ? "FREE_MULTI_MODEL" : "STANDARD");
+  const freeModelOrchestration = routingMode === "FREE_MULTI_MODEL" ? 1 : 0;
 
   db.exec("BEGIN");
   try {
     db.prepare(
-      `INSERT INTO projects (id, title, status, aiMode, provider, aiPolicyMode, monthlyBudgetCapUsd, ownerId, createdAt, updatedAt)
-       VALUES (?, ?, 'DRAFT', ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(projectId, input.title, aiMode, provider, aiPolicyMode, monthlyBudgetCapUsd, input.ownerId, now, now);
+      `INSERT INTO projects (id, title, status, aiMode, provider, aiPolicyMode, monthlyBudgetCapUsd, ownerId, createdAt, updatedAt, freeModelOrchestration, routingMode)
+       VALUES (?, ?, 'DRAFT', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(projectId, input.title, aiMode, provider, aiPolicyMode, monthlyBudgetCapUsd, input.ownerId, now, now, freeModelOrchestration, routingMode);
 
     db.prepare(
       `INSERT INTO project_ideas (id, projectId, rawText, submittedAt, createdAt, updatedAt)

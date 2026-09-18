@@ -12,6 +12,18 @@ import { Badge } from "@/components/ui/badge";
 import { BenchmarkControls } from "@/components/ai-office/benchmark/benchmark-controls";
 import { isRemoteExecutionMode } from "@/lib/ai-office/remote/execution-mode";
 import { LocalOnlyNotice } from "@/components/ai-office/shell/local-only-notice";
+import { isClaudeEnabledByConfig } from "@/lib/ai-office/providers/claude/claude-adapter";
+import { listAllFreeProviderConfigs, getFreeEligibility } from "@/lib/ai-office/providers/free/free-provider-config";
+import { listModelRegistryEntries, isProviderEnabled, isCurrentlyRateLimited, listRoutingDecisions } from "@/lib/ai-office/domain/model-registry";
+import {
+  ProviderStatusRow,
+  RefreshCatalogButton,
+  ModelRegistryTable,
+  RoutingHistoryTable,
+  type ProviderStatusView,
+  type ModelRegistryRowView,
+  type RoutingDecisionView,
+} from "@/components/ai-office/model-control-center/model-control-center";
 
 export const metadata: Metadata = { title: "AI Models & Routing" };
 
@@ -41,6 +53,51 @@ export default async function LocalModelsPage() {
   const appliedModelByCapability = new Map(applied.map((r) => [r.capability, r.model]));
   const claudeConfigured = isClaudeConfigured();
   const claudeModel = getConfiguredClaudeModel();
+  const claudeEnabled = isClaudeEnabledByConfig();
+
+  // Free multi-model orchestration phase — Model Control Center data.
+  const freeProviderConfigs = listAllFreeProviderConfigs();
+  const providerStatuses: ProviderStatusView[] = freeProviderConfigs.map((p) => ({
+    provider: p.name,
+    configured: p.configured,
+    enabled: isProviderEnabled(db, p.name),
+  }));
+
+  providerStatuses.push({ provider: "ollama", configured: true, enabled: isProviderEnabled(db, "ollama") });
+
+  const registryRows: ModelRegistryRowView[] = listModelRegistryEntries(db).map((r) => ({
+    provider: r.provider,
+    modelId: r.modelId,
+    displayName: r.displayName,
+    freeEligibility: r.freeTier ? getFreeEligibility(r.provider, r.modelId) : null,
+    enabled: r.enabled === 1,
+    capabilities: JSON.parse(r.capabilities) as string[],
+    health: r.health,
+    rateLimited: isCurrentlyRateLimited(r.rateLimitedUntil),
+    benchmarkScore: r.benchmarkScore,
+    qualified: r.qualified === 1,
+    avgLatencyMs: r.avgLatencyMs,
+    tasksCompleted: r.tasksCompleted,
+    tasksFailed: r.tasksFailed,
+    lastUsedAt: r.lastUsedAt,
+  }));
+
+  const routingDecisions: RoutingDecisionView[] = listRoutingDecisions(db, { limit: 30 }).map((d) => ({
+    id: d.id,
+    roleId: d.roleId,
+    taskId: d.taskId, projectId: d.projectId,
+    requiredCapability: d.requiredCapability,
+    selectedProvider: d.selectedProvider,
+    selectedModel: d.selectedModel,
+    selectionReason: d.selectionReason,
+    fallbacksUsed: d.fallbacksUsed ? (JSON.parse(d.fallbacksUsed) as { provider: string; modelId: string }[]) : null,
+    attempts: d.attempts,
+    result: d.result,
+    inputTokens: d.inputTokens,
+    outputTokens: d.outputTokens,
+    costUsd: d.costUsd,
+    createdAt: d.createdAt,
+  }));
 
   return (
     <div className="flex flex-col gap-6">
@@ -71,19 +128,52 @@ export default async function LocalModelsPage() {
           <Badge variant={claudeConfigured ? "secondary" : "destructive"} className="font-mono text-[0.65rem] uppercase">
             {claudeConfigured ? "Configured" : "Not configured"}
           </Badge>
+          <Badge variant={claudeEnabled ? "outline" : "destructive"} className="font-mono text-[0.65rem] uppercase">
+            Claude: {claudeEnabled ? "Enabled" : "Disabled"}
+          </Badge>
           <span className="font-mono text-xs text-muted-foreground">{claudeModel}</span>
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
           No API key is ever shown here, and viewing this page never makes a billable request — this reflects only whether a credential and
           pricing configuration are present on the server.
+          {!claudeEnabled && " AI_OFFICE_CLAUDE_ENABLED=false is set — Claude is never selected or called regardless of any project's AI policy."}
         </p>
+      </GlassCard>
+
+      <GlassCard>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="text-sm font-semibold tracking-tight">Free Multi-Model Providers</h2>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Dynamically-discovered free models (Groq/Gemini/OpenRouter/Ollama) — the Orchestrator picks the best available one per task by
+              capability, health, and benchmark evidence. Missing a provider&apos;s API key just means it stays &ldquo;Not configured&rdquo;; nothing
+              crashes.
+            </p>
+          </div>
+          <RefreshCatalogButton />
+        </div>
+        <div className="mt-4 flex flex-col gap-2">
+          {providerStatuses.map((status) => (
+            <ProviderStatusRow key={status.provider} status={status} />
+          ))}
+        </div>
+        <ModelRegistryTable rows={registryRows} />
+      </GlassCard>
+
+      <GlassCard>
+        <h2 className="text-sm font-semibold tracking-tight">Free-Model Routing History</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Every real routing decision a `freeModelOrchestration` project has made — agent, required capability, selected model, why, and any
+          fallback used.
+        </p>
+        <RoutingHistoryTable decisions={routingDecisions} />
       </GlassCard>
 
       <GlassCard>
         <h2 className="text-sm font-semibold tracking-tight">Routing</h2>
         <p className="mt-1 text-xs text-muted-foreground">
           What a HYBRID-policy project would route each capability to, based on real benchmark evidence — LOCAL_ONLY projects always stay
-          local regardless; CLAUDE_ONLY projects always route to Claude regardless.
+          local regardless; CLAUDE_ONLY projects route to Claude only when it is enabled; free-model projects exclude paid providers.
         </p>
         <ul className="mt-3 flex flex-col gap-1.5 text-xs">
           {MODEL_CAPABILITIES.map((capability) => {

@@ -28,6 +28,7 @@ export function NewProjectForm({ remoteMode = false }: { remoteMode?: boolean })
   // instead — Simulation remains one click away for anyone who really
   // does just want to exercise the Office's own plumbing.
   const [provider, setProvider] = useState<Provider>("ollama");
+  const [freeModelOrchestration, setFreeModelOrchestration] = useState(false);
   const [health, setHealth] = useState<OllamaHealth | null>(null);
   const [checking, startChecking] = useTransition();
   const [aiPolicyMode, setAiPolicyMode] = useState<AiPolicyMode>("LOCAL_ONLY");
@@ -99,7 +100,7 @@ export function NewProjectForm({ remoteMode = false }: { remoteMode?: boolean })
         ) : (
           <>
             <div className="flex flex-col gap-1.5">
-              <Label>AI Provider</Label>
+              <Label>Standard routing provider</Label>
               <div className="flex gap-2">
                 <button
                   type="button"
@@ -126,7 +127,7 @@ export function NewProjectForm({ remoteMode = false }: { remoteMode?: boolean })
               </div>
               <input type="hidden" name="provider" value={provider} />
 
-              {provider === "ollama" && (
+              {provider === "ollama" && !freeModelOrchestration && (
                 <p className="mt-1 font-mono text-[0.7rem] tracking-wide uppercase">
                   {checking && <span className="text-muted-foreground">Checking Ollama…</span>}
                   {!checking && health && health.online && (
@@ -139,14 +140,32 @@ export function NewProjectForm({ remoteMode = false }: { remoteMode?: boolean })
                   {!checking && health && !health.online && <span className="text-destructive">Ollama offline — start it before running this project</span>}
                 </p>
               )}
+
+              <label className="mt-2 flex items-start gap-2 rounded-lg border border-border/60 px-3 py-2 text-xs">
+                  <input
+                    type="checkbox"
+                    name="routingMode"
+                    value="FREE_MULTI_MODEL"
+                    checked={freeModelOrchestration}
+                    onChange={(e) => setFreeModelOrchestration(e.target.checked)}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    <span className="font-medium">Free Multi-Model Orchestration</span>
+                    <p className="mt-0.5 text-muted-foreground">
+                      Route each task to the best currently-available FREE model (Groq/Gemini/OpenRouter/Ollama), chosen per task by capability, health,
+                      and benchmark evidence — never one fixed model per agent. Requires an eligible local or free route; Groq/Gemini eligibility relies on your confirmed free account.
+                    </p>
+                  </span>
+              </label>
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <Label>AI Policy</Label>
+              <Label>Standard routing AI policy</Label>
               <div className="flex flex-col gap-2 sm:flex-row">
                 {(
                   [
-                    { value: "LOCAL_ONLY" as const, label: "Local Only", desc: "Every role runs on local/simulated models. Never spends money." },
+                    { value: "LOCAL_ONLY" as const, label: "Local Only", desc: "Standard mode uses local/simulated models. Free multi-model mode excludes paid routes." },
                     { value: "HYBRID" as const, label: "Hybrid", desc: "Local where qualified; Claude only for capabilities with no qualified local model, after your approval." },
                     { value: "CLAUDE_ONLY" as const, label: "Claude Only", desc: "Every role routes to Claude. Requires your approval and real spend." },
                   ]
@@ -155,6 +174,7 @@ export function NewProjectForm({ remoteMode = false }: { remoteMode?: boolean })
                     key={opt.value}
                     type="button"
                     onClick={() => selectAiPolicyMode(opt.value)}
+                    disabled={freeModelOrchestration}
                     className={cn(
                       "flex-1 rounded-lg border px-3 py-2 text-left text-sm transition-colors",
                       aiPolicyMode === opt.value ? "border-primary bg-primary/5 font-medium" : "border-border text-muted-foreground hover:border-primary/40",

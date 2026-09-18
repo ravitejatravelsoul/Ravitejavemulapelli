@@ -60,6 +60,20 @@ export function BudgetPanel({ budget }: { budget: BudgetView }) {
         </dl>
       </div>
 
+      <div className="mt-3 rounded-lg border border-accent-2/30 bg-accent-2/5 p-3">
+        <p className="text-[0.65rem] font-semibold tracking-widest text-accent-2 uppercase">Free APIs · Groq/Gemini/OpenRouter (free)</p>
+        <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+          <div>
+            <dt className="text-muted-foreground">Free API Runs</dt>
+            <dd className="font-medium">{budget.freeApiRuns}</dd>
+          </div>
+          <div>
+            <dt className="text-muted-foreground">Free API Cost</dt>
+            <dd className="font-medium">${budget.freeApiCostUsd.toFixed(2)}</dd>
+          </div>
+        </dl>
+      </div>
+
       <div className="mt-3 rounded-lg border border-dashed border-border p-3">
         <p className="text-[0.65rem] font-semibold tracking-widest text-muted-foreground uppercase">Simulated · not real spend</p>
         <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-2 text-xs">

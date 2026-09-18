@@ -390,3 +390,20 @@ export function updateAgentRunStatus(
   );
   return getAgentRun(db, id) as unknown as AgentRunRow;
 }
+
+/**
+ * Free multi-model orchestration phase — an AgentRun is created with a
+ * best-guess provider/model (the router's highest-scored candidate)
+ * before execution even starts, matching the existing precedent for
+ * every other provider. If cross-model fallback (Phase 7) later moves
+ * to a different candidate, this reflects the model that ACTUALLY
+ * produced the final result, so `agent_runs.provider`/`.model` — and
+ * everything downstream that reads them (recordAiUsage's provider
+ * attribution, the Living Office UI) — stay truthful. Never used by any
+ * other provider path; Claude/Ollama/Simulated commit to one model
+ * before execution and never change it mid-run.
+ */
+export function updateAgentRunProviderModel(db: DatabaseSync, id: string, input: { provider: string; model: string | null }): AgentRunRow {
+  db.prepare("UPDATE agent_runs SET provider = ?, model = ?, updatedAt = ? WHERE id = ?").run(input.provider, input.model, Date.now(), id);
+  return getAgentRun(db, id) as unknown as AgentRunRow;
+}
