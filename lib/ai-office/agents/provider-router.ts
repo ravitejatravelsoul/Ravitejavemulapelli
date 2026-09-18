@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { getAppliedRouting, NO_QUALIFIED_MODEL } from "../domain/model-routing.ts";
 import type { AiPolicyMode } from "../domain/projects.ts";
 import { capabilityForRole, type ModelCapability } from "./model-router.ts";
+import { isClaudeEnabledByConfig } from "../providers/claude/claude-adapter.ts";
 
 /**
  * Controlled Claude LIVE pilot — the routing layer ABOVE
@@ -39,7 +40,7 @@ function capabilityHasQualifiedLocalModel(db: DatabaseSync, capability: ModelCap
 
 export interface RouteProviderInput {
   role: string;
-  project: { aiPolicyMode: AiPolicyMode };
+  project: { aiPolicyMode: AiPolicyMode; freeModelOrchestration?: number };
 }
 
 /**
@@ -52,6 +53,23 @@ export interface RouteProviderInput {
  */
 export function routeProvider(db: DatabaseSync, input: RouteProviderInput): ProviderRoutingDecision {
   const capability = capabilityForRole(input.role);
+  if (input.project.freeModelOrchestration === 1) {
+    return { provider: "LOCAL", capability, reason: "Free-model orchestration excludes all paid providers." };
+  }
+
+  // Free multi-model orchestration phase — checked FIRST, before any
+  // policy/evidence logic below, so a disabled office never even
+  // evaluates whether Claude would otherwise have been chosen (not just
+  // "prefers not to call it" — CLAUDE is structurally unreachable from
+  // this function while disabled). Claude must never silently become a
+  // fallback while disabled, per the brief.
+  if (!isClaudeEnabledByConfig()) {
+    return {
+      provider: "LOCAL",
+      capability,
+      reason: "Claude is disabled by configuration (AI_OFFICE_CLAUDE_ENABLED=false) — routing to LOCAL regardless of AI policy.",
+    };
+  }
 
   if (input.project.aiPolicyMode === "LOCAL_ONLY") {
     return { provider: "LOCAL", capability, reason: "Project AI policy is LOCAL_ONLY — Claude is never considered." };

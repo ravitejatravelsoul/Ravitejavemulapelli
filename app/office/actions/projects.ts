@@ -32,6 +32,14 @@ const newProjectSchema = z.object({
   // never pre-selects HYBRID or CLAUDE_ONLY, so an owner must explicitly
   // opt a project into paid AI.
   aiPolicyMode: z.enum(["LOCAL_ONLY", "HYBRID", "CLAUDE_ONLY"]).default("LOCAL_ONLY"),
+  // Free multi-model orchestration phase — only meaningful when
+  // provider === "ollama"; an explicit owner opt-in, never the default,
+  // so every project created without touching this checkbox keeps the
+  // exact existing LocalModelRouter/OllamaAdapter behavior.
+  freeModelOrchestration: z
+    .string()
+    .optional()
+    .transform((v) => v === "true"),
 });
 
 /** Fixed at $3.00 per Part 7 — every HYBRID/CLAUDE_ONLY project gets the same conservative default LIVE cap; a LOCAL_ONLY project gets no cap at all (it can never spend). Not owner-configurable from this form yet — raising it is a deliberate future action, never a silent default. */
@@ -76,6 +84,7 @@ export async function createProjectAction(_prevState: CreateProjectState | undef
     ideaText: formData.get("ideaText"),
     provider: formData.get("provider") || undefined,
     aiPolicyMode: formData.get("aiPolicyMode") || undefined,
+    freeModelOrchestration: formData.get("freeModelOrchestration") || undefined,
   });
   if (!parsed.success) {
     return { error: parsed.error.issues[0]?.message ?? "Enter a project name and an idea." };
@@ -92,6 +101,7 @@ export async function createProjectAction(_prevState: CreateProjectState | undef
     provider: parsed.data.provider,
     aiPolicyMode: parsed.data.aiPolicyMode,
     monthlyBudgetCapUsd: parsed.data.aiPolicyMode === "LOCAL_ONLY" ? null : DEFAULT_LIVE_PROJECT_BUDGET_CAP_USD,
+    freeModelOrchestration: parsed.data.provider === "ollama" && parsed.data.freeModelOrchestration,
   });
 
   try {

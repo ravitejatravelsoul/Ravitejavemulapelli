@@ -12,12 +12,20 @@ import { randomUUID } from "node:crypto";
 
 /**
  * Providers that never enter the LIVE financial ledger — `'simulated'`
- * (Phase 4) and `'ollama'` (local, free inference). Every LIVE-sum query
- * below excludes both; adding a third free provider later means changing
- * this one list, not re-auditing every query.
+ * (Phase 4), `'ollama'` (local, free inference), and the free
+ * multi-model orchestration phase's free external APIs (`'groq'`,
+ * `'gemini'`, `'openrouter'` — every one of their adapters always
+ * reports `usage.costUsd: 0`, enforced at the adapter level, never
+ * trusted from caller input alone). Every LIVE-sum query below excludes
+ * all of them; adding another free provider later means changing this
+ * one list, not re-auditing every query.
  */
-const FREE_PROVIDERS = ["simulated", "ollama"] as const;
+const FREE_PROVIDERS = ["simulated", "ollama", "groq", "gemini", "openrouter"] as const;
 const FREE_PROVIDERS_SQL = FREE_PROVIDERS.map((p) => `'${p}'`).join(", ");
+
+/** The subset of `FREE_PROVIDERS` that are free EXTERNAL APIs (network calls to a third-party free tier) rather than local inference — tracked as a distinct dashboard bucket from `localRuns`/`localCostUsd` (Ollama) since "free but over the network" is a meaningfully different thing to show an owner than "free and fully local." */
+const FREE_EXTERNAL_API_PROVIDERS = ["groq", "gemini", "openrouter"] as const;
+const FREE_EXTERNAL_API_PROVIDERS_SQL = FREE_EXTERNAL_API_PROVIDERS.map((p) => `'${p}'`).join(", ");
 
 // ---- money handling ----------------------------------------------------
 
@@ -293,6 +301,18 @@ export function sumSimulatedCostForOffice(db: DatabaseSync): number {
 /** Same honesty rationale as `sumSimulatedCostForOffice` — OllamaAdapter is designed to always report $0, but this reads the real recorded total rather than assuming it. */
 export function sumLocalCostForOffice(db: DatabaseSync): number {
   const row = db.prepare("SELECT COALESCE(SUM(costUsd), 0) as total FROM ai_usage WHERE provider = 'ollama'").get() as { total: number };
+  return row.total;
+}
+
+/** Free multi-model orchestration phase — every free EXTERNAL API run (Groq/Gemini/OpenRouter combined), tracked as a distinct bucket from `countLocalRunsForOffice` (Ollama) — see `FREE_EXTERNAL_API_PROVIDERS`'s docblock above for why. */
+export function countFreeApiRunsForOffice(db: DatabaseSync): number {
+  const row = db.prepare(`SELECT COUNT(*) as count FROM ai_usage WHERE provider IN (${FREE_EXTERNAL_API_PROVIDERS_SQL})`).get() as { count: number };
+  return row.count;
+}
+
+/** Same honesty rationale as `sumSimulatedCostForOffice`/`sumLocalCostForOffice` — every free-provider adapter is designed to always report $0, but this reads the real recorded total rather than assuming it. */
+export function sumFreeApiCostForOffice(db: DatabaseSync): number {
+  const row = db.prepare(`SELECT COALESCE(SUM(costUsd), 0) as total FROM ai_usage WHERE provider IN (${FREE_EXTERNAL_API_PROVIDERS_SQL})`).get() as { total: number };
   return row.total;
 }
 

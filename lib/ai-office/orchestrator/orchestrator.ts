@@ -5,6 +5,7 @@ import { getProject, updateProjectStatus, type ProjectRow } from "../domain/proj
 import { getProjectIdea } from "../domain/projects.ts";
 import { insertTaskRow, insertTaskDependencyRow, getTask, type TaskRow } from "../domain/tasks.ts";
 import { recordDecision, createApproval } from "../domain/project-outputs.ts";
+import { requiredCapabilitiesForTask } from "../agents/free-model-capabilities.ts";
 import { recordEvent } from "../domain/events.ts";
 import { refreshProjectMemory } from "../domain/project-memory.ts";
 import { selectRoles, requiresOwnerApproval, requiresDeploymentApproval } from "./role-selection.ts";
@@ -136,6 +137,10 @@ export function planProject(db: DatabaseSync, projectId: string): PlanProjectRes
   try {
     for (const node of planNodes) {
       insertTaskRow(db, { id: node.id, projectId, roleId: node.roleId, title: node.title });
+      if (project.freeModelOrchestration === 1) recordEvent(db, {
+        projectId, type: "task.classified", actor: "orchestrator",
+        payload: { taskId: node.id, roleId: node.roleId, requiredCapabilities: requiredCapabilitiesForTask(node.roleId, node.title) },
+      });
     }
     for (const node of planNodes) {
       for (const dependsOnId of node.dependsOn) {

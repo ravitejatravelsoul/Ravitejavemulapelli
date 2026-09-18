@@ -24,7 +24,7 @@ describe("clean DB creation + migrations from zero", () => {
     const db = openDatabase(join(dir, "fresh.db"));
 
     const result = runMigrations(db);
-    assert.equal(result.version, 14);
+    assert.equal(result.version, 15);
     assert.deepEqual(result.applied, [
       "001-init.sql",
       "002-budget-and-approval-scope.sql",
@@ -40,8 +40,9 @@ describe("clean DB creation + migrations from zero", () => {
       "012-add-office-engineer.sql",
       "013-add-semantic-repair.sql",
       "014-add-superseded-failures.sql",
+      "015-add-free-model-orchestration.sql",
     ]);
-    assert.equal(getSchemaVersion(db), 14);
+    assert.equal(getSchemaVersion(db), 15);
 
     const tableCount = db
       .prepare("SELECT COUNT(*) as count FROM sqlite_master WHERE type = 'table' AND name != 'sqlite_sequence'")
@@ -58,11 +59,11 @@ describe("migrations are idempotent / safe to run repeatedly", () => {
     const t = createTestDb({ seed: false });
     const first = runMigrations(t.db); // no-op, createTestDb already migrated
     assert.deepEqual(first.applied, []);
-    assert.equal(first.version, 14);
+    assert.equal(first.version, 15);
 
     const second = runMigrations(t.db);
     assert.deepEqual(second.applied, []);
-    assert.equal(second.version, 14);
+    assert.equal(second.version, 15);
     t.close();
   });
 });
@@ -91,6 +92,7 @@ describe("schema version is inspectable", () => {
       { version: 12, name: "012-add-office-engineer.sql" },
       { version: 13, name: "013-add-semantic-repair.sql" },
       { version: 14, name: "014-add-superseded-failures.sql" },
+      { version: 15, name: "015-add-free-model-orchestration.sql" },
     ]);
     t.close();
   });
@@ -141,8 +143,9 @@ describe("migrations 002+003+004+005 apply cleanly on top of an existing v1 data
       "012-add-office-engineer.sql",
       "013-add-semantic-repair.sql",
       "014-add-superseded-failures.sql",
+      "015-add-free-model-orchestration.sql",
     ]);
-    assert.equal(getSchemaVersion(db), 14);
+    assert.equal(getSchemaVersion(db), 15);
 
     // The pre-existing rows survive, unmodified except for the new
     // columns now existing (and being NULL, since this data predates
@@ -250,6 +253,29 @@ describe("migrations 002+003+004+005 apply cleanly on top of an existing v1 data
     const failure = db.prepare("SELECT * FROM failures WHERE id = 'f1'").get() as { supersededAt: number; supersededReason: string };
     assert.equal(failure.supersededAt, now);
     assert.equal(failure.supersededReason, "platform defect fixed");
+
+    // Migration 015's new column/tables are fully usable afterward too.
+    const projectColsAfter015 = (db.prepare("PRAGMA table_info(projects)").all() as Array<{ name: string }>).map((c) => c.name);
+    assert.ok(projectColsAfter015.includes("freeModelOrchestration"));
+    const preExistingProjectFreeOrch = db.prepare("SELECT freeModelOrchestration FROM projects WHERE id = 'p1'").get() as {
+      freeModelOrchestration: number;
+    };
+    assert.equal(preExistingProjectFreeOrch.freeModelOrchestration, 0, "pre-existing rows get backfilled with the NOT NULL DEFAULT 0");
+
+    db.prepare(
+      `INSERT INTO model_registry (id, provider, modelId, displayName, freeTier, enabled, capabilities, structuredOutput, health, recentFailureCount, tasksCompleted, tasksFailed, qualified, createdAt, updatedAt)
+       VALUES ('groq:m1', 'groq', 'm1', 'm1', 1, 1, '["GENERAL"]', 1, 'UNKNOWN', 0, 0, 0, 0, ?, ?)`,
+    ).run(now, now);
+    assert.ok(db.prepare("SELECT * FROM model_registry WHERE id = 'groq:m1'").get());
+
+    db.prepare("INSERT INTO provider_configs (provider, enabled, updatedAt) VALUES ('groq', 1, ?)").run(now);
+    assert.ok(db.prepare("SELECT * FROM provider_configs WHERE provider = 'groq'").get());
+
+    db.prepare(
+      `INSERT INTO model_routing_decisions (id, projectId, taskId, roleId, requiredCapability, candidateModels, selectedProvider, selectedModel, selectionReason, attempts, result, costUsd, createdAt)
+       VALUES ('rd1', 'p1', 't1', 'frontend-developer', 'CODING', '[]', 'groq', 'm1', 'best score', 1, 'SUCCEEDED', 0, ?)`,
+    ).run(now);
+    assert.ok(db.prepare("SELECT * FROM model_routing_decisions WHERE id = 'rd1'").get());
 
     db.close();
     rmSync(dir, { recursive: true, force: true });
@@ -402,7 +428,7 @@ describe("DB survives reopen/reconnect", () => {
     t.db.close();
 
     const reopened = reopenTestDb(dir);
-    assert.equal(getSchemaVersion(reopened), 14);
+    assert.equal(getSchemaVersion(reopened), 15);
     const roles = reopened.prepare("SELECT COUNT(*) as count FROM agent_roles").get() as { count: number };
     assert.equal(roles.count, AGENT_ROLE_CATALOG.length);
     reopened.close();

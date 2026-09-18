@@ -21,7 +21,12 @@ export type BenchmarkScenarioId =
   | "frontend-build"
   | "frontend-bug-fix"
   | "code-review"
-  | "qa-interpretation";
+  | "qa-interpretation"
+  | "reasoning-order"
+  | "instruction-json"
+  | "test-generation"
+  | "security-review"
+  | "research-evidence";
 
 export type BenchmarkStatus = "PASS" | "PARTIAL" | "FAIL";
 
@@ -344,8 +349,36 @@ export const BENCHMARK_SCENARIOS: readonly BenchmarkScenario[] = [
   qaInterpretation,
 ];
 
+
+/** Additional free-provider probes reuse the same adapter contract and result store. */
+export const FREE_MODEL_EXTRA_SCENARIOS: readonly BenchmarkScenario[] = [
+  { id: "research-evidence", roleId: "research-agent", title: "Research from supplied evidence",
+    buildInput: () => ({ role: "research-agent", instructions: 'Source A: Cedar supports offline mode. Source B: Birch requires network. Recommend the offline option in a research-notes artifact, cite Source A, and explicitly state that pricing is unknown. Do not invent outside evidence. Use the output contract.', task: baseContext({ roleId: "research-agent", taskTitle: "Compare supplied research" }) }),
+    evaluate: r => {
+      const text = [r.output.summary, ...r.output.artifacts.map(a => a.content)].join("\n");
+      return structuralFailureEvaluation(r) ?? (/Cedar/.test(text) && /Source A/.test(text) && /pricing[^.]*unknown|unknown[^.]*pricing/i.test(text)
+        ? { status: "PASS", score: 90, notes: "Supported recommendation, citation and explicit evidence limit." } : { status: "FAIL", score: 10, notes: "Missing supported recommendation or evidence limit." });
+    } },
+  { id: "reasoning-order", roleId: "solution-architect", title: "Reasoning: dependency order",
+    buildInput: () => ({ role: "solution-architect", instructions: "Use the output contract. Begin summary with exactly A -> B -> C if that is the correct topological order, otherwise state the correct order: B requires A, C requires B. No other dependencies. Explain why.", task: baseContext({ roleId: "solution-architect", taskTitle: "Order dependencies" }) }),
+    evaluate: r => structuralFailureEvaluation(r) ?? (/A[\s\S]*B[\s\S]*C/.test(r.output.summary)
+      ? { status: "PASS", score: 90, notes: "Correct dependency order." } : { status: "FAIL", score: 10, notes: "Incorrect dependency order." }) },
+  { id: "instruction-json", roleId: "product-owner", title: "Structured JSON and instruction following",
+    buildInput: () => ({ role: "product-owner", instructions: 'Use the output contract. Set summary to exactly "office-probe-731". Return empty arrays for all output collections. No file operations.', task: baseContext({ roleId: "product-owner", taskTitle: "Follow exact instruction" }) }),
+    evaluate: r => structuralFailureEvaluation(r) ?? (r.output.summary === "office-probe-731" && !r.output.fileOperations.length && !r.output.artifacts.length
+      ? { status: "PASS", score: 90, notes: "Valid contract and exact instruction." } : { status: "FAIL", score: 10, notes: "Did not follow exact output instruction." }) },
+  { id: "test-generation", roleId: "qa-agent", title: "Generate meaningful boundary tests",
+    buildInput: () => ({ role: "qa-agent", instructions: 'Use the output contract. Write JavaScript assert.equal tests in a test-report artifact for clamp(x)=Math.max(0,Math.min(10,x)). Cover -1, 5, and 11, with expected values.', task: baseContext({ roleId: "qa-agent", taskTitle: "Generate boundary tests" }) }),
+    evaluate: r => structuralFailureEvaluation(r) ?? ([/clamp\(-1\)\s*,\s*0/,/clamp\(5\)\s*,\s*5/,/clamp\(11\)\s*,\s*10/].every(p => p.test([r.output.summary, ...r.output.artifacts.map(a => a.content)].join("\n")))
+      ? { status: "PASS", score: 90, notes: "Generated correct boundary and normal-case assertions." } : { status: "FAIL", score: 10, notes: "Missing or incorrect boundary assertions." }) },
+  { id: "security-review", roleId: "security-reviewer", title: "Identify unsafe DOM sink",
+    buildInput: () => ({ role: "security-reviewer", instructions: 'Review: element.innerHTML = location.hash.slice(1). Explain risk and a safe replacement in summary. Use the output contract.', task: baseContext({ roleId: "security-reviewer", taskTitle: "Review DOM security" }) }),
+    evaluate: r => structuralFailureEvaluation(r) ?? (/XSS|cross.site scripting/i.test(r.output.summary) && /textContent/.test(r.output.summary)
+      ? { status: "PASS", score: 90, notes: "Identified DOM XSS and safe text sink." } : { status: "FAIL", score: 10, notes: "Missed DOM XSS or mitigation." }) },
+];
+
 export function getBenchmarkScenario(id: BenchmarkScenarioId): BenchmarkScenario {
-  const scenario = BENCHMARK_SCENARIOS.find((s) => s.id === id);
+  const scenario = [...BENCHMARK_SCENARIOS, ...FREE_MODEL_EXTRA_SCENARIOS].find((s) => s.id === id);
   if (!scenario) throw new Error(`Unknown benchmark scenario: "${id}".`);
   return scenario;
 }

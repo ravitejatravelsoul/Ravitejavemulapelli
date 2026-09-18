@@ -28,6 +28,7 @@ export function NewProjectForm({ remoteMode = false }: { remoteMode?: boolean })
   // instead — Simulation remains one click away for anyone who really
   // does just want to exercise the Office's own plumbing.
   const [provider, setProvider] = useState<Provider>("ollama");
+  const [freeModelOrchestration, setFreeModelOrchestration] = useState(false);
   const [health, setHealth] = useState<OllamaHealth | null>(null);
   const [checking, startChecking] = useTransition();
   const [aiPolicyMode, setAiPolicyMode] = useState<AiPolicyMode>("LOCAL_ONLY");
@@ -138,6 +139,26 @@ export function NewProjectForm({ remoteMode = false }: { remoteMode?: boolean })
                   )}
                   {!checking && health && !health.online && <span className="text-destructive">Ollama offline — start it before running this project</span>}
                 </p>
+              )}
+
+              {provider === "ollama" && (
+                <label className="mt-2 flex items-start gap-2 rounded-lg border border-border/60 px-3 py-2 text-xs">
+                  <input
+                    type="checkbox"
+                    name="freeModelOrchestration"
+                    value="true"
+                    checked={freeModelOrchestration}
+                    onChange={(e) => setFreeModelOrchestration(e.target.checked)}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    <span className="font-medium">Free Multi-Model Orchestration</span>
+                    <p className="mt-0.5 text-muted-foreground">
+                      Route each task to the best currently-available FREE model (Groq/Gemini/OpenRouter/Ollama), chosen per task by capability, health,
+                      and benchmark evidence — never one fixed model per agent. $0 cost; requires at least one free provider configured on the server.
+                    </p>
+                  </span>
+                </label>
               )}
             </div>
 

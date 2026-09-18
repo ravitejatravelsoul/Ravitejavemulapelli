@@ -180,7 +180,9 @@ export async function runQABrowserVerification(
       // deliverable-consistency check) compare what was really produced
       // against the user's original request, not just trust "QA passed."
       headingText,
+      bodyTextBefore,
       bodyTextAfter,
+      buttonText: await button.textContent(),
     });
   } catch (error) {
     return {

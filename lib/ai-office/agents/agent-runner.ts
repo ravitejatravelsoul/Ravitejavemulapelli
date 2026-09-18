@@ -16,6 +16,7 @@ import {
   listTasksForProject,
   listTaskAttempts,
   getAgentRun,
+  updateAgentRunProviderModel,
   type TaskRow,
   type TaskAttemptRow,
   type AgentRunRow,
@@ -45,9 +46,13 @@ import { SimulatedAdapter } from "../providers/simulated/simulated-adapter.ts";
 import { OllamaAdapter } from "../providers/ollama/ollama-adapter.ts";
 import { listInstalledOllamaModels } from "../providers/ollama/ollama-inventory.ts";
 import type { AIProviderAdapter } from "../providers/types.ts";
-import { LocalModelRouter, type ModelFailureContext } from "./model-router.ts";
+import { LocalModelRouter, capabilityForRole, type ModelFailureContext } from "./model-router.ts";
 import { routeProvider } from "./provider-router.ts";
-import { ClaudeAdapter, isClaudeConfigured } from "../providers/claude/claude-adapter.ts";
+import { ClaudeAdapter, isClaudeConfigured, isClaudeEnabledByConfig } from "../providers/claude/claude-adapter.ts";
+import { requiredCapabilitiesForTask } from "./free-model-capabilities.ts";
+import { selectFreeModel, type SelectFreeModelResult, type CandidateScore } from "./free-model-router.ts";
+import { recordModelOutcome, recordRoutingDecision } from "../domain/model-registry.ts";
+import { createFreeProviderAdapter } from "../providers/free/free-adapter-factory.ts";
 import { optimizeContextForPaidCall } from "../context/context-budget-manager.ts";
 import {
   authorizeBudget as authorizeLiveBudget,
@@ -154,7 +159,7 @@ async function runAdapterOnce(
       status: "FAILED",
       output: { summary: "", artifacts: [], decisions: [], testResults: [], events: [], fileOperations: [], recommendedNextActions: [], failure: { reason } },
       usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
-      raw: { timedOut, threw: !timedOut },
+      raw: { timedOut, threw: !timedOut, retryAfterMs: (error as { retryAfterMs?: number })?.retryAfterMs },
     };
   }
 }
@@ -217,6 +222,138 @@ async function runAdapterWithOperationalRetries(
       cacheCreationInputTokens: totalCacheCreationInputTokens,
       cacheReadInputTokens: totalCacheReadInputTokens,
     },
+  };
+}
+
+// -----------------------------------------------------------------------
+// Free multi-model orchestration phase — a project opted into
+// `freeModelOrchestration` routes each task through the capability-based
+// free-model router (free-model-router.ts) instead of LocalModelRouter.
+// Everything below is additive: no existing path (Claude, plain Ollama,
+// Simulated) calls any of this.
+// -----------------------------------------------------------------------
+
+interface FreeModelCandidate {
+  provider: string;
+  modelId: string;
+}
+
+/** The ONLY place a free-provider adapter is constructed — mirrors LocalModelRouter's own "agent-runner.ts is the sole authority" precedent. Returns null (never throws) when the candidate's provider has become unconfigured between selection and now (e.g. an env var was unset mid-session) — the caller treats that as "skip this candidate," never a crash. */
+function buildFreeProviderAdapter(candidate: FreeModelCandidate, options: { ollamaFetchImpl?: typeof fetch; freeProviderFetchImpl?: typeof fetch }): AIProviderAdapter | null {
+  return createFreeProviderAdapter(candidate.provider, candidate.modelId, {
+    fetchImpl: options.freeProviderFetchImpl, ollamaFetchImpl: options.ollamaFetchImpl,
+  });
+}
+
+/** Bounded on purpose (see MAX_OPERATIONAL_RETRIES's identical rationale) — "preferred free model → rate limited/failure → next qualified free model → next qualified free model → ... → BLOCK/ESCALATE" per the brief, never an unbounded walk through every registered model. */
+const MAX_FREE_MODEL_FALLBACK_CANDIDATES = 3;
+
+interface FreeModelExecutionOutcome {
+  result: import("../providers/types.ts").AgentTaskResult;
+  finalCandidate: FreeModelCandidate | null;
+  fallbacksUsed: CandidateScore[];
+  attempts: number;
+  finalLatencyMs: number;
+}
+
+/**
+ * Cross-model fallback (Phase 7) — tries the router's ranked candidates
+ * in order, each with its own existing bounded in-process operational
+ * retry (`runAdapterWithOperationalRetries`, completely unchanged).
+ * Moves to the NEXT candidate only when the current one fails for an
+ * OPERATIONAL reason (rate limit, connection error, timeout, malformed
+ * output) — a genuine SEMANTIC failure (the model tried and produced a
+ * real wrong/failed result) is never "solved" by trying a different
+ * model; it stops here and flows through the exact same retry/
+ * remediation/escalation path every other semantic failure already
+ * does. Claude is never a candidate here — `selectFreeModel()` only
+ * ever ranks rows from `model_registry`, which is never populated with
+ * Claude (see providers/free/model-catalog-sync.ts) — so this can never
+ * silently create paid usage regardless of `AI_OFFICE_CLAUDE_ENABLED`.
+ * Records a real, per-model outcome (`recordModelOutcome`) after every
+ * candidate tried, win or lose, so the router's own scoring improves
+ * over time from real evidence, not just benchmark runs.
+ */
+async function runFreeModelWithFallback(
+  db: DatabaseSync,
+  ctx: {
+    selection: SelectFreeModelResult;
+    projectId: string;
+    agentRunId: string;
+    buildInput: () => Parameters<AIProviderAdapter["runAgentTask"]>[0];
+    ollamaFetchImpl?: typeof fetch;
+    freeProviderFetchImpl?: typeof fetch;
+    timeoutMs: number;
+  },
+): Promise<FreeModelExecutionOutcome> {
+  const candidates = ctx.selection.candidates.slice(0, MAX_FREE_MODEL_FALLBACK_CANDIDATES);
+  const fallbacksUsed: CandidateScore[] = [];
+  let lastResult: import("../providers/types.ts").AgentTaskResult | null = null;
+  let finalCandidate: FreeModelCandidate | null = null;
+  let attempts = 0;
+  let finalLatencyMs = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+
+  for (let i = 0; i < candidates.length; i++) {
+    const candidate = candidates[i]!;
+    const adapter = buildFreeProviderAdapter(candidate, { ollamaFetchImpl: ctx.ollamaFetchImpl, freeProviderFetchImpl: ctx.freeProviderFetchImpl });
+    if (!adapter) continue; // this candidate's provider became unconfigured between selection and now — skip, never crash
+
+    attempts += 1;
+    finalCandidate = candidate;
+    const startedAt = Date.now();
+    const result = await runAdapterOnce(adapter, ctx.buildInput(), ctx.timeoutMs);
+    const latencyMs = Date.now() - startedAt;
+    finalLatencyMs = latencyMs;
+    recordAiUsage(db, { agentRunId: ctx.agentRunId, projectId: ctx.projectId, provider: candidate.provider, ...result.usage });
+    recordEvent(db, { projectId: ctx.projectId, type: "model.request", actor: "system", payload: {
+      agentRunId: ctx.agentRunId, provider: candidate.provider, model: candidate.modelId,
+      latencyMs, status: result.status, structuredOutputValid: !(result.raw as { malformed?: boolean; threw?: boolean } | undefined)?.malformed && !(result.raw as { threw?: boolean } | undefined)?.threw, ...result.usage,
+    } });
+    const failureReason = result.output.failure?.reason ?? "";
+    const rateLimited = result.status === "FAILED" && /rate-limited/i.test(failureReason);
+
+    if (result.status !== "SUCCEEDED") recordModelOutcome(db, candidate.provider, candidate.modelId, {
+      succeeded: false,
+      latencyMs,
+      // A 60s cooldown before this exact model is eligible again — long
+      // enough to clear a short burst-limit window, short enough that a
+      // brief rate-limit never permanently sidelines a model for the
+      // rest of the office's session. Per the brief: "mark unhealthy/
+      // unavailable, do not repeatedly retry it."
+      rateLimitedForMs: rateLimited ? Number((result.raw as { retryAfterMs?: number } | undefined)?.retryAfterMs ?? 60_000) : undefined,
+      unavailable: /HTTP (401|403|404|410)/.test(failureReason),
+    });
+
+    inputTokens += result.usage.inputTokens;
+    outputTokens += result.usage.outputTokens;
+    lastResult = { ...result, usage: { inputTokens, outputTokens, costUsd: 0 } };
+    if (result.status === "SUCCEEDED") break;
+    if (!isOperationalFailureReason(failureReason)) break; // semantic failure — never solved by switching models
+    if (i < candidates.length - 1) fallbacksUsed.push(candidate);
+  }
+
+  return {
+    result: lastResult ?? {
+      status: "FAILED",
+      output: {
+        summary: "",
+        artifacts: [],
+        decisions: [],
+        testResults: [],
+        events: [],
+        fileOperations: [],
+        recommendedNextActions: [],
+        failure: { reason: "No eligible free model's provider is currently configured — every ranked candidate was skipped." },
+      },
+      usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+      raw: { freeModelFallbackExhausted: true },
+    },
+    finalCandidate,
+    fallbacksUsed,
+    attempts,
+    finalLatencyMs,
   };
 }
 
@@ -407,6 +544,8 @@ export interface ExecuteTaskOptions {
   availableModelsOverride?: string[];
   /** Test-injection point for the real OllamaAdapter's own HTTP call when executeTask constructs it internally via LocalModelRouter (separate from `intentCheckFetch`, which only covers the intent-consistency gates' own call). Real (non-test) runner operation never sets this; ignored when `options.provider` is already given. */
   ollamaFetchImpl?: typeof fetch;
+  /** Free multi-model orchestration phase — test-injection point for every free EXTERNAL provider adapter's own HTTP call (Groq/Gemini/OpenRouter, all constructed internally by `buildFreeProviderAdapter` for a `freeModelOrchestration` project) — one shared override rather than one per provider, since a test exercising cross-model fallback needs to control all of them identically. Real (non-test) runner operation never sets this; ignored when `options.provider` is already given. */
+  freeProviderFetchImpl?: typeof fetch;
   /**
    * Office Engineer's semantic-repair capability (see
    * lib/ai-office/engineer/semantic-repair-execution.ts) uses this to
@@ -586,6 +725,16 @@ async function prepareClaudeCall(
   },
 ): Promise<ClaudeGateResult> {
   const { project, role, task, context, capability } = ctx;
+
+  // Defense-in-depth (free multi-model orchestration phase) — routeProvider()
+  // is already the structural gate that keeps this function from ever being
+  // called while Claude is disabled, but this function is the one place
+  // that can actually construct a ClaudeAdapter, so it re-checks
+  // independently rather than trusting a single call site to always get it
+  // right.
+  if (!isClaudeEnabledByConfig()) {
+    return { outcome: "blocked", reason: "Claude is disabled by configuration (AI_OFFICE_CLAUDE_ENABLED=false)." };
+  }
 
   if (hasRejectedClaudeApproval(db, project.id)) {
     return {
@@ -815,12 +964,47 @@ export async function executeTask(
   let adapter: AIProviderAdapter | null = null;
   let modelForRun: string | null = null;
   let modelSelectionFailureReason: string | null = null;
+  // Free multi-model orchestration phase — only the best-scored
+  // candidate is set here (agentRun's initial provider/model "guess",
+  // matching every other provider's existing precedent of committing
+  // before execution); non-null only signals "this attempt should use
+  // the free-model fallback executor below," not the model actually
+  // used — see the fallback-aware runFreeModelWithFallback() call
+  // further down, which is the only thing allowed to move to a
+  // different candidate mid-attempt.
+  const freeCapabilities = requiredCapabilitiesForTask(role.id, task.title);
+  const freeContext = project.freeModelOrchestration === 1
+    ? await optimizeContextForPaidCall({ db, role, task, context, capability: capabilityForRole(role.id) }) : null;
+  let freeModelSelection: SelectFreeModelResult | null = null;
+  let freeRoutingDecisionId: string | null = null;
+  let freeSuccessfulModel: { provider: string; modelId: string; latencyMs: number } | null = null;
   if (options.provider) {
     adapter = options.provider;
     modelForRun = options.provider.model ?? null;
   } else if (claudeCall) {
     adapter = claudeCall.adapter;
     modelForRun = claudeCall.adapter.model;
+  } else if (project.provider === "ollama" && project.freeModelOrchestration === 1) {
+    const capability = freeCapabilities[0]!;
+    freeModelSelection = freeContext?.ok ? selectFreeModel(db, {
+      capability, requiredCapabilities: freeCapabilities,
+      estimatedInputTokens: freeContext.telemetry.estimatedInputTokens,
+      estimatedOutputTokens: freeContext.allowedOutputTokens,
+    }) : null;
+    if (!freeModelSelection) {
+      modelSelectionFailureReason = `No eligible free model is currently enabled/healthy for capability ${capability} (checked every configured free provider's registry — Groq/Gemini/OpenRouter/Ollama).`;
+    } else {
+      adapter = buildFreeProviderAdapter(
+        { provider: freeModelSelection.provider, modelId: freeModelSelection.modelId },
+        { ollamaFetchImpl: options.ollamaFetchImpl, freeProviderFetchImpl: options.freeProviderFetchImpl },
+      );
+      if (!adapter) {
+        modelSelectionFailureReason = `The selected free model's provider ("${freeModelSelection.provider}") is not currently configured.`;
+        freeModelSelection = null;
+      } else {
+        modelForRun = `${freeModelSelection.provider}/${freeModelSelection.modelId}`;
+      }
+    }
   } else if (project.provider === "ollama") {
     try {
       const availableModels = options.availableModelsOverride ?? (await listInstalledOllamaModels());
@@ -871,6 +1055,14 @@ export async function executeTask(
 
   let result: import("../providers/types.ts").AgentTaskResult;
   if (modelSelectionFailureReason) {
+    if (project.freeModelOrchestration === 1) {
+      freeRoutingDecisionId = recordRoutingDecision(db, {
+        projectId: project.id, taskId: task.id, roleId: role.id,
+        requiredCapability: freeCapabilities.join(" + "), candidateModels: [],
+        selectedProvider: "none", selectedModel: "none", selectionReason: modelSelectionFailureReason,
+        attempts: 0, result: "FAILED", latencyMs: 0, inputTokens: 0, outputTokens: 0, costUsd: 0,
+      }).id;
+    }
     // Never even reaches the adapter — there's no adapter to reach: model
     // selection itself is what failed. Flows through the exact same
     // failure/retry/escalation path as any other real failure.
@@ -948,10 +1140,13 @@ export async function executeTask(
     // (timeout, malformed JSON, connection error) before it ever
     // consumes one of this task's real, counted attempts — see
     // `runAdapterWithOperationalRetries`'s docblock.
-    result = await runAdapterWithOperationalRetries(
-      // Non-null: reachable only when modelSelectionFailureReason is
-      // null, which is only ever set once `adapter` has been assigned.
-      adapter!,
+    const buildInput = () => ({
+      role: role.id,
+      // For a Claude call, the Context Budget Manager's trimmed,
+      // relevance-selected context (token economics phase) — never the
+      // raw, unoptimized `context` built above, which the manager only
+      // used as its input. Every other provider is unaffected.
+      task: claudeCall ? claudeCall.optimizedContext : freeContext?.ok ? freeContext.context : context,
       // Deliberately role-generic, not task.title — task.title is a
       // display/tracking label built by concatenating the project's own
       // title (e.g. "Implement backend — Ollama Hello World Build"),
@@ -961,18 +1156,61 @@ export async function executeTask(
       // incident writeup). The actual work to do lives in
       // context.authoritativeUserRequest plus the role's own scoped
       // artifacts, both already part of `context`.
-      {
-        role: role.id,
-        // For a Claude call, the Context Budget Manager's trimmed,
-        // relevance-selected context (token economics phase) — never the
-        // raw, unoptimized `context` built above, which the manager only
-        // used as its input. Every other provider is unaffected.
-        task: claudeCall ? claudeCall.optimizedContext : context,
-        instructions: `Perform your assigned "${role.name}" responsibilities for this task.`,
-        maxOutputTokens: claudeCall?.allowedOutputTokens,
-      },
-      options.timeoutMs ?? DEFAULT_TASK_TIMEOUT_MS,
-    );
+      instructions: `Perform your assigned "${role.name}" responsibilities for this task.`,
+      maxOutputTokens: claudeCall?.allowedOutputTokens ?? (freeContext?.ok ? freeContext.allowedOutputTokens : undefined),
+    });
+
+    if (freeModelSelection) {
+      // Free multi-model orchestration phase — cross-model fallback
+      // instead of the plain single-adapter retry every other path
+      // uses; see runFreeModelWithFallback's docblock.
+      const routingStartedAt = Date.now();
+      const outcome = await runFreeModelWithFallback(db, {
+        selection: freeModelSelection,
+        projectId: project.id, agentRunId: agentRun.id,
+        buildInput,
+        ollamaFetchImpl: options.ollamaFetchImpl,
+        freeProviderFetchImpl: options.freeProviderFetchImpl,
+        timeoutMs: options.timeoutMs ?? DEFAULT_TASK_TIMEOUT_MS,
+      });
+      result = outcome.result;
+      if (result.status === "SUCCEEDED" && outcome.finalCandidate) freeSuccessfulModel = { ...outcome.finalCandidate, latencyMs: outcome.finalLatencyMs };
+
+      const finalProviderModel = outcome.finalCandidate ? `${outcome.finalCandidate.provider}/${outcome.finalCandidate.modelId}` : null;
+      if (finalProviderModel && finalProviderModel !== modelForRun && outcome.finalCandidate) {
+        // Fallback moved to a different candidate than the initial
+        // best-scored guess `agentRun` was created with — reflect the
+        // model that actually produced this result, not the prediction.
+        agentRun = updateAgentRunProviderModel(db, agentRun.id, { provider: outcome.finalCandidate.provider, model: finalProviderModel });
+        modelForRun = finalProviderModel;
+      }
+
+      freeRoutingDecisionId = recordRoutingDecision(db, {
+        projectId: project.id,
+        taskId: task.id,
+        roleId: role.id,
+        requiredCapability: freeCapabilities.join(" + "),
+        candidateModels: freeModelSelection.candidates.map((c) => ({ provider: c.provider, modelId: c.modelId, score: c.score })),
+        selectedProvider: outcome.finalCandidate?.provider ?? freeModelSelection.provider,
+        selectedModel: outcome.finalCandidate?.modelId ?? freeModelSelection.modelId,
+        selectionReason: freeModelSelection.reason + (outcome.fallbacksUsed.length ? ` Fallback after ${outcome.fallbacksUsed.map(c => `${c.provider}/${c.modelId}`).join(", ")}; final model ${outcome.finalCandidate?.provider}/${outcome.finalCandidate?.modelId}.` : ""),
+        fallbacksUsed: outcome.fallbacksUsed.map((c) => ({ provider: c.provider, modelId: c.modelId, score: c.score })),
+        attempts: outcome.attempts,
+        latencyMs: Date.now() - routingStartedAt,
+        result: result.status === "SUCCEEDED" ? "SUCCEEDED" : outcome.fallbacksUsed.length > 0 ? "ESCALATED" : "FAILED",
+        inputTokens: result.usage.inputTokens,
+        outputTokens: result.usage.outputTokens,
+        costUsd: result.usage.costUsd,
+      }).id;
+    } else {
+      result = await runAdapterWithOperationalRetries(
+        // Non-null: reachable only when modelSelectionFailureReason is
+        // null, which is only ever set once `adapter` has been assigned.
+        adapter!,
+        buildInput(),
+        options.timeoutMs ?? DEFAULT_TASK_TIMEOUT_MS,
+      );
+    }
   }
 
   if (claudeCall) {
@@ -999,11 +1237,17 @@ export async function executeTask(
     } else {
       releaseReservation(db, claudeCall.reservationId);
     }
-  } else {
+  } else if (!freeModelSelection) {
     recordAiUsage(db, {
       agentRunId: agentRun.id,
       projectId: project.id,
-      provider: adapter?.name ?? project.provider,
+      // `agentRun.provider` (not `adapter?.name`) — identical for every
+      // other path (Simulated/Ollama/test-injection never change it
+      // post-creation), but for the free multi-model path this is the
+      // authoritative FINAL provider after any cross-model fallback,
+      // which `adapter` (still the very first candidate constructed
+      // above) would misattribute if fallback actually moved providers.
+      provider: agentRun.provider,
       inputTokens: result.usage.inputTokens,
       outputTokens: result.usage.outputTokens,
       costUsd: result.usage.costUsd,
@@ -1223,7 +1467,13 @@ export async function executeTask(
     // VERIFIED. Real providers only, same reasoning as checkpoint 1.
     let deliverableCheckUnavailable = false;
     if (verification.status === "PASS" && usedRealProvider) {
-      const builtDescription = [verification.details.headingText, verification.details.bodyTextAfter]
+      const builtDescription = [
+        `Observed browser test: ${verification.summary}`,
+        `Actual workspace files: ${(await listFiles(project.id)).join(", ")}`,
+        `Button label: ${String(verification.details.buttonText ?? "")}`,
+        `Visible text before click: ${String(verification.details.bodyTextBefore ?? "")}`,
+        `Visible text after click: ${String(verification.details.bodyTextAfter ?? "")}`,
+      ]
         .filter((v): v is string => typeof v === "string" && v.length > 0)
         .join("\n");
       const deliverableCheck = await checkIntentConsistency({
@@ -1272,6 +1522,10 @@ export async function executeTask(
     setDeliveryState(db, project.id, finalStatus === "PASS" ? "VERIFIED" : deliverableCheckUnavailable ? "VERIFYING" : "FAILED");
   }
 
+  if (freeSuccessfulModel) recordModelOutcome(db, freeSuccessfulModel.provider, freeSuccessfulModel.modelId, { succeeded: result.status === "SUCCEEDED", latencyMs: freeSuccessfulModel.latencyMs });
+  if (freeRoutingDecisionId) {
+    db.prepare("UPDATE model_routing_decisions SET result = ? WHERE id = ?").run(result.status === "SUCCEEDED" ? "SUCCEEDED" : "FAILED", freeRoutingDecisionId);
+  }
   if (result.status === "SUCCEEDED") {
     return finishSuccess(db, { project, role, task, attempt, agentRun, output: result.output });
   }

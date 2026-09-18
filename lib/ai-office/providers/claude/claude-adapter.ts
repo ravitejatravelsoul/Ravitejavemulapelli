@@ -68,6 +68,23 @@ export function isClaudeConfigured(): boolean {
   return Boolean(process.env.ANTHROPIC_API_KEY) && getClaudePricingConfig() !== null;
 }
 
+/**
+ * Free multi-model orchestration phase — a global kill-switch,
+ * independent of whether credentials are even configured.
+ * `AI_OFFICE_CLAUDE_ENABLED=false` disables Claude selection/calls
+ * entirely, regardless of a project's `aiPolicyMode` (even
+ * `CLAUDE_ONLY`) — `agents/provider-router.ts::routeProvider()` checks
+ * this FIRST, before any policy/evidence logic, so a disabled office
+ * never even evaluates whether Claude would otherwise have been chosen.
+ * Defaults to enabled (`true`) so the existing, already-approved
+ * controlled Claude LIVE pilot behavior is completely unaffected unless
+ * an owner explicitly opts out — this phase's local free-multi-model
+ * testing sets it to `false` in `.env.local` only, never in production.
+ */
+export function isClaudeEnabledByConfig(): boolean {
+  return process.env.AI_OFFICE_CLAUDE_ENABLED !== "false";
+}
+
 /** The model name a real Claude call would use right now (`ANTHROPIC_MODEL` or the built-in default) — never a secret, safe to display in the owner UI (Living AI Office UI transformation, Section 25). Does not require a credential to be configured. */
 export function getConfiguredClaudeModel(): string {
   return process.env.ANTHROPIC_MODEL ?? DEFAULT_MODEL;
@@ -119,6 +136,9 @@ export class ClaudeAdapter implements AIProviderAdapter {
   }
 
   async runAgentTask(input: AgentTaskInput): Promise<AgentTaskResult> {
+    if (!isClaudeEnabledByConfig()) {
+      throw new Error("Claude is disabled by configuration (AI_OFFICE_CLAUDE_ENABLED=false).");
+    }
     // Token economics phase, Part 9 — real Anthropic prompt caching via
     // the officially supported mechanism: `system` as a content-block
     // array with a `cache_control` breakpoint on the stable block (role

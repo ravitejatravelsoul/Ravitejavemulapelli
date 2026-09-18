@@ -44,6 +44,17 @@ export interface ProjectRow {
   ownerId: string;
   createdAt: number;
   updatedAt: number;
+  /**
+   * Free multi-model orchestration phase (migration 015) — only
+   * meaningful when `provider === "ollama"`. When 1, agent-runner.ts
+   * routes each task through the new capability-based multi-provider
+   * free-model router (agents/free-model-router.ts) instead of going
+   * straight to LocalModelRouter/OllamaAdapter. `0 | 1` (not `boolean`)
+   * matching this codebase's existing convention for a raw SQLite
+   * integer column (see e.g. `BenchmarkResultRow.timedOut`) — the write
+   * path below accepts a real `boolean` and converts it.
+   */
+  freeModelOrchestration: 0 | 1;
 }
 
 export interface ProjectIdeaRow {
@@ -70,6 +81,8 @@ export function createProjectWithIdea(
     provider?: ProjectProvider;
     aiPolicyMode?: AiPolicyMode;
     monthlyBudgetCapUsd?: number | null;
+    /** Free multi-model orchestration phase — see `ProjectRow.freeModelOrchestration`'s docblock. Defaults to false (off) for every existing/new caller that doesn't explicitly opt in. */
+    freeModelOrchestration?: boolean;
   },
 ): { project: ProjectRow; idea: ProjectIdeaRow } {
   const now = Date.now();
@@ -79,13 +92,14 @@ export function createProjectWithIdea(
   const provider = input.provider ?? "simulated";
   const aiPolicyMode = input.aiPolicyMode ?? "LOCAL_ONLY";
   const monthlyBudgetCapUsd = input.monthlyBudgetCapUsd ?? null;
+  const freeModelOrchestration = input.freeModelOrchestration ? 1 : 0;
 
   db.exec("BEGIN");
   try {
     db.prepare(
-      `INSERT INTO projects (id, title, status, aiMode, provider, aiPolicyMode, monthlyBudgetCapUsd, ownerId, createdAt, updatedAt)
-       VALUES (?, ?, 'DRAFT', ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(projectId, input.title, aiMode, provider, aiPolicyMode, monthlyBudgetCapUsd, input.ownerId, now, now);
+      `INSERT INTO projects (id, title, status, aiMode, provider, aiPolicyMode, monthlyBudgetCapUsd, ownerId, createdAt, updatedAt, freeModelOrchestration)
+       VALUES (?, ?, 'DRAFT', ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(projectId, input.title, aiMode, provider, aiPolicyMode, monthlyBudgetCapUsd, input.ownerId, now, now, freeModelOrchestration);
 
     db.prepare(
       `INSERT INTO project_ideas (id, projectId, rawText, submittedAt, createdAt, updatedAt)

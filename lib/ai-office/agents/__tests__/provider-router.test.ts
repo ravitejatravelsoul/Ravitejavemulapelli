@@ -72,3 +72,50 @@ describe("routeProvider", () => {
     t.close();
   });
 });
+
+describe("routeProvider — AI_OFFICE_CLAUDE_ENABLED kill-switch (free multi-model orchestration phase)", () => {
+  test("AI_OFFICE_CLAUDE_ENABLED=false forces LOCAL even for CLAUDE_ONLY — proves Claude can never be selected while disabled", () => {
+    const original = process.env.AI_OFFICE_CLAUDE_ENABLED;
+    process.env.AI_OFFICE_CLAUDE_ENABLED = "false";
+    try {
+      const t = createTestDb();
+      const decision = routeProvider(t.db, { role: "product-owner", project: { aiPolicyMode: "CLAUDE_ONLY" } });
+      assert.equal(decision.provider, "LOCAL");
+      assert.match(decision.reason, /AI_OFFICE_CLAUDE_ENABLED=false/);
+      t.close();
+    } finally {
+      if (original === undefined) delete process.env.AI_OFFICE_CLAUDE_ENABLED;
+      else process.env.AI_OFFICE_CLAUDE_ENABLED = original;
+    }
+  });
+
+  test("AI_OFFICE_CLAUDE_ENABLED=false forces LOCAL even for HYBRID with a real NO_QUALIFIED_MODEL applied recommendation (the one case that would otherwise route CLAUDE)", () => {
+    const original = process.env.AI_OFFICE_CLAUDE_ENABLED;
+    process.env.AI_OFFICE_CLAUDE_ENABLED = "false";
+    try {
+      const t = createTestDb();
+      upsertRecommendedRouting(t.db, { capability: "CODING", model: "NO QUALIFIED LOCAL MODEL", reason: "nothing qualifies" });
+      applyRecommendedRouting(t.db);
+      const decision = routeProvider(t.db, { role: "frontend-developer", project: { aiPolicyMode: "HYBRID" } });
+      assert.equal(decision.provider, "LOCAL");
+      t.close();
+    } finally {
+      if (original === undefined) delete process.env.AI_OFFICE_CLAUDE_ENABLED;
+      else process.env.AI_OFFICE_CLAUDE_ENABLED = original;
+    }
+  });
+
+  test("omitting AI_OFFICE_CLAUDE_ENABLED (or setting it to anything other than the literal string 'false') preserves the existing, already-approved CLAUDE_ONLY behavior", () => {
+    const original = process.env.AI_OFFICE_CLAUDE_ENABLED;
+    delete process.env.AI_OFFICE_CLAUDE_ENABLED;
+    try {
+      const t = createTestDb();
+      const decision = routeProvider(t.db, { role: "product-owner", project: { aiPolicyMode: "CLAUDE_ONLY" } });
+      assert.equal(decision.provider, "CLAUDE");
+      t.close();
+    } finally {
+      if (original === undefined) delete process.env.AI_OFFICE_CLAUDE_ENABLED;
+      else process.env.AI_OFFICE_CLAUDE_ENABLED = original;
+    }
+  });
+});
