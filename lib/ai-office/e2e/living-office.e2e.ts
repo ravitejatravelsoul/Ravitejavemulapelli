@@ -1,3 +1,5 @@
+import { setDeliveryState } from "../domain/workspace.ts";
+import { recordEvent } from "../domain/events.ts";
 import { runMigrations } from "../db/migrate.ts";
 import { seedAll } from "../db/seed.ts";
 import { createApproval } from "../domain/project-outputs.ts";
@@ -177,6 +179,11 @@ async function seedVisualFixture() {
     const attempt = createTaskAttempt(db, task.id);
     createAgentRunForAttempt(db, { taskAttemptId: attempt.id, roleId: role.id, provider: role.id === "frontend-developer" ? "openrouter" : "groq", model: role.id === "frontend-developer" ? "nex-agi/nex-n2.5-mini:free" : "openai/gpt-oss-20b" });
   }
+  const seeded=db.prepare('SELECT id,roleId FROM tasks WHERE projectId=?').all(fixtureId) as Array<{id:string;roleId:string}>;
+  for(const [from,to] of [['product-owner','solution-architect'],['solution-architect','ui-ux-agent'],['solution-architect','backend-developer'],['ui-ux-agent','frontend-developer'],['frontend-developer','qa-agent'],['backend-developer','qa-agent'],['qa-agent','security-reviewer'],['security-reviewer','code-reviewer'],['code-reviewer','release-agent']]){
+    const source=seeded.find(t=>t.roleId===from)!,target=seeded.find(t=>t.roleId===to)!;
+    db.prepare('INSERT INTO task_dependencies (id,taskId,dependsOnTaskId,createdAt) VALUES (?,?,?,?)').run('fixture-'+from+'-'+to,target.id,source.id,Date.now());
+  }
   db.prepare("UPDATE tasks SET status='DONE', updatedAt=? WHERE projectId=?").run(Date.now()-60000,fixtureId);
   db.close();
 }
@@ -289,5 +296,107 @@ describe("Living Office 2.0 — persisted fixtures, zero inference", () => {
     assert.ok(active.frameP95Ms < Math.max(50,paused.frameP95Ms*1.5),'animation overhead stays within the same-browser frame budget');
     } finally { await page.close(); }
   });
+  test("Level 2: real dependency packets, motion, reload dedupe, remediation and consoles", async()=>{
+    const db=openDatabase(join(dbDir,'office.db'));
+    const page=await browser.newPage({viewport:{width:1440,height:900}});
+    try {
+      const tasks=db.prepare('SELECT id,roleId FROM tasks WHERE projectId=?').all(fixtureId) as Array<{id:string;roleId:string}>;
+      const architect=tasks.find(t=>t.roleId==='solution-architect')!,developer=tasks.find(t=>t.roleId==='frontend-developer')!,qa=tasks.find(t=>t.roleId==='qa-agent')!;
+      await login(page);
+      db.prepare('INSERT INTO task_dependencies (id,taskId,dependsOnTaskId,createdAt) VALUES (?,?,?,?)').run('visual-edge',developer.id,architect.id,Date.now());
+      db.prepare("UPDATE agent_runs SET status='SUCCEEDED',finishedAt=? WHERE taskAttemptId IN (SELECT id FROM task_attempts WHERE taskId=?)").run(Date.now()-100,architect.id);
+      db.prepare("UPDATE agent_runs SET status='RUNNING',startedAt=? WHERE taskAttemptId IN (SELECT id FROM task_attempts WHERE taskId=?)").run(Date.now(),developer.id);
+      await page.reload({waitUntil:'domcontentloaded'});
+      await page.waitForSelector('[data-testid="office-packet"][data-kind="HANDOFF"]');
+      const packet=page.locator('[data-testid="office-packet"] rect');
+      const position=()=>packet.evaluate(el=>{const m=(el as SVGGraphicsElement).getCTM()!;return {x:m.e,y:m.f};});
+      const first=await position();await page.waitForTimeout(800);const second=await position();
+      writeFileSync('.data/living-packet-motion.json',JSON.stringify({first,second,svg:await packet.evaluate(el=>el.outerHTML)},null,2));
+      assert.ok(Math.hypot(second.x-first.x,second.y-first.y)>10,'packet moves in registered SVG space');
+      await page.screenshot({path:'.data/living-office-v2/screenshots/level2-handoff.png',fullPage:true});
+      await page.reload({waitUntil:'domcontentloaded'});await page.waitForTimeout(600);
+      assert.equal(await page.getByTestId('office-packet').count(),0,'refresh does not replay');
+      recordEvent(db,{projectId:fixtureId,type:'agent_run.failed',actor:'qa-agent',payload:{taskId:qa.id,roleId:'qa-agent',attemptNumber:1,remediationTargetTaskIds:[developer.id]}});
+      await page.emulateMedia({reducedMotion:'reduce'});await page.reload({waitUntil:'domcontentloaded'});
+      await page.waitForSelector('[data-testid="office-packet"][data-kind="REMEDIATION"]');
+      assert.equal(await page.locator('[data-testid="office-packet"] rect').isVisible(),false,'reduced motion retains meaning without moving packet');
+      assert.match(await page.getByTestId('office-packet').innerText(),/qa agent.*frontend developer/);
+      assert.ok(await page.getByTestId('owner-console').isVisible());
+      assert.match(await page.getByTestId('engineer-console').innerText(),/System healthy/);
+      assert.ok(!/Verified/.test(await page.getByTestId('delivery-console').innerText()));
+      await page.getByRole('button',{name:'Pause office motion'}).click();
+      await page.waitForTimeout(600);assert.equal(await page.getByTestId('office-packet').count(),0);
+    }finally{await page.close();db.close();}
+  });
+
+  test("Level 3: manual focus, actual command DAG, fresh start and verified-only completion",async()=>{
+    const db=openDatabase(join(dbDir,'office.db'));
+    const page=await browser.newPage({viewport:{width:1440,height:900}});
+    try {
+      await login(page);
+      await page.getByTestId('station-orchestrator').locator('button').click();
+      await page.waitForURL(/agent=orchestrator/,{waitUntil:'domcontentloaded'});
+      assert.equal(await page.locator('[data-dag-task]').count(),10);
+      await page.waitForTimeout(700);
+      assert.notEqual(await page.getByTestId('office-camera').evaluate(el=>getComputedStyle(el).transform),'none');
+      await page.getByRole('button',{name:'Cinematic focus',exact:true}).click();
+      await page.waitForTimeout(700);
+      assert.equal(await page.getByTestId('office-camera').evaluate(el=>getComputedStyle(el).transform),'none');
+      await page.getByTestId('command-table').screenshot({path:'.data/living-office-v2/screenshots/command-table.png'});
+      await page.getByRole('button',{name:'Close agent workspace'}).click();
+      recordEvent(db,{projectId:fixtureId,type:'project.planned',actor:'orchestrator',payload:{taskCount:10}});
+      await page.reload({waitUntil:'domcontentloaded'});
+      await page.waitForSelector('[data-testid="office-moment"][data-moment="START"]');
+      await page.screenshot({path:'.data/living-office-v2/screenshots/project-start.png',fullPage:true});
+      await page.waitForTimeout(3600);
+      assert.equal(await page.getByTestId('office-moment').count(),0,'start acknowledgment expires');
+      await page.reload({waitUntil:'domcontentloaded'});await page.waitForTimeout(600);
+      assert.equal(await page.getByTestId('office-moment').count(),0,'start never replays on refresh');
+      db.prepare("UPDATE tasks SET status='DONE',updatedAt=? WHERE projectId=?").run(Date.now(),fixtureId);
+      db.prepare("UPDATE projects SET status='READY_FOR_REVIEW' WHERE id=?").run(fixtureId);
+      db.prepare("UPDATE agent_runs SET status='SUCCEEDED',finishedAt=? WHERE roleId='release-agent'").run(Date.now());
+      await page.reload({waitUntil:'domcontentloaded'});await page.waitForTimeout(700);
+      assert.equal(await page.locator('[data-moment="DELIVERY"]').count(),0,'all DONE without verified workspace cannot celebrate');
+      setDeliveryState(db,fixtureId,'VERIFIED');
+      db.prepare("UPDATE agent_runs SET finishedAt=? WHERE roleId='release-agent'").run(Date.now());
+      await page.reload({waitUntil:'domcontentloaded'});
+      await page.waitForSelector('[data-testid="office-moment"][data-moment="DELIVERY"]');
+      assert.match(await page.getByTestId('office-moment').innerText(),/10\/10 tasks complete/);
+      await page.screenshot({path:'.data/living-office-v2/screenshots/verified-completion.png',fullPage:true});
+    }finally{await page.close();db.close();}
+  });
+
+  test("extended deterministic session bounds memory, packets, navigation and cleanup",{timeout:240000},async()=>{
+    const db=openDatabase(join(dbDir,'office.db'));
+    const page=await browser.newPage({viewport:{width:1440,height:900}});
+    let requests=0,totalRscRequests=0;const errors:string[]=[];
+    page.on('request',r=>{if(r.url().includes('_rsc')){totalRscRequests++;if(new URL(r.url()).pathname==='/office'&&!r.headers()['next-router-prefetch'])requests++;}});page.on('pageerror',e=>errors.push(e.message));
+    const client=await page.context().newCDPSession(page);
+    try {
+      db.prepare("UPDATE projects SET status='IN_PROGRESS' WHERE id=?").run(fixtureId);setScene(true);
+      const alternate=createProjectWithIdea(db,{title:'VISUAL TEST ONLY — second project',ownerId:getOwner(db)!.id,rawIdeaText:'Isolated switch fixture'}).project.id;
+      const tasks=db.prepare('SELECT id,roleId FROM tasks WHERE projectId=?').all(fixtureId) as Array<{id:string;roleId:string}>;
+      const qa=tasks.find(t=>t.roleId==='qa-agent')!,dev=tasks.find(t=>t.roleId==='frontend-developer')!;
+      await login(page);await client.send('Performance.enable');await client.send('HeapProfiler.collectGarbage');
+      const metrics=async()=>Object.fromEntries((await client.send('Performance.getMetrics')).metrics.map((m:{name:string;value:number})=>[m.name,m.value]));
+      const before=await metrics(),start=Date.now();let maxPackets=0;
+      for(let i=0;i<60;i++){
+        for(let n=0;n<5;n++)recordEvent(db,{projectId:fixtureId,type:'agent_run.failed',actor:'qa-agent',payload:{taskId:qa.id,roleId:'qa-agent',attemptNumber:i+1,remediationTargetTaskIds:[dev.id]}});
+        if(i%15===0){await page.goto(BASE+'/office?project='+alternate,{waitUntil:'domcontentloaded'});assert.equal(await page.getByTestId('office-packet').count(),0);}
+        await page.goto(BASE+'/office?project='+fixtureId+(i%10===0?'&agent=frontend-developer':''),{waitUntil:'domcontentloaded'});
+        await page.waitForTimeout(2000);
+        maxPackets=Math.max(maxPackets,await page.getByTestId('office-packet').count());
+      }
+      await page.goto(BASE+'/office?project='+fixtureId,{waitUntil:'domcontentloaded'});
+      await page.getByRole('button',{name:'Pause office motion'}).click();await page.waitForTimeout(1000);
+      assert.equal(await page.getByTestId('office-packet').count(),0);
+      const beforeIdleRequests=requests;await page.waitForTimeout(30000);const idleRefreshes=requests-beforeIdleRequests;
+      await client.send('HeapProfiler.collectGarbage');const after=await metrics();
+      const heapGrowth=after.JSHeapUsedSize-before.JSHeapUsedSize;
+      writeFileSync('.data/living-office-v2/long-run.json',JSON.stringify({durationSeconds:(Date.now()-start)/1000,transitions:300,projectSwitches:8,workspaceSelections:6,maxPackets,requests,totalRscRequests,idleRefreshes,heapBefore:before.JSHeapUsedSize,heapAfter:after.JSHeapUsedSize,heapGrowth,mainThreadSeconds:after.TaskDuration-before.TaskDuration,nodesBefore:before.Nodes,nodesAfter:after.Nodes,errors},null,2));
+      assert.ok(maxPackets<=1);assert.ok(heapGrowth<16*1024*1024,'bounded heap after forced collection');assert.ok(requests<180,'bounded observer refreshes');assert.ok(idleRefreshes<=8,'steady observation stays on the five-second cadence');assert.deepEqual(errors,[]);
+    }finally{await client.detach();await page.close();db.close();}
+  });
+
 });
 const WORKSTATIONS_FOR_TEST={orchestrator:1,'product-owner':1,'research-agent':1,'solution-architect':1,'ui-ux-agent':1,'frontend-developer':1,'backend-developer':1,'qa-agent':1,'security-reviewer':1,'code-reviewer':1,'release-agent':1};

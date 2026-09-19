@@ -65,3 +65,10 @@
 @keyframes code { 50% { opacity:.15; } }
 @media(max-width:1100px) { .summary { gap:8px 14px; padding:10px; } .summaryTitle small { display:none; } .badge { min-width:78px; padding:3px 5px; } .roleName,.stateLabel { font-size:9px; } .modelLabel { max-width:105px; font-size:8px; } .providers { gap:6px; } }
 @media(prefers-reduced-motion:reduce) { .office * { animation:none!important; transition:none!important; } }
+
+.world {position:absolute;inset:0;transition:transform .6s cubic-bezier(.2,.7,.3,1);}
+.recordedCost {font-size:10px;color:#b5c7d9;}
+@media(prefers-reduced-motion:reduce){.world{transform:none!important;transition:none!important;}}
+
+.ambient{position:absolute;top:2%;left:72%;width:60px;height:30px;background:radial-gradient(ellipse,#e8be7866,transparent 70%);opacity:.2;pointer-events:none;animation:ambient-light 12s ease-in-out infinite;}
+@keyframes ambient-light{50%{opacity:.5;}}

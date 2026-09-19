@@ -2,12 +2,16 @@
 import { useEffect, useState } from "react";
 import Image from "next/image";
 import { Pause, Play, Radio, CircleCheck, CircleAlert, Clock3, RotateCw, ScanLine, Brain, Code2, ListChecks, Coffee } from "lucide-react";
+import { OfficeMoment } from "./office-cinematic";
+import { OfficePacket, OfficeSceneTerminals } from "./office-interactions";
+import { useOfficeTransitions } from "./use-office-transitions";
 import { useAgentSelection } from "./use-agent-selection";
 import { getHotspotPercent } from "@/lib/ai-office/office-hotspots";
 import { WORKSTATIONS } from "@/lib/ai-office/office-scene-layout";
 import { VISUAL_LABEL, isActiveVisualState, summarizeVisualAgents } from "@/lib/ai-office/dashboard/office-visual-state";
 import type { OfficeFloorView } from "@/lib/ai-office/dashboard/office-floor-data";
 import styles from "./office-scene.module.css";
+const EMPTY_TRANSITIONS: import("@/lib/ai-office/dashboard/office-transitions").OfficeTransition[] = [];
 const STATUS_ICON = { IDLE: Coffee, QUEUED: Clock3, THINKING: Brain, WORKING: Code2, TESTING: ListChecks,
   REVIEWING: ScanLine, WAITING: Clock3, BLOCKED: CircleAlert, FAILED: CircleAlert, RETRYING: RotateCw, DONE: CircleCheck, PAUSED: Pause };
 
@@ -19,6 +23,7 @@ export function OfficeImageScene({ floor, officeState = "OPEN", debugEnabled = f
 }) {
   const { selectedRoleId, selectRole } = useAgentSelection();
   const [hoveredRole, setHoveredRole] = useState<string | null>(null);
+  const [cinematicFocus,setCinematicFocus] = useState(true);
   const [motionPaused, setMotionPaused] = useState(false);
   const [hidden, setHidden] = useState(false);
   useEffect(() => {
@@ -26,18 +31,24 @@ export function OfficeImageScene({ floor, officeState = "OPEN", debugEnabled = f
     document.addEventListener("visibilitychange", listener);
     return () => document.removeEventListener("visibilitychange", listener);
   }, []);
+  const packet = useOfficeTransitions(floor.interaction?.projectId, floor.interaction?.transitions ?? EMPTY_TRANSITIONS, !motionPaused && !hidden);
   const summary = summarizeVisualAgents(floor.agents);
   const focus = floor.agents.find(a => a.roleId === (hoveredRole ?? selectedRoleId));
+  const focusedStation = selectedRoleId ? WORKSTATIONS[selectedRoleId] : undefined;
   const byRole = new Map(floor.agents.map(a => [a.roleId, a]));
   return <section className={styles.office} data-testid="living-office" data-motion-paused={motionPaused || hidden} aria-label="Living Office — real project state">
     <div className={styles.summary} data-testid="office-summary">
       <div className={styles.summaryTitle}><Radio size={14} aria-hidden="true" /><span>{summary.active ? "LIVE OFFICE" : "OFFICE AT REST"}</span><small>{officeState === "CLOSED" ? "Dispatch closed" : "Live state · read only"}</small></div>
       <div className={styles.counts}><span><b>{summary.active}</b> active</span><span><b>{summary.waiting}</b> waiting</span><span><b>{summary.reviewing}</b> reviewing</span>{summary.blocked > 0 && <span><b>{summary.blocked}</b> blocked / failed</span>}</div>
       <div className={styles.providers}>{Object.entries(summary.providers).map(([provider, count]) => <span key={provider}>{provider} <b>{count}</b></span>)}</div>
+      {floor.interaction && <span className={styles.recordedCost}>${floor.interaction.costUsd.toFixed(2)} recorded · {floor.selectedProject?.progress.completed}/{floor.selectedProject?.progress.total}</span>}
+      <button className={styles.motionButton} aria-pressed={cinematicFocus} aria-label="Cinematic focus" onClick={()=>setCinematicFocus(v=>!v)}>Focus {cinematicFocus?"on":"off"}</button>
       <button className={styles.motionButton} onClick={() => setMotionPaused(v => !v)} aria-pressed={motionPaused} aria-label={motionPaused ? "Resume office motion" : "Pause office motion"}>{motionPaused ? <Play size={13} /> : <Pause size={13} />}<span>Motion</span></button>
     </div>
     <div className={styles.scene} style={{ aspectRatio: "1672 / 941" }}>
+      <div className={styles.world} data-testid="office-camera" style={{transform:cinematicFocus && !motionPaused && !hidden && focusedStation?"scale(1.035)":"none",transformOrigin:focusedStation?`${focusedStation.head.cx/16.72}% ${focusedStation.head.cy/9.41}%`:"50% 50%"}}>
       <Image src="/images/ai-office/living-office.webp" alt="The approved isometric AI engineering studio" unoptimized fill priority sizes="(min-width: 1024px) calc(100vw - 300px), 100vw" className={styles.art} />
+      <span className={styles.ambient} aria-hidden="true" />
       <div className={styles.vignette} aria-hidden="true" />
       <div className={styles.layers} aria-hidden="true">
         {Object.entries(WORKSTATIONS).map(([roleId, geo]) => {
@@ -70,7 +81,11 @@ export function OfficeImageScene({ floor, officeState = "OPEN", debugEnabled = f
           </div>
         </div>;
       })}
-      <div className={styles.sceneFooter}><span>TEJA’S AI OFFICE <i>/</i> LIVING STUDIO</span><span>11 workstations · Level 1</span></div>
+      {floor.interaction && <OfficeSceneTerminals view={floor.interaction} />}
+      <OfficePacket transition={packet} />
+      <div className={styles.sceneFooter}><span>TEJA’S AI OFFICE <i>/</i> LIVING STUDIO</span><span>11 workstations · Living Office 2.0</span></div>
+      </div>
+      {floor.interaction && <OfficeMoment view={floor.interaction} enabled={!motionPaused&&!hidden} />}
     </div>
     <div className={styles.inspect} data-testid="office-inspector">
       {focus ? <><strong>{focus.roleName}</strong><span>{VISUAL_LABEL[focus.status]}</span><span className={styles.task}>{focus.currentTaskTitle ?? (focus.lastCompletedTaskTitle ? `Last: ${focus.lastCompletedTaskTitle}` : "Available for the next task")}</span><span>{focus.provider ? `${focus.provider} · ${focus.model ?? "Model not recorded"}` : "No model assigned"}</span>{focus.attemptCount > 0 && <span>Attempt {focus.attemptCount}/{focus.maxAttempts ?? "—"}</span>}</>

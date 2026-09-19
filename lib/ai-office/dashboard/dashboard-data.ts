@@ -315,6 +315,7 @@ export function getRecentActivity(db: DatabaseSync, limit = 30): ActivityEntry[]
 // ---- approvals ---------------------------------------------------------
 
 export interface PendingApprovalView {
+  estimatedCostUsd?: number;
   id: string;
   kind: ApprovalKind;
   projectId: string | null;
@@ -366,10 +367,12 @@ export function getPendingApprovalsView(db: DatabaseSync): PendingApprovalView[]
       ? (db.prepare("SELECT title FROM tasks WHERE id = ?").get(approval.taskId) as { title: string } | undefined)
       : undefined;
     let reason: string | null = null;
+    let estimatedCostUsd: number | undefined;
     let provider: string | null = null;
     let roleId: string | null = null;
     try {
-      const context = JSON.parse(approval.context) as { reason?: string; provider?: string; role?: string };
+      const context = JSON.parse(approval.context) as { reason?: string; provider?: string; role?: string; estimatedCostUsd?: unknown };
+      if(typeof context.estimatedCostUsd === "number" && Number.isFinite(context.estimatedCostUsd) && context.estimatedCostUsd >= 0)estimatedCostUsd=context.estimatedCostUsd;
       reason = context.reason ?? null;
       provider = context.provider ?? null;
       roleId = context.role ?? null;
@@ -386,6 +389,7 @@ export function getPendingApprovalsView(db: DatabaseSync): PendingApprovalView[]
       taskTitle: task?.title ?? null,
       requestedBy: approval.requestedBy,
       createdAt: approval.createdAt,
+      ...(estimatedCostUsd === undefined ? {} : {estimatedCostUsd}),
       scopeLabel: approval.taskId ? "This task only" : approval.projectId ? "Entire project" : "Office-wide",
       reason,
       provider,

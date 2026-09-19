@@ -54,6 +54,7 @@ export interface OfficeFloorProjectOption {
 }
 
 export interface OfficeFloorView {
+  interaction?: import("./office-transitions.ts").OfficeInteractionView;
   selectedProject: {
     id: string;
     title: string;

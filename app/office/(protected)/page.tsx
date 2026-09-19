@@ -1,3 +1,6 @@
+import { OfficeCommandTable } from "@/components/ai-office/office-floor/office-cinematic";
+import { getOfficeInteractionView } from "@/lib/ai-office/dashboard/office-interaction-data";
+import { OfficeDestinations, OfficeTransitionFeed } from "@/components/ai-office/office-floor/office-interactions";
 import Link from "next/link";
 import { getOfficeDb } from "@/lib/ai-office/office-db";
 import { readOfficeWorkspaceFile } from "@/lib/ai-office/office-workspace-read";
@@ -59,6 +62,7 @@ export default async function OfficeHomePage({
   const runnerActivity = getRunnerActivityView(db);
   const budget = getBudgetView(db);
   const floor = getOfficeFloorView(db, selectedProjectId);
+  floor.interaction = getOfficeInteractionView(db, floor);
 
   const roles = listAgentRoles(db);
 
@@ -148,6 +152,13 @@ export default async function OfficeHomePage({
           <AgentsList floor={floor} />
         </div>
       </div>
+
+      {floor.interaction && <>
+        <OfficeDestinations view={floor.interaction} />
+        <OfficeCommandTable view={floor.interaction} />
+        <OfficeTransitionFeed view={floor.interaction} />
+        <section id="owner-decisions"><ApprovalsPanel approvals={approvals.filter(a => !a.projectId || a.projectId === floor.selectedProject?.id)} /></section>
+      </>}
 
       {agentDetail && (
         <AgentWorkspace
