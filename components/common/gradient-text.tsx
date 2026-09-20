@@ -7,7 +7,7 @@ export function GradientText({
 }: {
   className?: string;
   children: React.ReactNode;
-  as?: React.ElementType;
+  as?: React.ElementType<{ className?: string; children?: React.ReactNode }, keyof HTMLElementTagNameMap>;
 }) {
   return <Tag className={cn("text-gradient", className)}>{children}</Tag>;
 }

@@ -20,6 +20,7 @@ const eslintConfig = defineConfig([
     ".next-e2e/**",
     ".next-e2e-limited/**",
     ".next-e2e-living/**",
+    ".next-e2e-world/**",
   ]),
 ]);
 

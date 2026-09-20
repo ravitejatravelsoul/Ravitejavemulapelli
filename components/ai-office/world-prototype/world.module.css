@@ -1,0 +1,364 @@
+.world {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: #94a4a6;
+  color: #f1eadb;
+  font-family: Arial, sans-serif;
+  isolation: isolate;
+}
+.world canvas {
+  display: block;
+  outline: none;
+}
+.header {
+  position: absolute;
+  inset: 0 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 26px 34px;
+  background: linear-gradient(#10232bdd, transparent);
+  pointer-events: none;
+}
+.header > div {
+  display: flex;
+  gap: 17px;
+  align-items: center;
+}
+.header b {
+  font-size: 35px;
+  color: #edcba0;
+  font-weight: 400;
+}
+.header span {
+  font-size: 13px;
+  letter-spacing: 0.17em;
+}
+.header small {
+  display: block;
+  font: 9px monospace;
+  letter-spacing: 0.16em;
+  margin-top: 7px;
+  color: #bfcfca;
+}
+.header a {
+  pointer-events: auto;
+  font: 11px monospace;
+  border: 1px solid #cedad855;
+  padding: 11px 15px;
+  border-radius: 3px;
+  background: #152a3377;
+}
+.badge {
+  position: absolute;
+  top: 108px;
+  left: 34px;
+  font: 9px monospace;
+  letter-spacing: 0.14em;
+  background: #1b3039dd;
+  padding: 9px 12px;
+  border-left: 2px solid #e6bc83;
+}
+.badge span {
+  margin-left: 14px;
+  color: #9fb7b7;
+}
+.welcome {
+  position: absolute;
+  left: 7%;
+  top: 29%;
+  width: 430px;
+  padding: 30px 34px;
+  background: linear-gradient(110deg, #10232beb, #10232bc4);
+  border: 1px solid #cbd5c52b;
+  border-radius: 3px;
+  box-shadow: 0 20px 90px #17242c33;
+}
+.eyebrow {
+  font: 9px monospace;
+  letter-spacing: 0.15em;
+  color: #dec49e;
+}
+.welcome h1 {
+  font-size: 48px;
+  line-height: 1.08;
+  font-weight: 400;
+  letter-spacing: -0.04em;
+  margin: 24px 0;
+}
+.welcome > p:not(.eyebrow) {
+  font-size: 13px;
+  line-height: 1.8;
+  color: #b8ccc9;
+}
+.world button {
+  cursor: pointer;
+}
+.welcome button,
+.menu button:first-of-type,
+.info button {
+  display: block;
+  background: #edcf9f;
+  color: #182c34;
+  border: 0;
+  padding: 15px 20px;
+  text-align: left;
+  font: 11px monospace;
+  letter-spacing: 0.07em;
+  width: 100%;
+  margin-top: 24px;
+}
+.welcome button:disabled {
+  opacity: 0.5;
+}
+.welcome small {
+  display: block;
+  font: 10px/1.7 monospace;
+  color: #92acaf;
+  margin-top: 17px;
+}
+.footer {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 20px;
+  padding: 40px 34px 22px;
+  background: linear-gradient(transparent, #142831ed);
+  pointer-events: none;
+}
+.footer strong {
+  font-size: 13px;
+  display: block;
+  font-weight: 400;
+  margin-top: 8px;
+}
+.footer p {
+  font: 10px/2 monospace;
+  color: #dce5dd;
+}
+.footer small {
+  color: #a6bfc2;
+}
+.footer kbd,
+.interact kbd {
+  border: 1px solid #aac6c36b;
+  padding: 3px 5px;
+  border-radius: 2px;
+  font-size: 9px;
+}
+.footer progress {
+  display: block;
+  width: 230px;
+  height: 2px;
+  accent-color: #e4bf8c;
+  margin-top: 10px;
+}
+.metrics {
+  font: 9px/1.6 monospace;
+  color: #b3c5c1;
+  text-align: right;
+}
+.menu,
+.info {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 320px;
+  max-height: 75vh;
+  overflow: auto;
+  background: #142831f5;
+  border: 1px solid #9eb6b15e;
+  padding: 28px;
+  border-radius: 4px;
+  box-shadow: 0 20px 100px #07141ba0;
+}
+.menu h2,
+.info h2 {
+  font-size: 25px;
+  font-weight: 400;
+  margin: 12px 0;
+}
+.menu button {
+  display: block;
+  width: 100%;
+  border: 1px solid #96afb33b;
+  padding: 10px 14px;
+  text-align: left;
+  font: 11px monospace;
+  margin-top: 8px;
+}
+.menu button:first-of-type {
+  margin-top: 16px;
+}
+.menu label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 17px;
+  gap: 10px;
+  font: 10px monospace;
+  color: #bed0cf;
+}
+.menu input {
+  width: 110px;
+  accent-color: #edcf9f;
+}
+.menu select {
+  background: #203743;
+  padding: 5px;
+  color: #d7e3de;
+  max-width: 120px;
+}
+.crosshair {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  height: 4px;
+  width: 4px;
+  border-radius: 50%;
+  background: #fff9e5;
+  box-shadow: 0 0 1px 2px #16313a66;
+  pointer-events: none;
+}
+.interact {
+  position: absolute;
+  top: 58%;
+  left: 50%;
+  transform: translateX(-50%);
+  font: 12px monospace;
+  padding: 12px 17px;
+  background: #142b34e8;
+  border: 1px solid #bdd2cb44;
+}
+.info dt {
+  font: 9px monospace;
+  color: #98b5b7;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-top: 20px;
+}
+.info dd {
+  font-size: 13px;
+  margin: 6px 0;
+  line-height: 1.5;
+}
+.map {
+  position: absolute;
+  top: 25%;
+  right: 3%;
+  background: #152c35f5;
+  border: 1px solid #a1b8b255;
+  width: 320px;
+  padding: 22px;
+}
+.map > div {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 7px;
+  margin: 20px 0;
+}
+.map span,
+.map strong {
+  display: grid;
+  place-content: center;
+  min-height: 60px;
+  border: 1px solid #a8bcbc55;
+  font: 10px/1.5 monospace;
+  text-align: center;
+  padding: 7px;
+}
+.map strong {
+  color: #edd2a4;
+  border-color: #edd2a4;
+}
+.map p:last-child {
+  font: 10px/1.7 monospace;
+  color: #a5bcbd;
+}
+.notice {
+  position: absolute;
+  bottom: 110px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 16px;
+  background: #172c36;
+  border: 1px solid #e6bd8e;
+  width: min(500px, 90%);
+  font-size: 12px;
+}
+.error {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  text-align: center;
+  padding: 30px;
+  background: #172c36;
+}
+.error h1 {
+  font-size: 26px;
+  margin-bottom: 15px;
+}
+.error a {
+  text-decoration: underline;
+  margin-top: 20px;
+}
+.world :is(a, button, input, select):focus-visible {
+  outline: 2px solid #f8d69b;
+  outline-offset: 4px;
+}
+@media (max-width: 700px) {
+  .header {
+    padding: 18px;
+  }
+  .header span {
+    font-size: 10px;
+  }
+  .header a {
+    font-size: 9px;
+    padding: 8px;
+  }
+  .badge {
+    left: 18px;
+    top: 87px;
+  }
+  .welcome {
+    left: 5%;
+    top: 23%;
+    width: 90%;
+    max-width: 380px;
+    padding: 24px;
+  }
+  .welcome h1 {
+    font-size: 38px;
+  }
+  .footer {
+    padding: 20px 18px;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .footer p {
+    font-size: 8px;
+  }
+  .metrics {
+    display: none;
+  }
+  .map {
+    right: 5%;
+    width: 90%;
+    top: 20%;
+    z-index: 2;
+  }
+  .menu {
+    width: 300px;
+  }
+  .badge span {
+    display: none;
+  }
+}
