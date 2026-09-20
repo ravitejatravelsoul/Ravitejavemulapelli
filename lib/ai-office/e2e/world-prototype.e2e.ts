@@ -12,7 +12,7 @@ test(
   { timeout: 360000 },
   async () => {
     const folder = mkdtempSync(join(tmpdir(), "office-world-test-")),
-      evidence = resolve(".data/world-evidence");
+      evidence = resolve(".data/world-modern-v2");
     mkdirSync(evidence, { recursive: true });
     const password = randomBytes(18).toString("hex"),
       salt = randomBytes(16).toString("hex"),
@@ -81,7 +81,9 @@ test(
         .getByRole("link", { name: "3D Prototype", exact: true })
         .click();
       const root = page.getByTestId("world-prototype");
+      const worldStart = Date.now();
       await page.locator("[data-ready=true]").waitFor({ timeout: 45000 });
+      const readyMs = Date.now() - worldStart;
       const state = async () => root.evaluate((e) => e.dataset);
       const shot = async (name: string) => {
         await page.waitForTimeout(250);
@@ -130,7 +132,11 @@ test(
             k,
             Math.min(
               380,
-              Math.max(40, ((Math.abs(dx) > 0.18 ? Math.abs(dx) : Math.abs(dz)) / 2.6) * 650),
+              Math.max(
+                40,
+                ((Math.abs(dx) > 0.18 ? Math.abs(dx) : Math.abs(dz)) / 2.6) *
+                  650,
+              ),
             ),
           );
         }
@@ -248,6 +254,17 @@ test(
       await page.keyboard.press("Escape");
       await page.locator("[data-locked=false]").waitFor();
       assert.equal((await state()).locked, "false");
+      assert.equal(
+        await page.getByLabel("Render quality").inputValue(),
+        "auto",
+      );
+      for (const quality of ["balanced", "high", "auto"]) {
+        await page.getByLabel("Render quality").selectOption(quality);
+        assert.equal(
+          await page.getByLabel("Render quality").inputValue(),
+          quality,
+        );
+      }
       await page
         .getByRole("button", { name: "Resume exploration", exact: false })
         .click();
@@ -279,6 +296,42 @@ test(
         "idle",
         "unmount resets visual-only state",
       );
+      const mobile = await browser.newContext({
+        viewport: { width: 390, height: 844 },
+        isMobile: true,
+        hasTouch: true,
+      });
+      await mobile.addCookies(await page.context().cookies());
+      const phone = await mobile.newPage();
+      await phone.goto(base + "/office/world-prototype");
+      await phone
+        .getByText("A world best explored on desktop.", { exact: true })
+        .waitFor();
+      assert.equal(
+        await phone.locator("canvas").count(),
+        0,
+        "mobile avoids unsupported WASD canvas",
+      );
+      await phone.screenshot({ path: join(evidence, "mobile-fallback.png") });
+      await mobile.close();
+      const unsupported = await chromium.launch({ args: ["--disable-webgl"] });
+      try {
+        const fallback = await unsupported.newPage();
+        await fallback.context().addCookies(await page.context().cookies());
+        await fallback.goto(base + "/office/world-prototype");
+        await fallback
+          .getByRole("heading", { name: "3D view unavailable", exact: true })
+          .waitFor();
+        assert.equal(await fallback.locator("canvas").count(), 0);
+        await fallback
+          .getByRole("link", { name: "Return to Office", exact: true })
+          .waitFor();
+        await fallback.screenshot({
+          path: join(evidence, "webgl-fallback.png"),
+        });
+      } finally {
+        await unsupported.close();
+      }
       assert.deepEqual(errors, []);
       assert.deepEqual(external, [], "no external requests or model calls");
       fps.sort((a, b) => a - b);
@@ -286,6 +339,7 @@ test(
         join(evidence, "browser-report.json"),
         JSON.stringify(
           {
+            readyMs,
             errors,
             externalRequests: external,
             stages: [...stages],

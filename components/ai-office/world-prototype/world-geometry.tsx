@@ -1,441 +1,457 @@
 "use client";
 import { memo, useEffect, useMemo, useRef } from "react";
-import { useFrame, useThree } from "@react-three/fiber";
-import { RoundedBox } from "@react-three/drei";
+import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { WALLS, BOTS, demoBot, type BotId, type Vec3 } from "./world-model";
-export const palette = {
-  ivory: "#d6d2bd",
-  dark: "#263c47",
-  metal: "#536873",
-  copper: "#a87c50",
-  cyan: "#79dad5",
-  floor: "#34464e",
-};
-export function Block({
-  position,
-  size,
-  color = palette.dark,
-  glow = 0,
-  rotation = [0, 0, 0],
-}: {
-  position: Vec3;
-  size: Vec3;
-  color?: string;
-  glow?: number;
-  rotation?: Vec3;
-}) {
+import {
+  Block,
+  Glass,
+  Ring,
+  Sign,
+  Screen,
+  Plant,
+  Console,
+  Reflections,
+  palette,
+} from "./world-surfaces";
+import { Bot, Core, Transfer } from "./world-characters";
+
+function StoneFloor() {
+  const texture = useMemo(() => {
+    const c = document.createElement("canvas");
+    c.width = c.height = 512;
+    const x = c.getContext("2d")!;
+    x.fillStyle = "#c8c8bf";
+    x.fillRect(0, 0, 512, 512);
+    let seed = 37;
+    for (let i = 0; i < 24000; i++) {
+      seed = (seed * 16807) % 2147483647;
+      const px = seed % 512;
+      seed = (seed * 16807) % 2147483647;
+      const py = seed % 512;
+      x.fillStyle = i % 2 ? "#aaaaa609" : "#ffffff16";
+      x.fillRect(px, py, 2, 1);
+    }
+    x.strokeStyle = "#7b858329";
+    x.lineWidth = 1;
+    x.strokeRect(0, 0, 512, 512);
+    const t = new THREE.CanvasTexture(c);
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(8, 9);
+    t.anisotropy = 4;
+    return t;
+  }, []);
+  useEffect(() => () => texture.dispose(), [texture]);
   return (
-    <mesh position={position} rotation={rotation} castShadow receiveShadow>
-      <boxGeometry args={size} />
+    <mesh
+      position={[0, -0.005, 0]}
+      rotation={[-Math.PI / 2, 0, 0]}
+      receiveShadow
+    >
+      <planeGeometry args={[34, 36]} />
       <meshStandardMaterial
-        color={color}
-        roughness={0.55}
-        metalness={0.25}
-        emissive={color}
-        emissiveIntensity={glow}
+        map={texture}
+        roughness={0.36}
+        metalness={0.12}
+        envMapIntensity={0.45}
       />
     </mesh>
   );
 }
-function Pillar({ x, z }: { x: number; z: number }) {
+function Architecture() {
   return (
     <group>
-      <Block
-        position={[x, 2.3, z]}
-        size={[0.28, 4.6, 0.28]}
-        color={palette.ivory}
-      />
-      <Block
-        position={[x, 2.3, z + 0.15]}
-        size={[0.055, 3.4, 0.02]}
-        color="#ffd5a2"
-        glow={2}
-      />
-    </group>
-  );
-}
-/** Original architectural typography baked into local canvas textures, not HTML labels. */
-export function Sign({
-  text,
-  sub = "",
-  position,
-  width = 4,
-  height = 1,
-  color = "#dcefe7",
-  rotation = [0, 0, 0],
-}: {
-  text: string;
-  sub?: string;
-  position: Vec3;
-  width?: number;
-  height?: number;
-  color?: string;
-  rotation?: Vec3;
-}) {
-  const texture = useMemo(() => {
-    const c = document.createElement("canvas");
-    c.width = 1024;
-    c.height = 256;
-    const ctx = c.getContext("2d")!;
-    ctx.fillStyle = "#12232b";
-    ctx.fillRect(0, 0, 1024, 256);
-    ctx.fillStyle = color;
-    ctx.fillRect(36, 32, 5, 188);
-    ctx.font = "500 60px Arial";
-    ctx.fillText(text, 70, 116, 910);
-    ctx.font = "24px monospace";
-    ctx.fillStyle = "#a4b7b7";
-    ctx.fillText(sub, 73, 177, 900);
-    const t = new THREE.CanvasTexture(c);
-    t.colorSpace = THREE.SRGBColorSpace;
-    return t;
-  }, [text, sub, color]);
-  useEffect(() => () => texture.dispose(), [texture]);
-  return (
-    <mesh position={position} rotation={rotation}>
-      <planeGeometry args={[width, height]} />
-      <meshBasicMaterial map={texture} toneMapped={false} />
-    </mesh>
-  );
-}
-function Screen({
-  position,
-  kind = "code",
-  color = "#83e6df",
-  scale = 1,
-  rotation = [0, 0, 0],
-}: {
-  position: Vec3;
-  kind?: string;
-  color?: string;
-  scale?: number;
-  rotation?: Vec3;
-}) {
-  const texture = useMemo(() => {
-    const c = document.createElement("canvas");
-    c.width = 768;
-    c.height = 448;
-    const x = c.getContext("2d")!;
-    x.fillStyle = "#0d202b";
-    x.fillRect(0, 0, 768, 448);
-    x.fillStyle = color;
-    x.font = "24px monospace";
-    x.fillText("T / " + kind.toUpperCase() + "     ·     DEMO", 30, 44);
-    x.strokeStyle = "#31505b";
-    for (let i = 0; i < 9; i++) {
-      x.beginPath();
-      x.moveTo(25, 70 + i * 38);
-      x.lineTo(740, 70 + i * 38);
-      x.stroke();
-    }
-    if (kind === "blueprint" || kind === "overview") {
-      for (let i = 0; i < 8; i++) {
-        const px = 75 + (i % 4) * 175,
-          py = 135 + Math.floor(i / 4) * 180;
-        x.strokeStyle = color;
-        x.strokeRect(px, py, 100, 65);
-        x.beginPath();
-        x.moveTo(px + 100, py + 32);
-        x.lineTo(px + 160, py + 32);
-        x.stroke();
-        x.font = "15px monospace";
-        x.fillText(
-          ["INPUT", "DESIGN", "BUILD", "REVIEW"][i % 4],
-          px + 8,
-          py + 37,
-        );
-      }
-    } else {
-      const words =
-        kind === "planning"
-          ? [
-              "01  DEFINE THE OPPORTUNITY",
-              "02  UNDERSTAND THE OWNER",
-              "03  ORGANIZE THE BRIEF",
-              "04  PLAN THE NEXT STEP",
-              "VISUAL STUDY / NOT LIVE",
-            ]
-          : [
-              "const studio = {",
-              '  purpose: "make something meaningful",',
-              '  mode: "visual prototype",',
-              '  workers: ["PIP", "ARC", "DEX"]',
-              "};",
-              "// original geometry · no execution",
-            ];
-      words.forEach((s, i) => {
-        x.fillStyle = i % 2 ? color : "#d0ddd4";
-        x.font = "19px monospace";
-        x.fillText(s, 35, 112 + i * 42);
-      });
-    }
-    const t = new THREE.CanvasTexture(c);
-    t.colorSpace = THREE.SRGBColorSpace;
-    return t;
-  }, [kind, color]);
-  useEffect(() => () => texture.dispose(), [texture]);
-  return (
-    <group position={position} rotation={rotation} scale={scale}>
-      <Block
-        position={[0, 0, -0.055]}
-        size={[2.16, 1.31, 0.1]}
-        color="#1b2a33"
-      />
-      <mesh>
-        <planeGeometry args={[2.04, 1.19]} />
-        <meshBasicMaterial map={texture} toneMapped={false} />
-      </mesh>
-      <Block position={[0, -0.77, -0.07]} size={[0.07, 0.3, 0.1]} />
-    </group>
-  );
-}
-export function Core({
-  position = [0, 0, 0],
-  color = palette.cyan,
-  scale = 1,
-}: {
-  position?: Vec3;
-  color?: string;
-  scale?: number;
-}) {
-  return (
-    <group position={position} scale={scale}>
-      <RoundedBox args={[0.32, 0.32, 0.32]} radius={0.035} smoothness={2}>
-        <meshStandardMaterial
-          color={color}
-          emissive={color}
-          emissiveIntensity={1.5}
-          metalness={0.3}
-          roughness={0.25}
+      <StoneFloor />
+      {[-12, 12].map((x) => (
+        <Block
+          key={x}
+          position={[x, 0.006, 4.8]}
+          size={[9.7, 0.009, 8.6]}
+          color="#a4ada8"
+          roughness={0.7}
         />
-      </RoundedBox>
+      ))}
+      {[-12, 12].map((x) => (
+        <Block
+          key={x}
+          position={[x, 0.006, -5.7]}
+          size={[9.7, 0.009, 10.2]}
+          color="#a9b5b5"
+          roughness={0.6}
+        />
+      ))}
+      {/* Two elevated galleries frame the open central volume. They are scenic only. */}
+      {[-1, 1].map((side) => (
+        <group key={side}>
+          <Block
+            position={[side * 12, 4.6, -0.5]}
+            size={[10, 0.34, 34]}
+            color={palette.ivory}
+          />
+          <Block
+            position={[side * 11.9, 4.4, -0.5]}
+            size={[9.4, 0.04, 33]}
+            color="#75817f"
+            roughness={0.8}
+          />
+          <Block
+            position={[side * 7.06, 4.4, -0.5]}
+            size={[0.05, 0.035, 33]}
+            color="#f2d9b9"
+            glow={0.8}
+          />
+          <Glass
+            position={[side * 7.08, 5.35, -0.5]}
+            size={[0.06, 1.15, 33]}
+            opacity={0.13}
+          />
+          <Block
+            position={[side * 7.08, 5.95, -0.5]}
+            size={[0.06, 0.055, 33]}
+            color={palette.metal}
+          />
+          {[-14, -6, 3, 12].map((z) => (
+            <group key={z}>
+              <Block
+                position={[side * 15, 6.55, z]}
+                size={[0.09, 3.5, 0.12]}
+                color={palette.metal}
+              />
+              <Glass
+                position={[side * 13, 6.45, z]}
+                size={[4, 3.2, 0.05]}
+                opacity={0.1}
+              />
+              <Block
+                position={[side * 12, 4.95, z + 0.9]}
+                size={[3.4, 0.24, 0.9]}
+                color={palette.dark}
+                rounded
+              />
+              <Block
+                position={[side * 12, 5.75, z + 1.1]}
+                size={[2.8, 0.03, 0.025]}
+                color="#b6dfdf"
+                glow={0.7}
+              />
+            </group>
+          ))}
+          {[-15.8, -7.5, 0.5, 8.5, 16].map((z) => (
+            <group key={z}>
+              <Block
+                position={[side * 16.75, 4.2, z]}
+                size={[0.22, 8.4, 0.24]}
+                color={palette.ivory}
+              />
+              <Block
+                position={[side * 7.1, 2.2, z]}
+                size={[0.16, 4.4, 0.16]}
+                color={palette.ivory}
+              />
+            </group>
+          ))}
+          <Block
+            position={[side * 12, 8.45, 0]}
+            size={[10, 0.28, 36]}
+            color={palette.ivory}
+          />
+          <Block
+            position={[side * 12, 8.29, 0]}
+            size={[0.09, 0.025, 34]}
+            color="#fce9d2"
+            glow={0.8}
+          />
+        </group>
+      ))}
+      {/* High skylight coffers; the center remains transparent to daylight. */}
+      {[-16, -12, -8, -4, 0, 4, 8, 12, 16].map((z) => (
+        <group key={z}>
+          <Block
+            position={[0, 8.35, z]}
+            size={[14, 0.3, 0.17]}
+            color={palette.ivory}
+          />
+          <Block
+            position={[0, 8.17, z]}
+            size={[12, 0.02, 0.055]}
+            color="#fff4e3"
+            glow={0.7}
+          />
+        </group>
+      ))}
+      <Glass position={[0, 8.55, 0]} size={[14, 0.04, 36]} opacity={0.08} />
+      {WALLS.map((w, i) => {
+        const outer = i < 4,
+          height = outer ? 8.4 : 4.2;
+        return (
+          <group key={i}>
+            <Block
+              position={[w.x, 0.08, w.z]}
+              size={[w.w, 0.16, w.d]}
+              color={palette.metal}
+            />
+            <Glass
+              position={[w.x, height / 2, w.z]}
+              size={[w.w, height - 0.25, w.d * 0.3]}
+              opacity={outer ? 0.08 : 0.12}
+            />
+            <Block
+              position={[w.x, height, w.z]}
+              size={[w.w, 0.12, w.d]}
+              color={palette.ivory}
+            />
+            {!outer && (
+              <Block
+                position={[w.x, 1.1, w.z]}
+                size={[w.w, 0.016, w.d * 0.4]}
+                color="#ced8d3"
+              />
+            )}
+          </group>
+        );
+      })}
+      {/* Curved suspended canopy gives the atrium its recognizable silhouette. */}
+      {[5.1, 5.45, 5.8].map((r, i) => (
+        <Ring
+          key={r}
+          position={[0, 6.6 + i * 0.22, 0]}
+          radius={r}
+          tube={i === 1 ? 0.16 : 0.045}
+          color={i === 1 ? palette.ivory : "#dac9af"}
+        />
+      ))}
+      {[-1, 1].map((s) => (
+        <group key={s}>
+          <Block
+            position={[s * 5.8, 0.012, 3]}
+            size={[0.024, 0.01, 22]}
+            color="#a7b9b4"
+          />
+          <Block
+            position={[s * 6.3, 0.018, 3]}
+            size={[0.025, 0.01, 22]}
+            color="#f6e6ce"
+            glow={0.5}
+          />
+        </group>
+      ))}
+      {[-12, 12].flatMap((x) =>
+        [-7, 7].map((z) => (
+          <group key={x + ":" + z}>
+            <Block
+              position={[x, 4.36, z]}
+              size={[5.6, 0.06, 0.055]}
+              color="#fbedd4"
+              glow={0.9}
+            />
+            <Block
+              position={[x, 4.36, z + 1]}
+              size={[5.6, 0.06, 0.055]}
+              color="#fbedd4"
+              glow={0.9}
+            />
+          </group>
+        )),
+      )}
+    </group>
+  );
+}
+function Globe({ active }: { active: boolean }) {
+  const group = useRef<THREE.Group>(null);
+  const dots = useMemo(() => {
+    const points = [];
+    for (let i = 0; i < 1700; i++) {
+      const y = 1 - (2 * i) / 1699,
+        r = Math.sqrt(1 - y * y),
+        a = i * 2.39996;
+      const x = Math.cos(a) * r,
+        z = Math.sin(a) * r;
+      if (Math.sin(x * 9 + z * 4) + Math.cos(y * 8 - z * 6) > -0.2)
+        points.push(x * 1.12, y * 1.12, z * 1.12);
+    }
+    return new Float32Array(points);
+  }, []);
+  useFrame((_, dt) => {
+    if (group.current && active) group.current.rotation.y += dt * 0.075;
+  });
+  return (
+    <group ref={group}>
       <mesh>
-        <boxGeometry args={[0.45, 0.45, 0.45]} />
-        <meshBasicMaterial color={color} wireframe transparent opacity={0.7} />
+        <sphereGeometry args={[1.09, 40, 24]} />
+        <meshPhysicalMaterial
+          color="#237575"
+          transparent
+          opacity={0.35}
+          roughness={0.12}
+          metalness={0.55}
+          depthWrite={false}
+        />
       </mesh>
-      <mesh rotation={[0.5, 0.7, 0.3]}>
-        <octahedronGeometry args={[0.35]} />
-        <meshBasicMaterial color="#fff8d8" wireframe />
-      </mesh>
+      <points>
+        <bufferGeometry>
+          <bufferAttribute attach="attributes-position" args={[dots, 3]} />
+        </bufferGeometry>
+        <pointsMaterial
+          color="#398f99"
+          size={0.025}
+          transparent
+          opacity={0.8}
+        />
+      </points>
+      {[0, Math.PI / 3, (Math.PI * 2) / 3].map((a) => (
+        <Ring
+          key={a}
+          radius={1.13}
+          tube={0.004}
+          rotation={[0, a, 0]}
+          color="#7abbbc"
+        />
+      ))}
+      <Ring radius={1.13} tube={0.006} />
+      <Core scale={1.1} active={active} />
     </group>
   );
 }
 function Atrium({ active }: { active: boolean }) {
-  const rings = useRef<THREE.Group>(null),
-    core = useRef<THREE.Group>(null);
+  const orbit = useRef<THREE.Group>(null);
   useFrame((_, dt) => {
-    if (active) {
-      if (rings.current) rings.current.rotation.y += dt * 0.13;
-      if (core.current) {
-        core.current.rotation.y += dt * 0.23;
-        core.current.rotation.z = Math.sin(core.current.rotation.y) * 0.12;
-      }
-    }
+    if (orbit.current && active) orbit.current.rotation.y += dt * 0.08;
   });
   return (
     <group>
-      <mesh position={[0, 0.18, 0]} receiveShadow>
-        <cylinderGeometry args={[2.75, 2.95, 0.36, 64]} />
-        <meshStandardMaterial
-          color="#253f48"
-          metalness={0.6}
-          roughness={0.35}
-        />
+      <mesh
+        position={[0, 0.012, 0]}
+        rotation={[-Math.PI / 2, 0, 0]}
+        receiveShadow
+      >
+        <ringGeometry args={[2.35, 4.25, 96]} />
+        <meshStandardMaterial color="#7c8d8e" metalness={0.4} roughness={0.4} />
       </mesh>
-      <mesh position={[0, 0.75, 0]}>
-        <cylinderGeometry args={[2.1, 2.35, 0.95, 48]} />
-        <meshStandardMaterial
-          color={palette.ivory}
-          metalness={0.25}
-          roughness={0.45}
-        />
-      </mesh>
-      <mesh position={[0, 1.25, 0]}>
-        <cylinderGeometry args={[2.18, 2.18, 0.08, 64]} />
-        <meshStandardMaterial
-          color="#152d38"
-          metalness={0.5}
-          roughness={0.25}
-        />
-      </mesh>
-      {[2.25, 2.8, 5.7].map((r, i) => (
-        <mesh
+      {[2.34, 3.9, 4.25].map((r) => (
+        <Ring
           key={r}
-          position={[0, i === 2 ? 4.5 : 0.04, 0]}
-          rotation={[Math.PI / 2, 0, 0]}
-        >
-          <torusGeometry args={[r, 0.025, 6, 80]} />
-          <meshBasicMaterial color={i === 2 ? "#ffe2b9" : palette.cyan} />
+          position={[0, 0.026, 0]}
+          radius={r}
+          tube={0.012}
+          color={r === 3.9 ? "#e8d4b6" : "#8aafae"}
+        />
+      ))}
+      <mesh position={[0, 0.2, 0]} castShadow receiveShadow>
+        <cylinderGeometry args={[2.25, 2.3, 0.4, 96]} />
+        <meshStandardMaterial color="#dddcd2" roughness={0.5} />
+      </mesh>
+      <mesh position={[0, 0.66, 0]} castShadow>
+        <cylinderGeometry args={[1.45, 1.9, 0.72, 96]} />
+        <meshStandardMaterial
+          color={palette.dark}
+          metalness={0.8}
+          roughness={0.22}
+        />
+      </mesh>
+      <mesh position={[0, 1.02, 0]}>
+        <cylinderGeometry args={[1.56, 1.5, 0.12, 96]} />
+        <meshStandardMaterial
+          color="#a0b4b2"
+          metalness={0.85}
+          roughness={0.27}
+        />
+      </mesh>
+      <Ring position={[0, 1.09, 0]} radius={1.47} tube={0.016} />
+      <group position={[0, 2.8, 0]}>
+        <Globe active={active} />
+      </group>
+      <group ref={orbit} position={[0, 2.8, 0]}>
+        <Ring radius={1.65} rotation={[1.15, 0, 0.35]} tube={0.012} />
+        <Ring
+          radius={1.85}
+          rotation={[1.9, 0, -0.25]}
+          color="#b7c5c2"
+          tube={0.01}
+        />
+        <mesh position={[1.85, 0, 0]}>
+          <sphereGeometry args={[0.04, 12, 8]} />
+          <meshBasicMaterial color="#e5ffff" />
+        </mesh>
+      </group>
+      <Sign
+        position={[0, 0.68, 1.86]}
+        text="ORCHESTRATOR"
+        sub="SHARED INTELLIGENCE / VISUAL CORE"
+        color="#d7e7e3"
+        width={2.4}
+        height={0.5}
+      />
+      <Screen
+        position={[0, 1.03, 1.48]}
+        rotation={[-0.8, 0, 0]}
+        kind="overview"
+        scale={0.47}
+      />
+      <pointLight
+        position={[0, 2.4, 0]}
+        color="#7cd6d1"
+        intensity={6}
+        distance={6}
+      />
+    </group>
+  );
+}
+function Topology({ active, color }: { active: boolean; color: string }) {
+  const root = useRef<THREE.Group>(null);
+  const nodes = useMemo(
+    () =>
+      [
+        [0, 0.4, 0],
+        [-0.6, 0, -0.1],
+        [0.6, 0, -0.1],
+        [-0.8, -0.45, 0.1],
+        [0, -0.45, 0.15],
+        [0.8, -0.45, 0.1],
+      ] as Vec3[],
+    [],
+  );
+  const lines = useMemo(
+    () =>
+      new Float32Array(
+        [
+          [0, 1],
+          [0, 2],
+          [1, 3],
+          [1, 4],
+          [2, 4],
+          [2, 5],
+        ].flatMap(([a, b]) => [...nodes[a], ...nodes[b]]),
+      ),
+    [nodes],
+  );
+  useFrame((_, dt) => {
+    if (root.current && active) root.current.rotation.y += dt * 0.13;
+  });
+  return (
+    <group ref={root}>
+      <lineSegments>
+        <bufferGeometry>
+          <bufferAttribute attach="attributes-position" args={[lines, 3]} />
+        </bufferGeometry>
+        <lineBasicMaterial color={color} transparent opacity={0.65} />
+      </lineSegments>
+      {nodes.map((p, i) => (
+        <mesh key={i} position={p}>
+          <octahedronGeometry args={[0.095]} />
+          <meshStandardMaterial
+            color={color}
+            emissive={color}
+            emissiveIntensity={0.25}
+            metalness={0.5}
+            roughness={0.3}
+          />
         </mesh>
       ))}
-      <group ref={rings} position={[0, 2.6, 0]}>
-        {[0, 1, 2].map((i) => (
-          <mesh key={i} rotation={[Math.PI / 2 + i * 0.32, 0.4 * i, 0]}>
-            <torusGeometry args={[1 + i * 0.25, 0.018, 6, 64]} />
-            <meshBasicMaterial
-              color={i === 1 ? "#e4bb83" : palette.cyan}
-              transparent
-              opacity={0.7}
-            />
-          </mesh>
-        ))}
-      </group>
-      <group ref={core} position={[0, 2.6, 0]}>
-        <Core scale={1.6} />
-      </group>
-      {Array.from({ length: 8 }, (_, i) => {
-        const a = (i * Math.PI) / 4;
-        return (
-          <group
-            key={i}
-            position={[Math.sin(a) * 1.65, 1.8, Math.cos(a) * 1.65]}
-          >
-            <Core scale={0.22} color={i % 2 ? palette.cyan : "#eac390"} />
-            <mesh rotation={[0, 0, a]}>
-              <cylinderGeometry args={[0.012, 0.012, 0.65, 5]} />
-              <meshBasicMaterial color={palette.cyan} />
-            </mesh>
-          </group>
-        );
-      })}
-      <Sign
-        position={[0, 0.82, 2.36]}
-        width={2.5}
-        height={0.55}
-        text="ORCHESTRATOR"
-        sub="COMMAND CORE / VISUAL STUDY"
-      />
-      <Sign
-        position={[0, 4.08, -6.9]}
-        width={5}
-        text="THE NEXUS"
-        sub="TEJA’S AUTONOMOUS ENGINEERING HEADQUARTERS"
-        color="#edcfa8"
-      />
     </group>
   );
 }
-function Station({ id }: { id: BotId }) {
-  const bot = BOTS[id],
-    x = bot.home[0],
-    z = id === "architect" ? -8 : 7;
-  // Bots dock on the clear side of desks. Screens face the room, with engineering reversed.
-  return (
-    <group>
-      <Block
-        position={[x, 0.96, z]}
-        size={[4.8, 0.18, 1.3]}
-        color={palette.ivory}
-      />
-      <Block
-        position={[x, 0.82, z + 0.53]}
-        size={[4.65, 0.06, 0.08]}
-        color={bot.color}
-        glow={1.4}
-      />
-      {[-1.9, 1.9].map((dx) => (
-        <Block
-          key={dx}
-          position={[x + dx, 0.45, z]}
-          size={[0.22, 0.9, 1.1]}
-          color={palette.metal}
-        />
-      ))}
-      <group
-        position={[x, 1.76, z]}
-        rotation={[0, id === "architect" ? 0 : Math.PI, 0]}
-      >
-        <Screen
-          position={[0, 0, 0]}
-          kind={
-            id === "product"
-              ? "planning"
-              : id === "architect"
-                ? "blueprint"
-                : "code"
-          }
-          color={bot.color}
-        />
-        {id === "developer" && (
-          <>
-            <Screen
-              position={[-1.55, 0, 0.35]}
-              rotation={[0, 0.45, 0]}
-              scale={0.6}
-              color={bot.color}
-            />
-            <Screen
-              position={[1.55, 0, 0.35]}
-              rotation={[0, -0.45, 0]}
-              scale={0.6}
-              color={bot.color}
-            />
-          </>
-        )}
-        {id === "product" && (
-          <Screen
-            position={[1.75, 0.1, 0.25]}
-            rotation={[0, -0.2, 0]}
-            scale={0.55}
-            kind="planning"
-            color={bot.color}
-          />
-        )}
-        {id === "architect" && (
-          <group position={[1.5, 0.05, 0.15]}>
-            <mesh>
-              <icosahedronGeometry args={[0.5, 0]} />
-              <meshBasicMaterial color={bot.color} wireframe />
-            </mesh>
-          </group>
-        )}
-      </group>
-      <mesh position={[x, 0.02, bot.home[2]]} rotation={[-Math.PI / 2, 0, 0]}>
-        <ringGeometry args={[0.68, 0.73, 48]} />
-        <meshBasicMaterial color={bot.color} />
-      </mesh>
-      <Block
-        position={[x, 0.08, bot.home[2]]}
-        size={[1.15, 0.13, 1.15]}
-        color="#2d424b"
-      />
-    </group>
-  );
-}
-function ServerRack({ x }: { x: number }) {
-  return (
-    <group position={[x, 0, -7.5]}>
-      <Block position={[0, 1.45, 0]} size={[1.6, 2.9, 2.4]} color="#172c36" />
-      {Array.from({ length: 9 }, (_, i) => (
-        <group key={i}>
-          <Block
-            position={[0, 0.3 + i * 0.28, 1.21]}
-            size={[1.35, 0.19, 0.025]}
-            color="#3c5360"
-          />
-          {[0, 1, 2].map((j) => (
-            <Block
-              key={j}
-              position={[-0.46 + j * 0.13, 0.3 + i * 0.28, 1.235]}
-              size={[0.04, 0.035, 0.012]}
-              color={j === 2 ? "#e6bc80" : "#6ed7bc"}
-              glow={1.3}
-            />
-          ))}
-        </group>
-      ))}
-      <Sign
-        position={[0, 2.7, 1.225]}
-        text="N / 0"
-        sub="DEMO INFRASTRUCTURE"
-        width={1.35}
-        height={0.25}
-      />
-    </group>
-  );
-}
-function Bot({
+function Station({
   id,
   time,
   active,
@@ -444,302 +460,534 @@ function Bot({
   time: React.RefObject<number | null>;
   active: boolean;
 }) {
-  const root = useRef<THREE.Group>(null),
-    body = useRef<THREE.Group>(null),
-    arms = useRef<THREE.Group>(null),
-    carry = useRef<THREE.Group>(null),
-    ring = useRef<THREE.Group>(null);
-  const elapsed = useRef(0),
-    last = useRef(new THREE.Vector3(...BOTS[id].home)),
-    yaw = useRef(id === "architect" ? Math.PI : 0);
-  const b = BOTS[id];
-  const camera = useThree((state) => state.camera);
-  useEffect(() => {
-    root.current?.traverse((o) => {
-      if (o instanceof THREE.Mesh) o.castShadow = false;
-    });
-  }, []);
+  const b = BOTS[id],
+    arch = id === "architect",
+    x = b.home[0],
+    z = arch ? -8 : 7,
+    reactive = useRef<THREE.Group>(null),
+    scan = useRef<THREE.Mesh>(null),
+    light = useRef<THREE.PointLight>(null),
+    clock = useRef(0);
   useFrame((_, dt) => {
-    if (!root.current || !body.current) return;
-    const sample = demoBot(id, time.current);
-    const p = sample.position;
-    root.current.position.set(...p);
-    if (active) elapsed.current += dt;
-    body.current.position.y = active
-      ? Math.sin(elapsed.current * 1.9 + id.length) * 0.035
-      : 0;
-    const dx = p[0] - last.current.x,
-      dz = p[2] - last.current.z;
-    if (Math.hypot(dx, dz) > 0.001) yaw.current = Math.atan2(dx, dz);
-    else if (sample.state === "WORKING")
-      yaw.current = id === "architect" ? Math.PI : 0;
-    else if (sample.state === "HANDOFF" || sample.state === "INTERACTING") {
-      const other =
-        id === "product"
-          ? "architect"
-          : id === "developer"
-            ? "architect"
-            : (time.current ?? 0) < 25
-              ? "product"
-              : "developer";
-      const target = demoBot(other, time.current).position;
-      yaw.current = Math.atan2(target[0] - p[0], target[2] - p[2]);
+    if (active) clock.current += dt;
+    const working = demoBot(id, time.current).state === "WORKING";
+    if (reactive.current) {
+      const target = working ? 1 : 0.88;
+      reactive.current.scale.y = THREE.MathUtils.damp(
+        reactive.current.scale.y,
+        target,
+        3,
+        dt,
+      );
+      reactive.current.position.y = Math.sin(clock.current * 0.7) * 0.014;
     }
-    if (
-      sample.state === "IDLE" &&
-      Math.hypot(camera.position.x - p[0], camera.position.z - p[2]) < 4
-    ) {
-      yaw.current = Math.atan2(
-        camera.position.x - p[0],
-        camera.position.z - p[2],
+    if (light.current) light.current.intensity = working ? 7 : 1.4;
+    if (scan.current) {
+      scan.current.visible = working;
+      scan.current.position.y = 1.45 + ((clock.current * 0.22) % 1.3);
+    }
+  });
+  return (
+    <group>
+      <group position={[x, 0, z]} rotation={[0, arch ? 0 : Math.PI, 0]}>
+        <Console position={[0, 0, 0]} />
+        <group ref={reactive}>
+          <mesh ref={scan} position={[0, 1.45, -0.255]} visible={false}>
+            <planeGeometry args={[3.05, 0.012]} />
+            <meshBasicMaterial color={b.color} transparent opacity={0.65} />
+          </mesh>
+          <Screen
+            position={[0, 2.12, -0.27]}
+            scale={1.2}
+            kind={arch ? "blueprint" : id === "product" ? "planning" : "code"}
+            color={b.color}
+          />
+          <Screen
+            position={[-2.05, 1.9, 0.08]}
+            rotation={[0, 0.32, 0]}
+            scale={0.49}
+            kind={arch ? "overview" : "planning"}
+            color={b.color}
+          />
+          <Screen
+            position={[2.05, 1.9, 0.08]}
+            rotation={[0, -0.32, 0]}
+            scale={0.49}
+            kind={arch ? "blueprint" : "code"}
+            color={b.color}
+          />
+          <Glass
+            position={[0, 2.13, -0.32]}
+            size={[3.5, 2, 0.02]}
+            opacity={0.1}
+          />
+          {arch && (
+            <group position={[0, 3.28, -0.2]}>
+              <Topology color={b.color} active={active} />
+              <Ring radius={0.47} tube={0.006} color={b.color} />
+            </group>
+          )}
+        </group>
+        <pointLight
+          ref={light}
+          position={[0, 2, 0.7]}
+          color={b.color}
+          intensity={1.4}
+          distance={5}
+        />
+        <Block
+          position={[0, 0.1, 0]}
+          size={[4.5, 0.06, 1.2]}
+          color={palette.metal}
+          rounded
+        />
+      </group>
+      <mesh position={[b.home[0], 0.025, b.home[2]]} receiveShadow>
+        <cylinderGeometry args={[0.68, 0.73, 0.05, 48]} />
+        <meshStandardMaterial
+          color="#9aaaa8"
+          metalness={0.65}
+          roughness={0.36}
+        />
+      </mesh>
+      <Ring
+        position={[b.home[0], 0.06, b.home[2]]}
+        radius={0.58}
+        tube={0.008}
+        color={b.color}
+      />
+      <Sign
+        position={[x, 3.75, arch ? -10.76 : 9.7]}
+        rotation={[0, arch ? 0 : Math.PI, 0]}
+        color="#d5e0db"
+        text={
+          arch
+            ? "02  /  ARCHITECTURE"
+            : id === "product"
+              ? "01  /  PRODUCT & RESEARCH"
+              : "03  /  ENGINEERING"
+        }
+        sub={
+          arch
+            ? "SYSTEMS OF POSSIBILITY"
+            : id === "product"
+              ? "IDEAS WITH INTENTION"
+              : "CRAFT THE NEXT"
+        }
+        width={4.6}
+        height={0.62}
+      />
+      <Bot id={id} time={time} active={active} />
+    </group>
+  );
+}
+function GreenWall() {
+  const ref = useRef<THREE.InstancedMesh>(null);
+  useEffect(() => {
+    const matrix = new THREE.Matrix4();
+    for (let i = 0; i < 240; i++) {
+      const x = -14.5 + (i % 24) * 0.22,
+        y = 1.25 + Math.floor(i / 24) * 0.22;
+      matrix.compose(
+        new THREE.Vector3(x, y, 16.93 + Math.sin(i * 2) * 0.07),
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(i, 0, i * 0.7)),
+        new THREE.Vector3(0.17, 0.15, 0.08),
+      );
+      ref.current!.setMatrixAt(i, matrix);
+      ref.current!.setColorAt(
+        i,
+        new THREE.Color(
+          i % 3 === 0 ? "#72865a" : i % 2 ? "#345647" : "#4c6d4b",
+        ),
       );
     }
-    const difference = Math.atan2(
-      Math.sin(yaw.current - root.current.rotation.y),
-      Math.cos(yaw.current - root.current.rotation.y),
-    );
-    root.current.rotation.y += difference * Math.min(1, dt * 6);
-    last.current.set(...p);
-    if (arms.current)
-      arms.current.rotation.x =
-        sample.state === "WORKING" ? Math.sin(elapsed.current * 5) * 0.13 : 0;
-    if (ring.current && active) ring.current.rotation.z += dt * 0.35;
-    if (carry.current) carry.current.visible = sample.carry;
-  });
-  return (
-    <group ref={root} position={b.home}>
-      <group ref={body}>
-        <RoundedBox
-          args={
-            id === "architect"
-              ? [0.83, 0.6, 0.62]
-              : id === "developer"
-                ? [0.66, 0.65, 0.63]
-                : [0.73, 0.65, 0.65]
-          }
-          radius={0.12}
-          smoothness={3}
-        >
-          <meshStandardMaterial
-            color={id === "developer" ? "#667184" : "#e6dec6"}
-            metalness={0.45}
-            roughness={0.32}
-          />
-        </RoundedBox>
-        <RoundedBox
-          position={[0, 0.04, 0.32]}
-          args={[0.58, 0.28, 0.045]}
-          radius={0.045}
-          smoothness={2}
-        >
-          <meshStandardMaterial
-            color="#0b202b"
-            metalness={0.4}
-            roughness={0.25}
-          />
-        </RoundedBox>
-        {[-0.14, 0.14].map((x) => (
-          <Block
-            key={x}
-            position={[x, 0.055, 0.35]}
-            size={[id === "architect" ? 0.14 : 0.07, 0.06, 0.02]}
-            color={b.color}
-            glow={2}
-          />
-        ))}
-        <Block
-          position={[0, -0.17, 0.337]}
-          size={[0.15, 0.018, 0.014]}
-          color={b.color}
-          glow={1}
-        />
-        <mesh position={[0, -0.37, 0]}>
-          <cylinderGeometry args={[0.2, 0.12, 0.15, 16]} />
-          <meshStandardMaterial color="#293e49" />
-        </mesh>
-        <mesh position={[0, -0.46, 0]} rotation={[Math.PI / 2, 0, 0]}>
-          <torusGeometry args={[0.13, 0.022, 6, 20]} />
-          <meshBasicMaterial color={b.color} />
-        </mesh>
-        <group ref={arms}>
-          {[-1, 1].map((s) => (
-            <group
-              key={s}
-              position={[s * 0.43, -0.08, 0]}
-              rotation={[0, 0, s * 0.25]}
-            >
-              <Block
-                position={[0, -0.07, 0]}
-                size={[0.12, 0.32, 0.15]}
-                color={palette.metal}
-              />
-              <mesh position={[0, -0.25, 0.1]}>
-                <sphereGeometry args={[0.09, 10, 8]} />
-                <meshStandardMaterial color={b.color} metalness={0.6} />
-              </mesh>
-              {id === "developer" && (
-                <Block
-                  position={[0, -0.22, 0.26]}
-                  size={[0.06, 0.07, 0.34]}
-                  color={palette.ivory}
-                />
-              )}
-            </group>
-          ))}
-        </group>
-        {id === "product" && (
-          <>
-            <Block
-              position={[0.22, 0.43, 0]}
-              size={[0.035, 0.28, 0.035]}
-              color={palette.copper}
-            />
-            <mesh position={[0.22, 0.61, 0]}>
-              <sphereGeometry args={[0.06, 12, 8]} />
-              <meshBasicMaterial color={b.color} />
-            </mesh>
-            <Block
-              position={[-0.55, 0.1, 0.14]}
-              size={[0.18, 0.35, 0.045]}
-              color={b.color}
-              glow={0.4}
-            />
-            <Block
-              position={[-0.58, 0.15, 0.07]}
-              size={[0.18, 0.35, 0.025]}
-              color="#61717b"
-            />
-          </>
-        )}
-        {id === "architect" && (
-          <group ref={ring} rotation={[0.35, 0, 0]}>
-            <mesh>
-              <torusGeometry args={[0.59, 0.021, 6, 48]} />
-              <meshStandardMaterial
-                color={b.color}
-                emissive={b.color}
-                emissiveIntensity={0.4}
-              />
-            </mesh>
-            <mesh position={[0.59, 0, 0]}>
-              <octahedronGeometry args={[0.1]} />
-              <meshBasicMaterial color={b.color} />
-            </mesh>
-          </group>
-        )}
-        {id === "developer" && (
-          <>
-            <Block
-              position={[0, 0.37, -0.02]}
-              size={[0.36, 0.09, 0.38]}
-              color={palette.copper}
-            />
-            {[-1, 1].map((s) => (
-              <Block
-                key={s}
-                position={[s * 0.38, 0.18, 0.22]}
-                size={[0.1, 0.15, 0.13]}
-                color={b.color}
-                glow={0.3}
-              />
-            ))}
-          </>
-        )}
-        <group ref={carry} position={[0, -0.05, 0.78]}>
-          <Core color={b.color} scale={0.65} />
-        </group>
-      </group>
-    </group>
-  );
-}
-function Transfer({ time }: { time: React.RefObject<number | null> }) {
-  const root = useRef<THREE.Group>(null);
-  useFrame(() => {
-    if (!root.current) return;
-    const t = time.current ?? -1;
-    root.current.visible = (t >= 15 && t < 18) || (t >= 38 && t < 41);
-    if (!root.current.visible) return;
-    const first = t < 18,
-      f = (t - (first ? 15 : 38)) / 3;
-    const a = demoBot(first ? "product" : "architect", t).position,
-      b = demoBot(first ? "architect" : "developer", t).position;
-    root.current.position.set(
-      a[0] + (b[0] - a[0]) * f,
-      1.5 + Math.sin(f * Math.PI) * 0.32,
-      a[2] + (b[2] - a[2]) * f + 0.4,
-    );
-    root.current.rotation.y = f * Math.PI * 2;
-  });
-  return (
-    <group ref={root} visible={false}>
-      <Core color="#ffe1a2" scale={0.8} />
-    </group>
-  );
-}
-function Ceiling() {
-  const shape = useMemo(() => {
-    const s = new THREE.Shape();
-    s.moveTo(-17, -18);
-    s.lineTo(17, -18);
-    s.lineTo(17, 18);
-    s.lineTo(-17, 18);
-    s.closePath();
-    const hole = new THREE.Path();
-    hole.absarc(0, 0, 6.1, 0, Math.PI * 2, true);
-    s.holes.push(hole);
-    return s;
+    ref.current!.instanceMatrix.needsUpdate = true;
+    ref.current!.computeBoundingSphere();
+    if (ref.current!.instanceColor)
+      ref.current!.instanceColor.needsUpdate = true;
   }, []);
   return (
     <group>
-      <mesh position={[0, 4.65, 0]} rotation={[Math.PI / 2, 0, 0]}>
-        <shapeGeometry args={[shape]} />
-        <meshStandardMaterial
-          color="#718080"
-          emissive="#536563"
-          emissiveIntensity={0.3}
-          side={THREE.DoubleSide}
-          roughness={0.85}
+      <Block
+        position={[-12, 2.1, 17.1]}
+        size={[5.6, 2.75, 0.2]}
+        color="#3d5646"
+        rounded
+      />
+      <instancedMesh ref={ref} args={[undefined, undefined, 240]}>
+        <sphereGeometry args={[1, 8, 6]} />
+        <meshStandardMaterial roughness={0.85} />
+      </instancedMesh>
+    </group>
+  );
+}
+function Lounge({
+  position,
+  rotation = 0,
+}: {
+  position: Vec3;
+  rotation?: number;
+}) {
+  return (
+    <group position={position} rotation={[0, rotation, 0]}>
+      <Block
+        position={[0, 0.29, 0]}
+        size={[2.6, 0.18, 1.15]}
+        color={palette.dark}
+        rounded
+      />
+      <Block
+        position={[0, 0.53, 0.05]}
+        size={[2.5, 0.32, 1.05]}
+        color="#b6b0a0"
+        rounded
+        roughness={0.95}
+      />
+      <Block
+        position={[0, 0.88, -0.44]}
+        size={[2.5, 0.68, 0.22]}
+        color="#b6b0a0"
+        rounded
+        roughness={0.95}
+      />
+      {[-1, 1].map((s) => (
+        <Block
+          key={s}
+          position={[s * 1.25, 0.7, 0]}
+          size={[0.18, 0.48, 1.08]}
+          color="#8b745b"
+          rounded
+          roughness={0.7}
         />
+      ))}
+    </group>
+  );
+}
+function Reception() {
+  return (
+    <group>
+      <Sign
+        position={[0, 4, 8.835]}
+        text="TEJA’S AI OFFICE"
+        sub="AUTONOMOUS ENGINEERING HEADQUARTERS"
+        width={6.5}
+        height={0.95}
+      />
+      <Block
+        position={[0, 4.03, 8.76]}
+        size={[7.5, 1.4, 0.12]}
+        color={palette.ivory}
+        rounded
+      />
+      <Block
+        position={[0, 4.74, 8.76]}
+        size={[7, 0.025, 0.14]}
+        color="#e5cfac"
+        glow={0.6}
+      />
+      <GreenWall />
+      <Console position={[-12, 0, 15]} width={4.9} />
+      <Sign
+        position={[-12, 0.58, 15.63]}
+        text="T / WELCOME"
+        sub="PEOPLE + AI — A BRIGHTER TOMORROW"
+        width={3.9}
+        height={0.62}
+        color="#c1d5d1"
+      />
+      <Screen
+        position={[-12, 2.5, 16.72]}
+        rotation={[0, Math.PI, 0]}
+        kind="overview"
+        scale={0.9}
+      />
+      <Lounge position={[12, 0, 15.7]} />
+      <Lounge position={[15.5, 0, 13.6]} rotation={-Math.PI / 2} />
+      <mesh position={[12, 0.013, 14.2]} rotation={[-Math.PI / 2, 0, 0]}>
+        <circleGeometry args={[2.8, 48]} />
+        <meshStandardMaterial color="#a9ada6" roughness={1} />
       </mesh>
-      {Array.from({ length: 16 }, (_, i) => {
-        const a = (i / 16) * Math.PI * 2;
-        return (
-          <group key={i} rotation={[0, a, 0]}>
+      <Plant position={[15.6, 0, 10]} />
+      <Plant position={[-15.6, 0, 10]} />
+      <Sign
+        position={[12, 2.8, 17.75]}
+        rotation={[0, Math.PI, 0]}
+        text="A BRIGHTER TOMORROW"
+        sub="HUMAN AMBITION. SHARED INTELLIGENCE."
+        width={5.5}
+        height={0.65}
+      />
+    </group>
+  );
+}
+function Infrastructure({ active }: { active: boolean }) {
+  const pulses = useRef<THREE.Group>(null),
+    elapsed = useRef(0);
+  useFrame((_, dt) => {
+    if (active) elapsed.current += dt;
+    if (pulses.current)
+      pulses.current.position.y = Math.sin(elapsed.current * 0.6) * 0.12;
+  });
+  return (
+    <group>
+      <Sign
+        position={[12, 3.75, -10.78]}
+        color="#d5e0db"
+        text="04 / INFRASTRUCTURE"
+        sub="OFFICE ENGINEER / FUTURE HOME"
+        width={4.6}
+        height={0.62}
+      />
+      {[10, 13, 15.7].map((x, i) => (
+        <group key={x} position={[x, 0, -7.5]}>
+          <Block
+            position={[0, 0.16, 0]}
+            size={[1.6, 0.32, 2.4]}
+            color={palette.ivory}
+            rounded
+          />
+          <Block
+            position={[0, 2.95, 0]}
+            size={[1.6, 0.12, 2.4]}
+            color={palette.metal}
+            rounded
+          />
+          <Glass
+            position={[0, 1.62, 0]}
+            size={[1.52, 2.6, 2.3]}
+            opacity={0.18}
+          />
+          {[-0.73, 0.73].map((s) => (
             <Block
-              position={[0, 4.55, 5.7]}
-              size={[0.08, 0.2, 1.1]}
-              color={palette.copper}
+              key={s}
+              position={[s, 1.55, 1.15]}
+              size={[0.065, 2.7, 0.065]}
+              color={palette.metal}
             />
+          ))}
+          {[0, 1, 2, 3, 4, 5].map((j) => (
+            <group key={j}>
+              <Block
+                position={[0, 0.55 + j * 0.38, 0]}
+                size={[1.25, 0.22, 1.85]}
+                color="#394e57"
+                rounded
+              />
+              <Block
+                position={[0, 0.55 + j * 0.38, 0.94]}
+                size={[0.82, 0.015, 0.02]}
+                color="#74dace"
+                glow={0.5}
+              />
+            </group>
+          ))}
+          <Sign
+            position={[0, 2.77, 1.17]}
+            text={"NODE / 0" + (i + 1)}
+            width={1.2}
+            height={0.23}
+          />
+        </group>
+      ))}
+      <group ref={pulses}>
+        {[10, 13, 15.7].map((x) => (
+          <Block
+            key={x}
+            position={[x, 1.6, -6.3]}
+            size={[0.06, 1.6, 0.01]}
+            color="#aeede2"
+            glow={0.6}
+          />
+        ))}
+      </group>
+      <Block
+        position={[12.8, 0.018, -5.9]}
+        size={[6.3, 0.015, 0.023]}
+        color="#73aba8"
+        glow={0.4}
+      />
+      <Sign
+        position={[12, 3.32, -10.76]}
+        color="#d5e0db"
+        text="QUIETLY POWERING POSSIBILITY"
+        width={3.5}
+        height={0.32}
+      />
+    </group>
+  );
+}
+function BackRooms({ active }: { active: boolean }) {
+  return (
+    <group>
+      {/* Oak slats and panoramic display distinguish the human owner's suite. */}
+      <Block
+        position={[0, 1.9, -17.85]}
+        size={[12.8, 3.8, 0.12]}
+        color="#937e65"
+        roughness={0.8}
+      />
+      {Array.from({ length: 29 }, (_, i) => (
+        <Block
+          key={i}
+          position={[-6.1 + i * 0.435, 1.9, -17.74]}
+          size={[0.07, 3.8, 0.08]}
+          color="#b19a79"
+          roughness={0.7}
+        />
+      ))}
+      <Screen position={[0, 2.15, -17.57]} kind="overview" scale={1.72} wide />
+      <Sign
+        position={[0, 4, -17.57]}
+        text="TEJA / OWNER COMMAND"
+        sub="HUMAN VISION. AMPLIFIED."
+        width={5.3}
+        height={0.63}
+      />
+      <Console position={[0, 0, -15]} width={4.9} />
+      <Lounge position={[4.5, 0, -15.8]} rotation={-Math.PI / 2} />
+      <Plant position={[-5.8, 0, -16.8]} scale={1.15} />
+      <Block
+        position={[12, 0.008, -14.5]}
+        size={[9.8, 0.015, 6.7]}
+        color="#435259"
+        roughness={0.48}
+      />
+      <Block
+        position={[12, 2, -17.84]}
+        size={[9.8, 4, 0.15]}
+        color="#34434b"
+        roughness={0.6}
+      />
+      <Sign
+        position={[12, 3.45, -17.7]}
+        text="THE DELIVERY COLLECTION"
+        sub="DEMO PROJECTS / A GALLERY OF POSSIBILITY"
+        color="#e2e1d5"
+        width={5.8}
+        height={0.75}
+      />
+      {[10, 13, 15.7].map((x, i) => (
+        <group key={x}>
+          <Block
+            position={[x, 0.53, -15]}
+            size={[1.4, 1.06, 1.4]}
+            color="#657576"
+            metalness={0.65}
+            roughness={0.3}
+            rounded
+          />
+          <Block
+            position={[x, 1.07, -15]}
+            size={[1.44, 0.05, 1.44]}
+            color={palette.ivory}
+            rounded
+          />
+          <Glass
+            position={[x, 1.8, -15]}
+            size={[1.25, 1.45, 1.25]}
+            opacity={0.13}
+          />
+          <Core
+            position={[x, 1.8, -15]}
+            scale={1.15}
+            color={["#e6c48d", "#8ee1d4", "#9fc9f5"][i]}
+            active={active}
+          />
+          <Ring
+            position={[x, 1.11, -15]}
+            radius={0.48}
+            tube={0.009}
+            color="#d8c6a5"
+          />
+          <Sign
+            position={[x, 0.63, -14.29]}
+            text={"DEMO PROJECT 0" + (i + 1)}
+            sub="VISUAL COLLECTION"
+            width={1.18}
+            height={0.3}
+            color="#e2e7df"
+          />
+          <Block
+            position={[x, 4.32, -15]}
+            size={[0.8, 0.03, 0.8]}
+            color="#f6e6cf"
+            glow={0.8}
+          />
+        </group>
+      ))}
+      <Sign
+        position={[-12, 3.6, -17.7]}
+        text="THE NEXT CHAPTER"
+        sub="DESIGN STUDIO / QA LAB / SECURITY OPERATIONS"
+        width={5.6}
+        height={0.75}
+      />
+      <Sign
+        position={[-12, 2.95, -17.7]}
+        text="CODE REVIEW  ·  RELEASE BAY"
+        sub="FUTURE DEPARTMENTS"
+        width={4.6}
+        height={0.55}
+      />
+      {[-14, -10].map((x) => (
+        <group key={x}>
+          <Block
+            position={[x, 0.28, -15]}
+            size={[2, 0.55, 2]}
+            color={palette.ivory}
+            rounded
+          />
+          <Ring
+            position={[x, 0.57, -15]}
+            radius={0.64}
+            tube={0.013}
+            color="#a1b8b1"
+          />
+          <Glass
+            position={[x, 1.65, -15]}
+            size={[1.7, 2.1, 1.7]}
+            opacity={0.045}
+          />
+        </group>
+      ))}
+    </group>
+  );
+}
+function Skyline() {
+  return (
+    <group>
+      <mesh position={[0, -4.1, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <planeGeometry args={[220, 220]} />
+        <meshStandardMaterial color="#84999b" roughness={0.85} />
+      </mesh>
+      {Array.from({ length: 38 }, (_, i) => {
+        const a = (i / 38) * Math.PI * 2,
+          r = 40 + (i % 3) * 9,
+          h = 8 + ((i * 7) % 22);
+        return (
+          <group
+            key={i}
+            position={[Math.sin(a) * r, h / 2 - 4, Math.cos(a) * r]}
+            rotation={[0, -a, 0]}
+          >
+            <Block
+              position={[0, 0, 0]}
+              size={[3 + (i % 3), h, 3]}
+              color={i % 2 ? "#9aaeb3" : "#b3c1c0"}
+              metalness={0.35}
+              roughness={0.35}
+            />
+            {Array.from({ length: Math.floor(h / 2) }, (_, j) => (
+              <Block
+                key={j}
+                position={[0, -h / 2 + j * 2 + 1, 1.51]}
+                size={[2.8 + (i % 3), 0.045, 0.02]}
+                color="#d2dedb"
+              />
+            ))}
           </group>
         );
       })}
-      {[-12, 12].flatMap((x) =>
-        [-14, -6, 6, 14].map((z) => (
-          <group key={x + ":" + z}>
-            <Block
-              position={[x, 4.4, z]}
-              size={[3.8, 0.16, 0.55]}
-              color={palette.ivory}
-            />
-            <Block
-              position={[x, 4.3, z]}
-              size={[3.6, 0.025, 0.4]}
-              color="#ffdeb0"
-              glow={1.4}
-            />
-          </group>
-        )),
-      )}
-      {[-16.8, 16.8].flatMap((x) =>
-        [-14, -8, -2, 4, 10, 16].map((z) => (
-          <Block
-            key={x + ":" + z}
-            position={[x, 2, z]}
-            size={[0.1, 3.8, 2.2]}
-            color="#637477"
-          />
-        )),
-      )}
     </group>
   );
 }
@@ -752,320 +1000,40 @@ export const Environment = memo(function Environment({
 }) {
   return (
     <>
-      <color attach="background" args={["#596c7b"]} />
-      <fog attach="fog" args={["#596c7b", 40, 100]} />
-      <hemisphereLight args={["#dceeff", "#333633", 1.4]} />
-      <ambientLight intensity={0.3} />
+      <color attach="background" args={["#c2d3d7"]} />
+      <fog attach="fog" args={["#c2d3d7", 44, 115]} />
+      <Reflections />
+      <hemisphereLight args={["#e3f1fa", "#716857", 0.95]} />
+      <ambientLight intensity={0.22} />
       <directionalLight
-        position={[8, 16, 10]}
+        position={[13, 22, 7]}
         intensity={2}
-        color="#ffe3b7"
+        color="#fff0d6"
         castShadow
         shadow-mapSize={[2048, 2048]}
-        shadow-camera-left={-23}
-        shadow-camera-right={23}
-        shadow-camera-top={24}
-        shadow-camera-bottom={-24}
-        shadow-bias={-0.001}
+        shadow-camera-left={-25}
+        shadow-camera-right={25}
+        shadow-camera-top={25}
+        shadow-camera-bottom={-25}
+        shadow-normalBias={0.045}
+        shadow-bias={-0.0003}
+        shadow-radius={3}
       />
-      <pointLight
-        position={[0, 4, 0]}
-        intensity={24}
-        distance={15}
-        color="#83dbdc"
+      <directionalLight
+        position={[-15, 9, -12]}
+        intensity={0.45}
+        color="#c4e6ef"
       />
-      <Block
-        position={[0, -0.18, 0]}
-        size={[34, 0.35, 36]}
-        color={palette.floor}
-      />
-      <Block
-        position={[0, 0.005, 0]}
-        size={[13.6, 0.015, 25]}
-        color="#6b7b7b"
-      />
-      {Array.from({ length: 9 }, (_, i) => (
-        <Block
-          key={i}
-          position={[-16 + i * 4, 0.017, 0]}
-          size={[0.015, 0.01, 36]}
-          color="#506267"
-        />
-      ))}
-      {Array.from({ length: 9 }, (_, i) => (
-        <Block
-          key={i}
-          position={[0, 0.018, -16 + i * 4]}
-          size={[34, 0.01, 0.015]}
-          color="#506267"
-        />
-      ))}
-      {[-6.4, 6.4].map((x) => (
-        <Block
-          key={x}
-          position={[x, 0.025, 1]}
-          size={[0.04, 0.015, 23]}
-          color="#ffe0ac"
-          glow={1.5}
-        />
-      ))}
-      {WALLS.map((w, i) => (
-        <group key={i}>
-          {w.glass ? (
-            <>
-              <Block
-                position={[w.x, 0.3, w.z]}
-                size={[w.w, 0.6, w.d]}
-                color={palette.ivory}
-              />
-              <mesh position={[w.x, 2, w.z]}>
-                <boxGeometry args={[w.w, 2.8, w.d]} />
-                <meshStandardMaterial
-                  color="#b5e2e4"
-                  transparent
-                  opacity={0.12}
-                  metalness={0.25}
-                  roughness={0.12}
-                  depthWrite={false}
-                />
-              </mesh>
-              <Block
-                position={[w.x, 3.48, w.z]}
-                size={[w.w, 0.14, w.d]}
-                color={palette.metal}
-              />
-            </>
-          ) : (
-            <>
-              <Block
-                position={[w.x, 0.35, w.z]}
-                size={[w.w, 0.7, w.d]}
-                color={palette.ivory}
-              />
-              <mesh position={[w.x, 2.55, w.z]}>
-                <boxGeometry args={[w.w, 3.7, w.d]} />
-                <meshStandardMaterial
-                  color="#a8c7cc"
-                  transparent
-                  opacity={0.2}
-                  depthWrite={false}
-                  roughness={0.25}
-                />
-              </mesh>
-              <Block
-                position={[w.x, 4.5, w.z]}
-                size={[w.w, 0.22, w.d]}
-                color={palette.ivory}
-              />
-            </>
-          )}
-        </group>
-      ))}
-      {[-17, -7, 7, 17].flatMap((x) =>
-        [-17, -11, 0, 11, 17].map((z) => (
-          <Pillar key={x + ":" + z} x={x} z={z} />
-        )),
-      )}
-      {[-10, 10].map((z) => (
-        <group key={z}>
-          <Block
-            position={[0, 4.55, z]}
-            size={[34, 0.2, 0.3]}
-            color={palette.ivory}
-          />
-          <Block
-            position={[0, 4.43, z]}
-            size={[30, 0.035, 0.08]}
-            color="#ffdfa6"
-            glow={2}
-          />
-        </group>
-      ))}
-      <Ceiling />
+      <Architecture />
       <Atrium active={active} />
-      <mesh
-        position={[0, 0.03, 0]}
-        rotation={[-Math.PI / 2, 0, 0]}
-        receiveShadow
-      >
-        <ringGeometry args={[3, 5.7, 80]} />
-        <meshStandardMaterial
-          color="#526a71"
-          roughness={0.55}
-          metalness={0.2}
-        />
-      </mesh>
-      {[-1, 1].map((side) => (
-        <group key={side}>
-          <Block
-            position={[side * 4.8, 0.03, 9.4]}
-            size={[1.2, 0.025, 3]}
-            color="#8c8776"
-          />
-          <Block
-            position={[side * 15.6, 0.35, 10]}
-            size={[1.1, 0.7, 1.1]}
-            color={palette.ivory}
-          />
-          <mesh position={[side * 15.6, 1.12, 10]}>
-            <cylinderGeometry args={[0.035, 0.07, 1.2, 6]} />
-            <meshStandardMaterial color="#685b40" />
-          </mesh>
-          {Array.from({ length: 7 }, (_, i) => (
-            <mesh
-              key={i}
-              position={[
-                side * 15.6 + Math.sin(i * 2.4) * 0.35,
-                1.4 + (i % 3) * 0.25,
-                10 + Math.cos(i * 2.4) * 0.3,
-              ]}
-              scale={[0.4, 0.18, 0.3]}
-              rotation={[i * 0.2, i, 0]}
-            >
-              <icosahedronGeometry args={[1, 1]} />
-              <meshStandardMaterial
-                color={i % 2 ? "#587865" : "#79917b"}
-                roughness={0.85}
-              />
-            </mesh>
-          ))}
-        </group>
-      ))}
-      <Sign
-        position={[0, 3.8, 10.7]}
-        text="TEJA’S / AI OFFICE"
-        sub="AUTONOMOUS ENGINEERING HEADQUARTERS"
-        width={4.8}
-        height={1}
-        color="#f0d3a4"
-      />
-      <Block
-        position={[-12, 0.6, 15]}
-        size={[5, 1.2, 1.5]}
-        color={palette.ivory}
-      />
-      <Sign
-        position={[-12, 1, 15.76]}
-        text="WELCOME / TEJA"
-        sub="WORLD PROTOTYPE · VISUAL EXPERIENCE ONLY"
-        width={4}
-        height={0.6}
-      />
-      <Sign
-        position={[-16.8, 2.7, 13]}
-        rotation={[0, Math.PI / 2, 0]}
-        text="THE DIRECTORY"
-        sub="01 PRODUCT   /   02 ARCHITECTURE   /   03 ENGINEERING"
-        width={5}
-        height={1.2}
-      />
-      <Sign
-        position={[-12, 3.1, 9.7]}
-        rotation={[0, Math.PI, 0]}
-        text="01 / PRODUCT & RESEARCH"
-        sub="PIP · THE PLANNING STUDIO"
-        width={5}
-      />
-      <Sign
-        position={[-12, 3.1, -10.8]}
-        text="02 / ARCHITECTURE LAB"
-        sub="ARC · SYSTEMS, CONNECTIONS, POSSIBILITIES"
-        width={5}
-      />
-      <Sign
-        position={[12, 3.1, 9.7]}
-        rotation={[0, Math.PI, 0]}
-        text="03 / ENGINEERING"
-        sub="DEX · THE BUILD BAY"
-        width={5}
-      />
-      <Sign
-        position={[12, 3.1, -10.8]}
-        text="INFRASTRUCTURE"
-        sub="OFFICE ENGINEER / FUTURE HOME"
-        width={5}
-      />
-      <Sign
-        position={[0, 3.95, -17.8]}
-        text="TEJA / OWNER"
-        sub="THE HUMAN AT THE CENTRE OF THE COMPANY"
-        width={5}
-      />
-      <Screen position={[0, 2.1, -17.6]} kind="overview" scale={2} />
-      <Block
-        position={[0, 1, -15]}
-        size={[5, 0.2, 1.5]}
-        color={palette.ivory}
-      />
-      <Block position={[0, 0.45, -15]} size={[3, 0.9, 0.7]} />
-      <Sign
-        position={[12, 3.3, -17.8]}
-        text="DELIVERY VAULT"
-        sub="IDEAS BECOME THINGS / DEMO COLLECTION"
-        width={5}
-      />
-      {[10, 13, 15.7].map((x, i) => (
-        <group key={x}>
-          <ServerRack x={x} />
-          <Block
-            position={[x, 0.5, -15]}
-            size={[1.5, 1, 1.5]}
-            color={palette.ivory}
-          />
-          <Core
-            position={[x, 1.7, -15]}
-            color={["#ffc284", "#81dad5", "#b4acfa"][i]}
-            scale={1.6}
-          />
-          <Sign
-            position={[x, 0.65, -14.24]}
-            text={"DEMO / 0" + (i + 1)}
-            sub="NOT A REAL PROJECT"
-            width={1.2}
-            height={0.35}
-          />
-        </group>
-      ))}
-      <Sign
-        position={[-12, 3, -17.8]}
-        text="NEXT / HORIZON"
-        sub="DESIGN · QA · SECURITY · REVIEW · LAUNCH"
-        width={5}
-      />
-      {[-14, -10].map((x) => (
-        <group key={x}>
-          <Block
-            position={[x, 0.28, -15]}
-            size={[2, 0.55, 2]}
-            color={palette.ivory}
-          />
-          <mesh position={[x, 0.58, -15]} rotation={[-Math.PI / 2, 0, 0]}>
-            <ringGeometry args={[0.6, 0.63, 32]} />
-            <meshBasicMaterial color={palette.cyan} />
-          </mesh>
-        </group>
-      ))}
+      <Reception />
+      <BackRooms active={active} />
+      <Infrastructure active={active} />
       {(Object.keys(BOTS) as BotId[]).map((id) => (
-        <group key={id}>
-          <Station id={id} />
-          <Bot id={id} time={time} active={active} />
-        </group>
+        <Station key={id} id={id} time={time} active={active} />
       ))}
-      <Transfer time={time} />
-      {/* Procedural skyline: original silhouettes, no external assets or textures. */}
-      {Array.from({ length: 30 }, (_, i) => {
-        const a = (i / 30) * Math.PI * 2,
-          r = 33 + (i % 3) * 7,
-          h = 5 + ((i * 7) % 16);
-        return (
-          <Block
-            key={i}
-            position={[Math.sin(a) * r, h / 2 - 1, Math.cos(a) * r]}
-            size={[3 + (i % 3), h, 3]}
-            color={i % 2 ? "#6e868d" : "#81959a"}
-          />
-        );
-      })}
+      <Transfer time={time} active={active} />
+      <Skyline />
     </>
   );
 });

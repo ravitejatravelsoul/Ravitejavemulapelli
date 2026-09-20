@@ -8,15 +8,17 @@ const World = dynamic(() => import("./world-experience"), {
         position: "fixed",
         inset: 0,
         zIndex: 100,
-        background: "#101d26",
+        background: "radial-gradient(ellipse at top, #667d80, #243840)",
         color: "#f0e7d6",
         display: "grid",
         placeContent: "center",
-        fontFamily: "monospace",
+        fontFamily: "Segoe UI, Arial, sans-serif",
+        gap: 20,
+        textAlign: "center",
       }}
     >
       <p>TEJA’S / AI OFFICE</p>
-      <p role="status">Initializing 3D world…</p>
+      <p role="status">Preparing the headquarters…</p>
       <a href="/office">Exit to Office</a>
     </div>
   ),

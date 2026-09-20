@@ -250,6 +250,19 @@ function Player({
   });
   return null;
 }
+function deviceCapability(): "checking" | "desktop" | "mobile" | "unsupported" {
+  if (typeof window === "undefined") return "checking";
+  if (matchMedia("(pointer: coarse)").matches) return "mobile";
+  try {
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("webgl2");
+    if (!context) return "unsupported";
+    context.getExtension("WEBGL_lose_context")?.loseContext();
+    return "desktop";
+  } catch {
+    return "unsupported";
+  }
+}
 // Stable callbacks keep input listeners and the camera's initial position scoped to mount.
 export default function WorldExperience() {
   const [ready, setReady] = useState(false),
@@ -259,7 +272,15 @@ export default function WorldExperience() {
     [paused, setPaused] = useState(false),
     [reduced, setReduced] = useState(false),
     [sensitivity, setSensitivity] = useState(0.0018),
-    [quality, setQuality] = useState("balanced"),
+    [quality, setQuality] = useState("auto"),
+    [device] = useState(deviceCapability),
+    [autoHigh] = useState(
+      () =>
+        typeof navigator !== "undefined" &&
+        navigator.hardwareConcurrency >= 8 &&
+        ((navigator as Navigator & { deviceMemory?: number }).deviceMemory ??
+          4) >= 8,
+    ),
     [reset, setReset] = useState(0),
     [play, setPlay] = useState(0),
     [info, setInfo] = useState<BotId | null>(null),
@@ -356,6 +377,29 @@ export default function WorldExperience() {
     reduced,
     interacting: info !== null,
   };
+  if (device !== "desktop")
+    return (
+      <div className={styles.world}>
+        <section className={styles.error}>
+          <p className={styles.eyebrow}>TEJA’S AI OFFICE / WORLD STUDY 02</p>
+          <h1>
+            {device === "checking"
+              ? "Preparing the headquarters…"
+              : device === "unsupported"
+                ? "3D view unavailable"
+                : "A world best explored on desktop."}
+          </h1>
+          <p>
+            {device === "checking"
+              ? "Checking browser capabilities."
+              : device === "unsupported"
+                ? "This prototype needs WebGL 2. Enable hardware acceleration in your browser, or return to the Office."
+                : "Use a laptop or desktop with a keyboard and mouse to walk through this 3D prototype."}
+          </p>
+          <a href="/office">Return to Office</a>
+        </section>
+      </div>
+    );
   return (
     <div
       className={styles.world}
@@ -373,7 +417,13 @@ export default function WorldExperience() {
       <WorldBoundary>
         <Canvas
           shadows
-          dpr={quality === "high" ? [1, 1.5] : [1, 1]}
+          dpr={
+            quality === "high"
+              ? [1, 1.5]
+              : quality === "auto" && autoHigh
+                ? [1, 1.25]
+                : [1, 1]
+          }
           frameloop={visible ? "always" : "never"}
           camera={{ position: SPAWN, fov: 65, near: 0.08, far: 110 }}
           gl={{ antialias: true, powerPreference: "high-performance" }}
@@ -396,7 +446,7 @@ export default function WorldExperience() {
         <div>
           <b>T /</b>
           <span>
-            TEJA’S AI OFFICE<small>THE NEXUS · WORLD STUDY 01</small>
+            TEJA’S AI OFFICE<small>THE NEXUS · WORLD STUDY 02</small>
           </span>
         </div>
         <a
@@ -422,7 +472,7 @@ export default function WorldExperience() {
           <p>
             An autonomous engineering headquarters.
             <br />
-            Three little minds. One world to explore.
+            Human ambition. Shared intelligence.
           </p>
           <button disabled={!ready} onClick={enter}>
             {ready ? "ENTER OFFICE →" : "INITIALIZING WORLD…"}
@@ -479,6 +529,7 @@ export default function WorldExperience() {
               value={quality}
               onChange={(e) => setQuality(e.target.value)}
             >
+              <option value="auto">Auto</option>
               <option value="balanced">Balanced</option>
               <option value="high">High resolution</option>
             </select>

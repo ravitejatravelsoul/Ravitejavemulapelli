@@ -20,14 +20,14 @@ export const BOTS = {
   architect: {
     name: "Solution Architect",
     callSign: "ARC / 02",
-    color: "#83e6df",
+    color: "#8abce9",
     home: [-12, 1.4, -6] as Vec3,
     activity: "Composing a demo system blueprint",
   },
   developer: {
     name: "Developer",
     callSign: "DEX / 03",
-    color: "#adadff",
+    color: "#65d6c2",
     home: [12, 1.2, 5] as Vec3,
     activity: "Building a visual-only interface",
   },
@@ -67,6 +67,10 @@ export const WALLS: Solid[] = [
 ];
 // Furniture colliders share their positions with the rendered geometry.
 export const FURNITURE: Solid[] = [
+  { x: 12, z: 15.7, w: 2.8, d: 1.2, height: 1.2 },
+  { x: 15.5, z: 13.6, w: 1.2, d: 2.8, height: 1.2 },
+  { x: 4.5, z: -15.8, w: 1.2, d: 2.8, height: 1.2 },
+  { x: -5.8, z: -16.8, w: 0.9, d: 0.9, height: 2 },
   ...[-15.6, 15.6].map((x) => ({ x, z: 10, w: 1.1, d: 1.1, height: 0.7 })),
   { x: 0, z: 0, w: 4.6, d: 4.6, height: 1.1 },
   ...[-12, 12].map((x) => ({ x, z: 7, w: 4.8, d: 1.3, height: 1.1 })),
