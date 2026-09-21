@@ -2,7 +2,7 @@
 import { memo, useEffect, useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
-import { WALLS, BOTS, demoBot, type BotId, type Vec3 } from "./world-model";
+import { WALLS, demoBot, type Vec3 } from "./world-model";
 import {
   Block,
   Glass,
@@ -15,6 +15,16 @@ import {
   palette,
 } from "./world-surfaces";
 import { Bot, Core, Transfer } from "./world-characters";
+import {
+  OFFICE_WORLD,
+  VISUAL_AGENTS,
+  roomPosition,
+  moduleWalls,
+  type RoomDefinition,
+  type WorkstationDefinition,
+  type PlacedAgent,
+} from "./world-campus";
+import { CityEnvironment } from "./world-city";
 
 function StoneFloor() {
   const texture = useMemo(() => {
@@ -452,25 +462,33 @@ function Topology({ active, color }: { active: boolean; color: string }) {
   );
 }
 function Station({
-  id,
+  room,
+  station,
+  agent,
   time,
   active,
 }: {
-  id: BotId;
+  room: RoomDefinition;
+  station: WorkstationDefinition;
+  agent?: PlacedAgent;
   time: React.RefObject<number | null>;
   active: boolean;
 }) {
-  const b = BOTS[id],
-    arch = id === "architect",
-    x = b.home[0],
-    z = arch ? -8 : 7,
+  const b = agent ?? {
+      color: room.visualTheme.accent,
+      home: roomPosition(OFFICE_WORLD, room, station.dock),
+    },
+    arch = station.kind === "architecture",
+    position = roomPosition(OFFICE_WORLD, room, station.position),
     reactive = useRef<THREE.Group>(null),
     scan = useRef<THREE.Mesh>(null),
     light = useRef<THREE.PointLight>(null),
     clock = useRef(0);
   useFrame((_, dt) => {
     if (active) clock.current += dt;
-    const working = demoBot(id, time.current).state === "WORKING";
+    const working = agent
+      ? demoBot(agent.id, time.current).state === "WORKING"
+      : false;
     if (reactive.current) {
       const target = working ? 1 : 0.88;
       reactive.current.scale.y = THREE.MathUtils.damp(
@@ -489,7 +507,7 @@ function Station({
   });
   return (
     <group>
-      <group position={[x, 0, z]} rotation={[0, arch ? 0 : Math.PI, 0]}>
+      <group position={position} rotation={[0, station.rotation, 0]}>
         <Console position={[0, 0, 0]} />
         <group ref={reactive}>
           <mesh ref={scan} position={[0, 1.45, -0.255]} visible={false}>
@@ -499,7 +517,13 @@ function Station({
           <Screen
             position={[0, 2.12, -0.27]}
             scale={1.2}
-            kind={arch ? "blueprint" : id === "product" ? "planning" : "code"}
+            kind={
+              arch
+                ? "blueprint"
+                : station.kind === "planning"
+                  ? "planning"
+                  : "code"
+            }
             color={b.color}
           />
           <Screen
@@ -542,7 +566,10 @@ function Station({
           rounded
         />
       </group>
-      <mesh position={[b.home[0], 0.025, b.home[2]]} receiveShadow>
+      <mesh
+        position={[b.home[0], position[1] + 0.025, b.home[2]]}
+        receiveShadow
+      >
         <cylinderGeometry args={[0.68, 0.73, 0.05, 48]} />
         <meshStandardMaterial
           color="#9aaaa8"
@@ -551,33 +578,12 @@ function Station({
         />
       </mesh>
       <Ring
-        position={[b.home[0], 0.06, b.home[2]]}
+        position={[b.home[0], position[1] + 0.06, b.home[2]]}
         radius={0.58}
         tube={0.008}
         color={b.color}
       />
-      <Sign
-        position={[x, 3.75, arch ? -10.76 : 9.7]}
-        rotation={[0, arch ? 0 : Math.PI, 0]}
-        color="#d5e0db"
-        text={
-          arch
-            ? "02  /  ARCHITECTURE"
-            : id === "product"
-              ? "01  /  PRODUCT & RESEARCH"
-              : "03  /  ENGINEERING"
-        }
-        sub={
-          arch
-            ? "SYSTEMS OF POSSIBILITY"
-            : id === "product"
-              ? "IDEAS WITH INTENTION"
-              : "CRAFT THE NEXT"
-        }
-        width={4.6}
-        height={0.62}
-      />
-      <Bot id={id} time={time} active={active} />
+      {agent && <Bot id={agent.id} time={time} active={active} />}
     </group>
   );
 }
@@ -669,7 +675,7 @@ function Reception() {
       <Sign
         position={[0, 4, 8.835]}
         text="TEJA’S AI OFFICE"
-        sub="AUTONOMOUS ENGINEERING HEADQUARTERS"
+        sub="AUTONOMOUS ENGINEERING HEADQUARTERS / LEVEL 50"
         width={6.5}
         height={0.95}
       />
@@ -686,6 +692,31 @@ function Reception() {
         glow={0.6}
       />
       <GreenWall />
+      <group position={[-5.9, 0, 13.2]} rotation={[0, Math.PI / 2, 0]}>
+        <Block
+          position={[0, 2.3, 0]}
+          size={[2.4, 2.1, 0.07]}
+          color={palette.ivory}
+          rounded
+        />
+        <Sign
+          position={[0, 3.05, 0.045]}
+          text="THE CAMPUS"
+          sub="TEJA’S AI OFFICE"
+          width={2}
+          height={0.42}
+        />
+        {OFFICE_WORLD.floors.map((floor, i) => (
+          <Sign
+            key={floor.id}
+            position={[0, 2.65 - i * 0.36, 0.045]}
+            text={floor.name.toUpperCase()}
+            sub={floor.playable ? "YOU ARE HERE" : "FUTURE OPERATIONS"}
+            width={2.1}
+            height={0.32}
+          />
+        ))}
+      </group>
       <Console position={[-12, 0, 15]} width={4.9} />
       <Sign
         position={[-12, 0.58, 15.63]}
@@ -816,20 +847,21 @@ function Infrastructure({ active }: { active: boolean }) {
     </group>
   );
 }
-function BackRooms({ active }: { active: boolean }) {
+function OwnerRoom() {
   return (
     <group>
+      {" "}
       {/* Oak slats and panoramic display distinguish the human owner's suite. */}
       <Block
         position={[0, 1.9, -17.85]}
-        size={[12.8, 3.8, 0.12]}
+        size={[8.2, 3.8, 0.12]}
         color="#937e65"
         roughness={0.8}
       />
-      {Array.from({ length: 29 }, (_, i) => (
+      {Array.from({ length: 19 }, (_, i) => (
         <Block
           key={i}
-          position={[-6.1 + i * 0.435, 1.9, -17.74]}
+          position={[-3.9 + i * 0.435, 1.9, -17.74]}
           size={[0.07, 3.8, 0.08]}
           color="#b19a79"
           roughness={0.7}
@@ -846,6 +878,13 @@ function BackRooms({ active }: { active: boolean }) {
       <Console position={[0, 0, -15]} width={4.9} />
       <Lounge position={[4.5, 0, -15.8]} rotation={-Math.PI / 2} />
       <Plant position={[-5.8, 0, -16.8]} scale={1.15} />
+    </group>
+  );
+}
+function DeliveryRoom({ active }: { active: boolean }) {
+  return (
+    <group>
+      {" "}
       <Block
         position={[12, 0.008, -14.5]}
         size={[9.8, 0.015, 6.7]}
@@ -915,9 +954,16 @@ function BackRooms({ active }: { active: boolean }) {
           />
         </group>
       ))}
+    </group>
+  );
+}
+function ExpansionRoom() {
+  return (
+    <group>
+      {" "}
       <Sign
         position={[-12, 3.6, -17.7]}
-        text="THE NEXT CHAPTER"
+        text="FUTURE OPERATIONS"
         sub="DESIGN STUDIO / QA LAB / SECURITY OPERATIONS"
         width={5.6}
         height={0.75}
@@ -925,7 +971,7 @@ function BackRooms({ active }: { active: boolean }) {
       <Sign
         position={[-12, 2.95, -17.7]}
         text="CODE REVIEW  ·  RELEASE BAY"
-        sub="FUTURE DEPARTMENTS"
+        sub="CONNECTED CAMPUS / FLOORS 47–49"
         width={4.6}
         height={0.55}
       />
@@ -950,58 +996,144 @@ function BackRooms({ active }: { active: boolean }) {
           />
         </group>
       ))}
+      {[-14, -10].map((x) => (
+        <group key={x}>
+          <Block
+            position={[x - 1.15, 1.7, -17.35]}
+            size={[0.1, 3.4, 0.14]}
+            color={palette.metal}
+          />
+          <Block
+            position={[x + 1.15, 1.7, -17.35]}
+            size={[0.1, 3.4, 0.14]}
+            color={palette.metal}
+          />
+          <Block
+            position={[x, 3.4, -17.35]}
+            size={[2.4, 0.1, 0.14]}
+            color={palette.ivory}
+          />
+          <Glass
+            position={[x, 1.65, -17.34]}
+            size={[2.15, 3.25, 0.05]}
+            opacity={0.15}
+          />
+          <Block
+            position={[x, 1.3, -17.28]}
+            size={[0.03, 0.4, 0.045]}
+            color={palette.metal}
+          />
+        </group>
+      ))}
     </group>
   );
 }
-function Skyline() {
+function Workshop({
+  room,
+  time,
+  active,
+}: {
+  room: RoomDefinition;
+  time: React.RefObject<number | null>;
+  active: boolean;
+}) {
   return (
     <group>
-      <mesh position={[0, -4.1, 0]} rotation={[-Math.PI / 2, 0, 0]}>
-        <planeGeometry args={[220, 220]} />
-        <meshStandardMaterial color="#84999b" roughness={0.85} />
-      </mesh>
-      {Array.from({ length: 38 }, (_, i) => {
-        const a = (i / 38) * Math.PI * 2,
-          r = 40 + (i % 3) * 9,
-          h = 8 + ((i * 7) % 22);
-        return (
-          <group
-            key={i}
-            position={[Math.sin(a) * r, h / 2 - 4, Math.cos(a) * r]}
-            rotation={[0, -a, 0]}
-          >
-            <Block
-              position={[0, 0, 0]}
-              size={[3 + (i % 3), h, 3]}
-              color={i % 2 ? "#9aaeb3" : "#b3c1c0"}
-              metalness={0.35}
-              roughness={0.35}
+      {room.workstations.map((station) => (
+        <Station
+          key={station.id}
+          room={room}
+          station={station}
+          agent={VISUAL_AGENTS.find((a) => a.stationId === station.id)}
+          time={time}
+          active={active}
+        />
+      ))}
+      <Sign
+        position={roomPosition(OFFICE_WORLD, room, room.signage.position)}
+        rotation={[0, room.signage.rotation, 0]}
+        text={room.name.toUpperCase()}
+        sub={room.signage.subtitle}
+        color="#d5e0db"
+        width={4.6}
+        height={0.62}
+      />
+    </group>
+  );
+}
+/** Existing authored furnishings are reusable templates positioned by the room registry. */
+const ROOM_TEMPLATES = {
+  reception: { origin: [0, 0, 14] as Vec3, render: () => <Reception /> },
+  command: {
+    origin: [0, 0, 0] as Vec3,
+    render: (active: boolean) => <Atrium active={active} />,
+  },
+  owner: { origin: [0, 0, -14.5] as Vec3, render: () => <OwnerRoom /> },
+  infrastructure: {
+    origin: [12, 0, -5.5] as Vec3,
+    render: (active: boolean) => <Infrastructure active={active} />,
+  },
+  delivery: {
+    origin: [12, 0, -14.5] as Vec3,
+    render: (active: boolean) => <DeliveryRoom active={active} />,
+  },
+  expansion: {
+    origin: [-12, 0, -14.5] as Vec3,
+    render: () => <ExpansionRoom />,
+  },
+};
+function RoomRenderer({
+  room,
+  time,
+  active,
+}: {
+  room: RoomDefinition;
+  time: React.RefObject<number | null>;
+  active: boolean;
+}) {
+  if (room.template === "workshop")
+    return <Workshop room={room} time={time} active={active} />;
+  if (room.template === "module")
+    return (
+      <>
+        <group position={roomPosition(OFFICE_WORLD, room, [0, 0, 0])}>
+          <Block
+            position={[0, -0.06, 0]}
+            size={[room.dimensions[0], 0.12, room.dimensions[2]]}
+            color={palette.floor}
+          />
+          {moduleWalls(room).map((wall, index) => (
+            <Glass
+              key={index}
+              position={[wall.x, wall.height! / 2, wall.z]}
+              size={[wall.w, wall.height!, wall.d]}
             />
-            {Array.from({ length: Math.floor(h / 2) }, (_, j) => (
-              <Block
-                key={j}
-                position={[0, -h / 2 + j * 2 + 1, 1.51]}
-                size={[2.8 + (i % 3), 0.045, 0.02]}
-                color="#d2dedb"
-              />
-            ))}
-          </group>
-        );
-      })}
+          ))}
+        </group>
+        <Workshop room={room} time={time} active={active} />
+      </>
+    );
+  const template = ROOM_TEMPLATES[room.template],
+    origin = roomPosition(OFFICE_WORLD, room, [0, 0, 0]);
+  return (
+    <group position={origin.map((v, i) => v - template.origin[i]) as Vec3}>
+      {template.render(active)}
     </group>
   );
 }
 export const Environment = memo(function Environment({
   time,
   active,
+  cityHigh,
 }: {
+  cityHigh: boolean;
   time: React.RefObject<number | null>;
   active: boolean;
 }) {
   return (
     <>
       <color attach="background" args={["#c2d3d7"]} />
-      <fog attach="fog" args={["#c2d3d7", 44, 115]} />
+      <fog attach="fog" args={["#cbdce2", 180, 1400]} />
       <Reflections />
       <hemisphereLight args={["#e3f1fa", "#716857", 0.95]} />
       <ambientLight intensity={0.22} />
@@ -1025,15 +1157,13 @@ export const Environment = memo(function Environment({
         color="#c4e6ef"
       />
       <Architecture />
-      <Atrium active={active} />
-      <Reception />
-      <BackRooms active={active} />
-      <Infrastructure active={active} />
-      {(Object.keys(BOTS) as BotId[]).map((id) => (
-        <Station key={id} id={id} time={time} active={active} />
-      ))}
+      {OFFICE_WORLD.rooms
+        .filter((r) => r.floorId === OFFICE_WORLD.activeFloor)
+        .map((room) => (
+          <RoomRenderer key={room.id} room={room} time={time} active={active} />
+        ))}
       <Transfer time={time} active={active} />
-      <Skyline />
+      <CityEnvironment active={active} high={cityHigh} />
     </>
   );
 });

@@ -12,6 +12,7 @@ import {
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import { Environment } from "./world-geometry";
+import { OFFICE_WORLD } from "./world-campus";
 import {
   BOTS,
   SPAWN,
@@ -425,7 +426,7 @@ export default function WorldExperience() {
                 : [1, 1]
           }
           frameloop={visible ? "always" : "never"}
-          camera={{ position: SPAWN, fov: 65, near: 0.08, far: 110 }}
+          camera={{ position: SPAWN, fov: 65, near: 0.08, far: 2200 }}
           gl={{ antialias: true, powerPreference: "high-performance" }}
           fallback={
             <div className={styles.error}>
@@ -433,7 +434,11 @@ export default function WorldExperience() {
             </div>
           }
         >
-          <Environment time={time} active={visible && !paused && !reduced} />
+          <Environment
+            time={time}
+            active={visible && !paused && !reduced}
+            cityHigh={quality === "high" || (quality === "auto" && autoHigh)}
+          />
           <Player
             runtime={runtime}
             onTelemetry={setTelemetry}
@@ -446,7 +451,7 @@ export default function WorldExperience() {
         <div>
           <b>T /</b>
           <span>
-            TEJA’S AI OFFICE<small>THE NEXUS · WORLD STUDY 02</small>
+            TEJA’S AI OFFICE<small>THE NEXUS · LEVEL 50</small>
           </span>
         </div>
         <a
@@ -584,19 +589,16 @@ export default function WorldExperience() {
         <aside className={styles.map}>
           <p className={styles.eyebrow}>HEADQUARTERS / DIRECTORY</p>
           <div>
-            <span>Future studio</span>
-            <span>Owner room</span>
-            <span>Delivery vault</span>
-            <span>Architecture</span>
-            <strong>
-              Command
-              <br />
-              Atrium
-            </strong>
-            <span>Infrastructure</span>
-            <span>Product</span>
-            <span>↓ Reception</span>
-            <span>Engineering</span>
+            {OFFICE_WORLD.rooms
+              .filter((r) => r.floorId === OFFICE_WORLD.activeFloor)
+              .sort(
+                (a, b) =>
+                  a.position[2] - b.position[2] ||
+                  a.position[0] - b.position[0],
+              )
+              .map((room) => (
+                <span key={room.id}>{room.name}</span>
+              ))}
           </div>
           <p>
             Rooms open off the central atrium.

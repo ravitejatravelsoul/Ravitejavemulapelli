@@ -9,10 +9,10 @@ import { chromium } from "playwright";
 /** No runner, project fixtures, model credentials or domain mutations. Browser input only. */
 test(
   "3D prototype: authenticated exploration, collisions, demo, interaction and cleanup",
-  { timeout: 360000 },
+  { timeout: 600000 },
   async () => {
     const folder = mkdtempSync(join(tmpdir(), "office-world-test-")),
-      evidence = resolve(".data/world-modern-v2");
+      evidence = resolve(".data/world-v2-1");
     mkdirSync(evidence, { recursive: true });
     const password = randomBytes(18).toString("hex"),
       salt = randomBytes(16).toString("hex"),
@@ -176,11 +176,29 @@ test(
       await go(-10, -3);
       await look(0.5, -0.08);
       await shot("04-architecture-area");
+      await go(-15.2, -3);
+      await go(-15.2, -10);
+      await go(-12, -10);
+      await go(-12, -12.5);
+      await shot("11-expansion-wing");
+      await go(-12, -10);
+      await go(-15.2, -10);
+      await go(-15.2, -3);
+      await go(-10, -3);
       await go(-5, -3);
       await go(-5, -9);
       await go(0, -9);
       await go(0, -13);
+      await look(-0.65, 0);
       await shot("06-owner-room");
+      await go(5.8, -13);
+      await go(5.8, -16.6);
+      await look(0.6, -0.12);
+      await shot("12-owner-panorama");
+      await look(0.25, -0.9);
+      await shot("13-owner-street-depth");
+      await go(5.8, -13);
+      await go(0, -13);
       await go(0, -9);
       await go(5, -9);
       await go(5, -3);
@@ -199,6 +217,14 @@ test(
       await shot("05-engineering-area");
       await go(10, 3);
       await go(15, 3);
+      await go(16.25, 3);
+      await look(-1.57, -0.25);
+      await shot("14-city-horizon");
+      await look(-1.57, -0.85);
+      await shot("15-city-depth-before");
+      await go(16.25, 6.7);
+      await look(-1.57, -0.85);
+      await shot("16-city-depth-after");
       await go(15, 5);
       await look();
       await key("KeyD", 1800);

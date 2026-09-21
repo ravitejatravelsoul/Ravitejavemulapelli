@@ -1,6 +1,15 @@
-/** Visual-only world constants. No Office domain imports or execution hooks. Metres. */
-export type Vec3 = [number, number, number];
-export type BotId = "product" | "architect" | "developer";
+/** Visual-only demo/controller. The reusable campus model is independent of this three-character scenario. */
+import {
+  OFFICE_WORLD,
+  VISUAL_AGENTS,
+  roomSolids,
+  navigationPath,
+  canStandInWorld,
+  type PlacedAgent,
+  type Vec3,
+} from "./world-campus.ts";
+export type { Vec3, Solid } from "./world-campus.ts";
+export type BotId = string;
 export type BotState =
   | "IDLE"
   | "WORKING"
@@ -9,78 +18,11 @@ export type BotState =
   | "INTERACTING"
   | "HANDOFF"
   | "RETURNING";
-export const BOTS = {
-  product: {
-    name: "Product Owner",
-    callSign: "PIP / 01",
-    color: "#ffbb70",
-    home: [-12, 1.25, 5] as Vec3,
-    activity: "Organizing a prototype brief",
-  },
-  architect: {
-    name: "Solution Architect",
-    callSign: "ARC / 02",
-    color: "#8abce9",
-    home: [-12, 1.4, -6] as Vec3,
-    activity: "Composing a demo system blueprint",
-  },
-  developer: {
-    name: "Developer",
-    callSign: "DEX / 03",
-    color: "#65d6c2",
-    home: [12, 1.2, 5] as Vec3,
-    activity: "Building a visual-only interface",
-  },
-};
-export type Solid = {
-  x: number;
-  z: number;
-  w: number;
-  d: number;
-  height: number;
-  glass?: boolean;
-};
-export const WALLS: Solid[] = [
-  { x: 0, z: 18, w: 34, d: 0.3, height: 4.6 },
-  { x: 0, z: -18, w: 34, d: 0.3, height: 4.6 },
-  { x: -17, z: 0, w: 0.3, d: 36, height: 4.6 },
-  { x: 17, z: 0, w: 0.3, d: 36, height: 4.6 },
-  // Atrium wings have broad doorways at z=5 and z=-3.
-  ...[-7, 7].flatMap((x) => [
-    { x, z: 10, w: 0.22, d: 6, height: 3.5, glass: true },
-    { x, z: 1, w: 0.22, d: 4, height: 3.5, glass: true },
-    { x, z: -8, w: 0.22, d: 6, height: 3.5, glass: true },
-  ]),
-  ...[-12, 12].map((x) => ({
-    x,
-    z: 0,
-    w: 10,
-    d: 0.22,
-    height: 3.5,
-    glass: true,
-  })),
-  ...[-15, -9, 9, 15].map((x) => ({ x, z: -11, w: 4, d: 0.25, height: 3.8 })),
-  { x: -5, z: -11, w: 4, d: 0.22, height: 3.5, glass: true },
-  { x: 5, z: -11, w: 4, d: 0.22, height: 3.5, glass: true },
-  { x: 7, z: -15, w: 0.22, d: 6, height: 3.5, glass: true },
-  { x: -7, z: -15, w: 0.22, d: 6, height: 3.5, glass: true },
-];
-// Furniture colliders share their positions with the rendered geometry.
-export const FURNITURE: Solid[] = [
-  { x: 12, z: 15.7, w: 2.8, d: 1.2, height: 1.2 },
-  { x: 15.5, z: 13.6, w: 1.2, d: 2.8, height: 1.2 },
-  { x: 4.5, z: -15.8, w: 1.2, d: 2.8, height: 1.2 },
-  { x: -5.8, z: -16.8, w: 0.9, d: 0.9, height: 2 },
-  ...[-15.6, 15.6].map((x) => ({ x, z: 10, w: 1.1, d: 1.1, height: 0.7 })),
-  { x: 0, z: 0, w: 4.6, d: 4.6, height: 1.1 },
-  ...[-12, 12].map((x) => ({ x, z: 7, w: 4.8, d: 1.3, height: 1.1 })),
-  { x: -12, z: -8, w: 4.8, d: 1.3, height: 1.1 },
-  { x: 0, z: -15, w: 5, d: 1.5, height: 1.1 },
-  ...[10, 13, 15.7].map((x) => ({ x, z: -7.5, w: 1.6, d: 2.4, height: 2.9 })),
-  ...[10, 13, 15.7].map((x) => ({ x, z: -15, w: 1.5, d: 1.5, height: 1.1 })),
-  { x: -12, z: 15, w: 5, d: 1.5, height: 1.2 },
-  ...[-14, -10].map((x) => ({ x, z: -15, w: 2, d: 2, height: 0.55 })),
-];
+export const BOTS: Record<string, PlacedAgent> = Object.fromEntries(
+  VISUAL_AGENTS.map((a) => [a.id, a]),
+);
+export const WALLS = OFFICE_WORLD.shell[OFFICE_WORLD.activeFloor];
+export const FURNITURE = roomSolids(OFFICE_WORLD, OFFICE_WORLD.activeFloor);
 export const SPAWN: Vec3 = [0, 1.7, 15];
 export const DEMO_DURATION = 60;
 const smooth = (t: number) => t * t * (3 - 2 * t);
@@ -99,22 +41,18 @@ export function along(points: Vec3[], t: number): Vec3 {
   }
   return points[0];
 }
-const poPath: Vec3[] = [
-  BOTS.product.home,
-  [-10, 1.4, 5],
-  [-5, 1.4, 5],
-  [-5, 1.4, -3],
-  [-10.5, 1.4, -3],
-];
-const arcMeet: Vec3 = [-12, 1.4, -3];
-const arcPath: Vec3[] = [
-  BOTS.architect.home,
-  [-12, 1.4, -3],
-  [-5, 1.4, -3],
-  [-5, 1.4, 5],
-  [5.4, 1.4, 5],
-];
-const devMeet: Vec3 = [7.2, 1.2, 5];
+const poPath = navigationPath(OFFICE_WORLD, "product-dock", "po-transfer");
+const arcMeet = OFFICE_WORLD.nodes.find(
+  (n) => n.id === "arc-transfer",
+)!.position;
+const arcPath = navigationPath(
+  OFFICE_WORLD,
+  "architecture-dock",
+  "arc-outgoing",
+);
+const devMeet = OFFICE_WORLD.nodes.find(
+  (n) => n.id === "dev-transfer",
+)!.position;
 export function demoBot(
   id: BotId,
   time: number | null,
@@ -175,13 +113,7 @@ export function demoBot(
   return { position, state, carry };
 }
 export function canStand(x: number, z: number, radius = 0.32) {
-  return ![...WALLS, ...FURNITURE].some(
-    (s) =>
-      x > s.x - s.w / 2 - radius &&
-      x < s.x + s.w / 2 + radius &&
-      z > s.z - s.d / 2 - radius &&
-      z < s.z + s.d / 2 + radius,
-  );
+  return canStandInWorld(OFFICE_WORLD, OFFICE_WORLD.activeFloor, x, z, radius);
 }
 export function movePlayer(x: number, z: number, dx: number, dz: number) {
   // Substeps prevent tunnelling during frame stalls; axis separation permits sliding.

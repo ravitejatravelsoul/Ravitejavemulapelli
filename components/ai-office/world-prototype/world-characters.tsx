@@ -21,7 +21,7 @@ export function Bot({
     ring = useRef<THREE.Group>(null);
   const elapsed = useRef(0),
     last = useRef(new THREE.Vector3(...BOTS[id].home)),
-    yaw = useRef(id === "architect" ? Math.PI : 0);
+    yaw = useRef(BOTS[id].workRotation);
   const b = BOTS[id];
   const camera = useThree((state) => state.camera);
   useEffect(() => {
@@ -41,8 +41,7 @@ export function Bot({
     const dx = p[0] - last.current.x,
       dz = p[2] - last.current.z;
     if (Math.hypot(dx, dz) > 0.001) yaw.current = Math.atan2(dx, dz);
-    else if (sample.state === "WORKING")
-      yaw.current = id === "architect" ? Math.PI : 0;
+    else if (sample.state === "WORKING") yaw.current = b.workRotation;
     else if (sample.state === "HANDOFF" || sample.state === "INTERACTING") {
       const other =
         id === "product"
@@ -109,7 +108,9 @@ export function Bot({
         {[-1, 1].map((s) => (
           <group key={s} position={[s * 0.145, 0.165, 0.406]}>
             <mesh>
-              <circleGeometry args={[id === "architect" ? 0.055 : 0.04, 24]} />
+              <circleGeometry
+                args={[b.variant === "analyst" ? 0.055 : 0.04, 24]}
+              />
               <meshBasicMaterial color={b.color} />
             </mesh>
             <mesh position={[0.006, 0.008, 0.003]}>
@@ -214,7 +215,7 @@ export function Bot({
             </group>
           ))}
         </group>
-        {id === "product" && (
+        {b.variant === "planner" && (
           <group position={[-0.55, 0.04, 0.16]} rotation={[0, -0.25, 0]}>
             <Screen
               position={[0, 0, 0]}
@@ -224,7 +225,7 @@ export function Bot({
             />
           </group>
         )}
-        {id === "architect" && (
+        {b.variant === "analyst" && (
           <group ref={ring} position={[0, 0.16, -0.07]} rotation={[0.2, 0, 0]}>
             <Ring
               radius={0.53}
@@ -247,7 +248,7 @@ export function Bot({
             ))}
           </group>
         )}
-        {id === "developer" && (
+        {b.variant === "builder" && (
           <>
             <Block
               position={[0, -0.2, -0.29]}
