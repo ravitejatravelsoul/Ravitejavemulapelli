@@ -1,5 +1,6 @@
 "use client";
-import { useEffect, useMemo } from "react";
+import { OperationalWorld } from "./world-mode";
+import { useContext, useEffect, useMemo } from "react";
 import { useThree } from "@react-three/fiber";
 import { RoundedBox } from "@react-three/drei";
 import * as THREE from "three";
@@ -195,6 +196,7 @@ export function Screen({
   rotation?: Vec3;
   wide?: boolean;
 }) {
+  const operational = useContext(OperationalWorld);
   const texture = useMemo(() => {
     const c = document.createElement("canvas");
     c.width = 1024;
@@ -307,10 +309,22 @@ export function Screen({
     x.fillStyle = "#92a9ad";
     x.font = "15px Arial";
     x.fillText("LOCAL VISUAL STUDY  /  NO LIVE SYSTEMS", 40, 550);
+    if (operational) {
+      x.fillStyle = "#102b34";
+      x.fillRect(0, 0, 1024, 576);
+      x.fillStyle = "#c7e5de";
+      x.font = "36px Arial";
+      x.fillText("TEJA’S / HEADQUARTERS", 50, 100);
+      x.font = "24px Arial";
+      x.fillText("Approach a colleague or command terminal.", 50, 260);
+      x.fillText("E — inspect authoritative Office state", 50, 315);
+      x.font = "18px Arial";
+      x.fillText("PRIVATE WORKSPACE", 50, 515);
+    }
     const t = new THREE.CanvasTexture(c);
     t.colorSpace = THREE.SRGBColorSpace;
     return t;
-  }, [kind, color]);
+  }, [kind, color, operational]);
   useEffect(() => () => texture.dispose(), [texture]);
   return (
     <group

@@ -442,3 +442,8 @@
     transition: none;
   }
 }
+
+/* After-hours tint is presentation only; persisted task labels remain intact. */
+.world[data-office-closed="true"] canvas {
+  filter: saturate(0.7) brightness(0.84);
+}

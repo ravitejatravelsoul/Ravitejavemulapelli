@@ -12,6 +12,8 @@ import {
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import * as THREE from "three";
 import { Environment } from "./world-geometry";
+import { OperationalWorld } from "./world-mode";
+import type { Vec3 } from "./world-campus";
 import { OFFICE_WORLD } from "./world-campus";
 import {
   BOTS,
@@ -23,7 +25,19 @@ import {
   type BotId,
 } from "./world-model";
 import styles from "./world.module.css";
+export type HeadquartersBridge = {
+  greeting?: string;
+  closed?: boolean;
+  transition?: string;
+  actors: Record<string, { name: string; position: () => Vec3 }>;
+  scene: ReactNode;
+  panel: (id: string, close: () => void) => ReactNode;
+  status: string;
+  notice: string;
+  destinations: { id: string; label: string }[];
+};
 type Runtime = {
+  headquarters?: HeadquartersBridge;
   time: RefObject<number | null>;
   reset: number;
   play: number;
@@ -214,17 +228,23 @@ function Player({
         velocity.current.y * dt,
       );
       const clear = (x: number, z: number) =>
-        (Object.keys(BOTS) as BotId[]).every((id) => {
-          const b = demoBot(id, runtime.time.current).position;
-          return Math.hypot(b[0] - x, b[2] - z) > 0.82;
-        });
+        Object.keys(runtime.headquarters?.actors ?? BOTS)
+          .filter((id) => !id.startsWith("terminal:"))
+          .every((id) => {
+            const b =
+              runtime.headquarters?.actors[id]?.position() ??
+              demoBot(id, runtime.time.current).position;
+            return Math.hypot(b[0] - x, b[2] - z) > 0.82;
+          });
       if (clear(p[0], p[1])) camera.position.set(p[0], 1.7, p[1]);
     }
     camera.rotation.set(look.current.pitch, look.current.yaw, 0, "YXZ");
     let closest: BotId | null = null,
       best = 2.6;
-    for (const id of Object.keys(BOTS) as BotId[]) {
-      const p = demoBot(id, runtime.time.current).position,
+    for (const id of Object.keys(runtime.headquarters?.actors ?? BOTS)) {
+      const p =
+          runtime.headquarters?.actors[id]?.position() ??
+          demoBot(id, runtime.time.current).position,
         d = Math.hypot(p[0] - camera.position.x, p[2] - camera.position.z);
       if (d < best) {
         best = d;
@@ -265,7 +285,9 @@ function deviceCapability(): "checking" | "desktop" | "mobile" | "unsupported" {
   }
 }
 // Stable callbacks keep input listeners and the camera's initial position scoped to mount.
-export default function WorldExperience() {
+export default function WorldExperience({
+  headquarters,
+}: { headquarters?: HeadquartersBridge } = {}) {
   const [ready, setReady] = useState(false),
     [entered, setEntered] = useState(false),
     [locked, setLocked] = useState(false),
@@ -367,7 +389,18 @@ export default function WorldExperience() {
       );
     }
   }
+  // The render callback forwards close to an event handler; it never invokes it.
+  /* eslint-disable react-hooks/refs */
+  const operationalPanel =
+    info && headquarters
+      ? headquarters.panel(info, () => {
+          setInfo(null);
+          void enter();
+        })
+      : null;
+  /* eslint-enable react-hooks/refs */
   const runtime: Runtime = {
+    headquarters,
     time,
     reset,
     play,
@@ -407,6 +440,8 @@ export default function WorldExperience() {
       ref={host}
       data-testid="world-prototype"
       data-ready={ready}
+      data-office-closed={headquarters?.closed || undefined}
+      data-transition={headquarters?.transition ?? ""}
       data-locked={locked}
       data-player-x={telemetry.x.toFixed(2)}
       data-player-z={telemetry.z.toFixed(2)}
@@ -415,38 +450,42 @@ export default function WorldExperience() {
       data-demo-time={telemetry.time?.toFixed(1) ?? "idle"}
       data-near={telemetry.near ?? ""}
     >
-      <WorldBoundary>
-        <Canvas
-          shadows
-          dpr={
-            quality === "high"
-              ? [1, 1.5]
-              : quality === "auto" && autoHigh
-                ? [1, 1.25]
-                : [1, 1]
-          }
-          frameloop={visible ? "always" : "never"}
-          camera={{ position: SPAWN, fov: 65, near: 0.08, far: 2200 }}
-          gl={{ antialias: true, powerPreference: "high-performance" }}
-          fallback={
-            <div className={styles.error}>
-              WebGL is unavailable. <a href="/office">Return to Office</a>
-            </div>
-          }
-        >
-          <Environment
-            time={time}
-            active={visible && !paused && !reduced}
-            cityHigh={quality === "high" || (quality === "auto" && autoHigh)}
-          />
-          <Player
-            runtime={runtime}
-            onTelemetry={setTelemetry}
-            onInteract={onInteract}
-            onReady={onReady}
-          />
-        </Canvas>
-      </WorldBoundary>
+      <OperationalWorld.Provider value={!!headquarters}>
+        <WorldBoundary>
+          <Canvas
+            shadows
+            dpr={
+              quality === "high"
+                ? [1, 1.5]
+                : quality === "auto" && autoHigh
+                  ? [1, 1.25]
+                  : [1, 1]
+            }
+            frameloop={visible ? "always" : "never"}
+            camera={{ position: SPAWN, fov: 65, near: 0.08, far: 2200 }}
+            gl={{ antialias: true, powerPreference: "high-performance" }}
+            fallback={
+              <div className={styles.error}>
+                WebGL is unavailable. <a href="/office">Return to Office</a>
+              </div>
+            }
+          >
+            <Environment
+              time={time}
+              operational={!!headquarters}
+              active={visible && !paused && !reduced}
+              cityHigh={quality === "high" || (quality === "auto" && autoHigh)}
+            />
+            {headquarters?.scene}
+            <Player
+              runtime={runtime}
+              onTelemetry={setTelemetry}
+              onInteract={onInteract}
+              onReady={onReady}
+            />
+          </Canvas>
+        </WorldBoundary>
+      </OperationalWorld.Provider>
       <header className={styles.header}>
         <div>
           <b>T /</b>
@@ -464,7 +503,8 @@ export default function WorldExperience() {
         </a>
       </header>
       <div className={styles.badge}>
-        VISUAL PROTOTYPE <span>NO LIVE DATA</span>
+        {headquarters ? "LIVE HEADQUARTERS" : "VISUAL PROTOTYPE"}{" "}
+        <span>{headquarters?.notice ?? "NO LIVE DATA"}</span>
       </div>
       {!entered && (
         <section className={styles.welcome}>
@@ -485,7 +525,9 @@ export default function WorldExperience() {
           <small>
             Desktop exploration · keyboard + mouse
             <br />
-            All activity and displays are visual demonstrations.
+            {headquarters
+              ? "Persisted Office state. Walking and briefings use no AI calls."
+              : "All activity and displays are visual demonstrations."}
           </small>
         </section>
       )}
@@ -494,18 +536,33 @@ export default function WorldExperience() {
           <span className={styles.eyebrow}>MOUSE RELEASED</span>
           <h2>Take your time.</h2>
           <button onClick={enter}>Resume exploration →</button>
-          <button
-            onClick={() => {
-              setPlay((p) => p + 1);
-              setPaused(false);
-              void enter();
-            }}
-          >
-            Play office demo
-          </button>
-          <button onClick={() => setPaused((p) => !p)}>
-            {paused ? "Resume demo & ambience" : "Pause demo & ambience"}
-          </button>
+          {!headquarters && (
+            <button
+              onClick={() => {
+                setPlay((p) => p + 1);
+                setPaused(false);
+                void enter();
+              }}
+            >
+              Play office demo
+            </button>
+          )}
+          {headquarters?.destinations.map((d) => (
+            <button key={d.id} onClick={() => setInfo(d.id)}>
+              {d.label}
+            </button>
+          ))}
+          {!headquarters && (
+            <button onClick={() => setPaused((p) => !p)}>
+              {headquarters
+                ? paused
+                  ? "Resume visual motion"
+                  : "Pause visual motion"
+                : paused
+                  ? "Resume demo & ambience"
+                  : "Pause demo & ambience"}
+            </button>
+          )}
           <button
             onClick={() => {
               setReset((r) => r + 1);
@@ -546,12 +603,20 @@ export default function WorldExperience() {
           <div className={styles.crosshair} />
           {telemetry.near && (
             <div className={styles.interact}>
-              <kbd>E</kbd> Meet {BOTS[telemetry.near].name}
+              <span>
+                {!telemetry.near.startsWith("terminal:")
+                  ? headquarters?.greeting
+                  : ""}{" "}
+              </span>
+              <kbd>E</kbd> {headquarters ? "Talk to / inspect" : "Meet"}{" "}
+              {headquarters?.actors[telemetry.near]?.name ??
+                BOTS[telemetry.near]?.name}
             </div>
           )}
         </>
       )}
-      {info && (
+      {operationalPanel}
+      {info && !headquarters && (
         <section
           className={styles.info}
           role="dialog"
@@ -610,11 +675,15 @@ export default function WorldExperience() {
       <footer className={styles.footer}>
         <div>
           <span className={styles.eyebrow}>
-            {telemetry.time === null
-              ? "EXPLORATION / VISUAL ONLY"
-              : "OFFICE DEMO / VISUAL ONLY"}
+            {headquarters
+              ? "OWNER / LIVE OFFICE"
+              : telemetry.time === null
+                ? "EXPLORATION / VISUAL ONLY"
+                : "OFFICE DEMO / VISUAL ONLY"}
           </span>
-          <strong aria-live="polite">{demoChapter(telemetry.time)}</strong>
+          <strong aria-live="polite">
+            {headquarters?.status ?? demoChapter(telemetry.time)}
+          </strong>
           {telemetry.time !== null && (
             <progress max={DEMO_DURATION} value={telemetry.time} />
           )}

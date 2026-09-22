@@ -1,5 +1,6 @@
 "use client";
-import { memo, useEffect, useMemo, useRef } from "react";
+import { OperationalWorld } from "./world-mode";
+import { useContext, memo, useEffect, useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { WALLS, demoBot, type Vec3 } from "./world-model";
@@ -474,6 +475,7 @@ function Station({
   time: React.RefObject<number | null>;
   active: boolean;
 }) {
+  const operational = useContext(OperationalWorld);
   const b = agent ?? {
       color: room.visualTheme.accent,
       home: roomPosition(OFFICE_WORLD, room, station.dock),
@@ -583,7 +585,9 @@ function Station({
         tube={0.008}
         color={b.color}
       />
-      {agent && <Bot id={agent.id} time={time} active={active} />}
+      {agent && !operational && (
+        <Bot id={agent.id} time={time} active={active} />
+      )}
     </group>
   );
 }
@@ -752,6 +756,7 @@ function Reception() {
   );
 }
 function Infrastructure({ active }: { active: boolean }) {
+  const operational = useContext(OperationalWorld);
   const pulses = useRef<THREE.Group>(null),
     elapsed = useRef(0);
   useFrame((_, dt) => {
@@ -765,7 +770,7 @@ function Infrastructure({ active }: { active: boolean }) {
         position={[12, 3.75, -10.78]}
         color="#d5e0db"
         text="04 / INFRASTRUCTURE"
-        sub="OFFICE ENGINEER / FUTURE HOME"
+        sub={operational ? "OFFICE ENGINEER / MODEL LAB" : "OFFICE ENGINEER / FUTURE HOME"}
         width={4.6}
         height={0.62}
       />
@@ -882,6 +887,7 @@ function OwnerRoom() {
   );
 }
 function DeliveryRoom({ active }: { active: boolean }) {
+  const operational = useContext(OperationalWorld);
   return (
     <group>
       {" "}
@@ -900,7 +906,11 @@ function DeliveryRoom({ active }: { active: boolean }) {
       <Sign
         position={[12, 3.45, -17.7]}
         text="THE DELIVERY COLLECTION"
-        sub="DEMO PROJECTS / A GALLERY OF POSSIBILITY"
+        sub={
+          operational
+            ? "VERIFIED DELIVERIES / OWNER ARCHIVE"
+            : "DEMO PROJECTS / A GALLERY OF POSSIBILITY"
+        }
         color="#e2e1d5"
         width={5.8}
         height={0.75}
@@ -926,12 +936,14 @@ function DeliveryRoom({ active }: { active: boolean }) {
             size={[1.25, 1.45, 1.25]}
             opacity={0.13}
           />
-          <Core
-            position={[x, 1.8, -15]}
-            scale={1.15}
-            color={["#e6c48d", "#8ee1d4", "#9fc9f5"][i]}
-            active={active}
-          />
+          {!operational && (
+            <Core
+              position={[x, 1.8, -15]}
+              scale={1.15}
+              color={["#e6c48d", "#8ee1d4", "#9fc9f5"][i]}
+              active={active}
+            />
+          )}
           <Ring
             position={[x, 1.11, -15]}
             radius={0.48}
@@ -940,8 +952,8 @@ function DeliveryRoom({ active }: { active: boolean }) {
           />
           <Sign
             position={[x, 0.63, -14.29]}
-            text={"DEMO PROJECT 0" + (i + 1)}
-            sub="VISUAL COLLECTION"
+            text={operational ? "DELIVERY VAULT" : "DEMO PROJECT 0" + (i + 1)}
+            sub={operational ? "VERIFIED PROJECTS ONLY" : "VISUAL COLLECTION"}
             width={1.18}
             height={0.3}
             color="#e2e7df"
@@ -958,19 +970,20 @@ function DeliveryRoom({ active }: { active: boolean }) {
   );
 }
 function ExpansionRoom() {
+  const operational = useContext(OperationalWorld);
   return (
     <group>
       {" "}
       <Sign
         position={[-12, 3.6, -17.7]}
-        text="FUTURE OPERATIONS"
-        sub="DESIGN STUDIO / QA LAB / SECURITY OPERATIONS"
+        text={operational ? "QUALITY / SECURITY / REVIEW" : "FUTURE OPERATIONS"}
+        sub={operational ? "QA LAB / SECURITY OPERATIONS" : "DESIGN STUDIO / QA LAB / SECURITY OPERATIONS"}
         width={5.6}
         height={0.75}
       />
       <Sign
         position={[-12, 2.95, -17.7]}
-        text="CODE REVIEW  ·  RELEASE BAY"
+        text={operational ? "CODE REVIEW" : "CODE REVIEW  ·  RELEASE BAY"}
         sub="CONNECTED CAMPUS / FLOORS 47–49"
         width={4.6}
         height={0.55}
@@ -1125,7 +1138,9 @@ export const Environment = memo(function Environment({
   time,
   active,
   cityHigh,
+  operational = false,
 }: {
+  operational?: boolean;
   cityHigh: boolean;
   time: React.RefObject<number | null>;
   active: boolean;
@@ -1162,7 +1177,7 @@ export const Environment = memo(function Environment({
         .map((room) => (
           <RoomRenderer key={room.id} room={room} time={time} active={active} />
         ))}
-      <Transfer time={time} active={active} />
+      {!operational && <Transfer time={time} active={active} />}
       <CityEnvironment active={active} high={cityHigh} />
     </>
   );

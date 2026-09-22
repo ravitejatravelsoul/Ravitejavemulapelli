@@ -1,0 +1,100 @@
+.panel {
+  position: absolute;
+  right: 24px;
+  top: 100px;
+  bottom: 85px;
+  width: min(660px, calc(100vw - 48px));
+  overflow: auto;
+  background: linear-gradient(145deg, #18343cf5, #10212cfb);
+  border: 1px solid #acc9c65e;
+  box-shadow: 0 24px 100px #07151ba0;
+  border-radius: 22px;
+  color: #e4efeb;
+  padding: 28px;
+  z-index: 5;
+  font:
+    14px/1.6 "Segoe UI",
+    sans-serif;
+}
+.panel h2 {
+  font-size: 28px;
+  line-height: 1.2;
+  margin: 8px 0 20px;
+}
+.panel h3 {
+  font-size: 17px;
+  margin: 22px 0 8px;
+  color: #d6c4a4;
+}
+.panel small {
+  color: #acc7c6;
+}
+.panel button,
+.panel a {
+  display: inline-block;
+  padding: 9px 13px;
+  margin: 5px 5px 5px 0;
+  border: 1px solid #a8c6c64c;
+  border-radius: 8px;
+  background: #cce0d90b;
+  color: #f0f4e9;
+}
+.panel button:focus-visible,
+.panel a:focus-visible,
+.panel select:focus-visible {
+  outline: 2px solid #efd19a;
+  outline-offset: 2px;
+}
+.panel dl {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 8px;
+  margin: 20px 0;
+}
+.panel dt {
+  color: #9cbbbb;
+}
+.panel dd {
+  overflow-wrap: anywhere;
+}
+.panel article {
+  border-top: 1px solid #a1c4bf33;
+  padding: 16px 0;
+}
+.panel select {
+  width: 100%;
+  padding: 10px;
+  background: #1b3945;
+  color: #f0f4e9;
+  border: 1px solid #91b0aa66;
+  border-radius: 8px;
+}
+.briefing {
+  border-left: 2px solid #a8d8c8;
+  padding: 12px 18px;
+  background: #89c3b80b;
+  margin: 16px 0;
+}
+.status {
+  font: 11px/1.6 monospace;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: #b7d7cb;
+}
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.muted {
+  color: #a0b6b9;
+}
+.panel ul {
+  padding-left: 20px;
+}
+.panel li {
+  margin: 5px 0;
+}
+.panel svg {
+  max-width: 100%;
+}

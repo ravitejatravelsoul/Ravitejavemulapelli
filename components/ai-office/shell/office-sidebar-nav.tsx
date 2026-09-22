@@ -25,6 +25,7 @@ const NAV_ITEMS = [
   { href: "/office/engineer", label: "Engineer", icon: Wrench },
   { href: "/office/communications", label: "Communications", icon: MessageCircle },
   { href: "/office/settings", label: "Settings", icon: Settings },
+  { href: "/office/headquarters", label: "3D Headquarters", icon: LayoutGrid },
   { href: "/office/world-prototype", label: "3D Prototype", icon: LayoutGrid },
 ] as const;
 

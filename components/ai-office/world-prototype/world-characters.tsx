@@ -4,12 +4,19 @@ import { useFrame, useThree } from "@react-three/fiber";
 import { RoundedBox } from "@react-three/drei";
 import * as THREE from "three";
 import { BOTS, demoBot, type BotId, type Vec3 } from "./world-model";
+import type { PlacedAgent } from "./world-campus";
 import { Block, Ring, Screen, palette } from "./world-surfaces";
 export function Bot({
   id,
   time,
   active,
+  definition,
+  sampleFrame,
+  equipment,
 }: {
+  definition?: PlacedAgent;
+  sampleFrame?: () => ReturnType<typeof demoBot>;
+  equipment?: React.ReactNode;
   id: BotId;
   time: React.RefObject<number | null>;
   active: boolean;
@@ -20,9 +27,9 @@ export function Bot({
     carry = useRef<THREE.Group>(null),
     ring = useRef<THREE.Group>(null);
   const elapsed = useRef(0),
-    last = useRef(new THREE.Vector3(...BOTS[id].home)),
-    yaw = useRef(BOTS[id].workRotation);
-  const b = BOTS[id];
+    last = useRef(new THREE.Vector3(...(definition ?? BOTS[id]).home)),
+    yaw = useRef((definition ?? BOTS[id]).workRotation);
+  const b = definition ?? BOTS[id];
   const camera = useThree((state) => state.camera);
   useEffect(() => {
     root.current?.traverse((o) => {
@@ -31,7 +38,7 @@ export function Bot({
   }, []);
   useFrame((_, dt) => {
     if (!root.current || !body.current) return;
-    const sample = demoBot(id, time.current);
+    const sample = sampleFrame ? sampleFrame() : demoBot(id, time.current);
     const p = sample.position;
     root.current.position.set(...p);
     if (active) elapsed.current += dt;
@@ -42,7 +49,10 @@ export function Bot({
       dz = p[2] - last.current.z;
     if (Math.hypot(dx, dz) > 0.001) yaw.current = Math.atan2(dx, dz);
     else if (sample.state === "WORKING") yaw.current = b.workRotation;
-    else if (sample.state === "HANDOFF" || sample.state === "INTERACTING") {
+    else if (
+      !sampleFrame &&
+      (sample.state === "HANDOFF" || sample.state === "INTERACTING")
+    ) {
       const other =
         id === "product"
           ? "architect"
@@ -55,7 +65,7 @@ export function Bot({
       yaw.current = Math.atan2(target[0] - p[0], target[2] - p[2]);
     }
     if (
-      sample.state === "IDLE" &&
+      (sample.state === "IDLE" || !!sampleFrame) &&
       Math.hypot(camera.position.x - p[0], camera.position.z - p[2]) < 4
     ) {
       yaw.current = Math.atan2(
@@ -83,8 +93,14 @@ export function Bot({
   });
   return (
     <group ref={root} position={b.home}>
-      <ContactShadow time={time} id={id} />
+      <ContactShadow
+        time={time}
+        id={id}
+        definition={definition}
+        sampleFrame={sampleFrame}
+      />
       <group ref={body}>
+        {equipment}
         {/* Separate ceramic head, graphite chassis and articulated manipulators. */}
         <mesh position={[0, 0.14, 0]} scale={[0.43, 0.32, 0.35]}>
           <sphereGeometry args={[1, 32, 20]} />
@@ -282,8 +298,12 @@ export function Bot({
 function ContactShadow({
   id,
   time,
+  definition,
+  sampleFrame,
 }: {
   id: BotId;
+  definition?: PlacedAgent;
+  sampleFrame?: () => ReturnType<typeof demoBot>;
   time: React.RefObject<number | null>;
 }) {
   const mesh = useRef<THREE.Mesh>(null);
@@ -301,8 +321,9 @@ function ContactShadow({
   useEffect(() => () => texture.dispose(), [texture]);
   useFrame(() => {
     if (mesh.current) {
-      const p = demoBot(id, time.current).position;
-      const home = BOTS[id].home;
+      const p = (sampleFrame ? sampleFrame() : demoBot(id, time.current))
+        .position;
+      const home = (definition ?? BOTS[id]).home;
       mesh.current.position.y =
         -p[1] +
         (Math.hypot(p[0] - home[0], p[2] - home[2]) < 0.8 ? 0.083 : 0.035);
