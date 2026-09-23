@@ -13,6 +13,12 @@ import {
   liveSample,
   type HandoffPlayback,
 } from "@/lib/ai-office/headquarters/presentation";
+import {
+  presentationStatus,
+  playbackProgress,
+  playbackPhase,
+  dagStatus,
+} from "@/lib/ai-office/headquarters/experience";
 import { Bot, Core } from "../world-prototype/world-characters";
 import { Block, Ring, Sign } from "../world-prototype/world-surfaces";
 import type { Vec3 } from "../world-prototype/world-campus";
@@ -144,29 +150,140 @@ function Equipment({ motif, color }: { motif: string; color: string }) {
     </group>
   );
 }
+
+function StationActivity({
+  agent,
+  animate,
+}: {
+  agent: HeadquartersAgent;
+  animate: boolean;
+}) {
+  const group = useRef<THREE.Group>(null),
+    scan = useRef<THREE.Group>(null);
+  const style = presentationStatus(agent.status),
+    home = ROLE_STATIONS[agent.roleId].home;
+  useFrame(({ clock }) => {
+    if (!group.current) return;
+    const t = clock.elapsedTime;
+    group.current.scale.setScalar(
+      style.active && animate ? 1 + Math.sin(t * 2) * 0.04 : 1,
+    );
+    if (scan.current) {
+      scan.current.rotation.z =
+        agent.status === "THINKING" && animate ? t * 0.4 : 0;
+      scan.current.position.y =
+        agent.status === "TESTING" && animate ? Math.sin(t * 2.3) * 0.22 : 0;
+    }
+  });
+  return (
+    <group ref={group} position={[home[0], 1.7, home[2] - 0.5]}>
+      <Ring
+        position={[0, -1.55, 0]}
+        radius={0.65}
+        tube={style.active ? 0.028 : 0.013}
+        color={style.color}
+      />
+      <group ref={scan}>
+        {agent.status === "THINKING" ? (
+          <>
+            <Ring position={[0, 0.1, 0]} radius={0.34} color={style.color} />
+            {[-1, 1].map((i) => (
+              <mesh key={i} position={[i * 0.3, 0.1, 0]}>
+                <octahedronGeometry args={[0.07]} />
+                <meshBasicMaterial color={style.color} />
+              </mesh>
+            ))}
+          </>
+        ) : agent.status === "TESTING" ? (
+          <>
+            <Block
+              position={[0, 0, 0]}
+              size={[0.75, 0.025, 0.5]}
+              color={style.color}
+              glow={0.8}
+            />
+            <Ring position={[0, 0, 0]} radius={0.42} color={style.color} />
+          </>
+        ) : agent.status === "REVIEWING" ? (
+          <>
+            {[-1, 1].map((i) => (
+              <group key={i} position={[i * 0.25, 0.15, 0]}>
+                <Block
+                  position={[0, 0, 0]}
+                  size={[0.4, 0.35, 0.025]}
+                  color="#173541"
+                />
+                {[-1, 0, 1].map((j) => (
+                  <Block
+                    key={j}
+                    position={[0, j * 0.08, 0.03]}
+                    size={[0.25, 0.018, 0.012]}
+                    color={style.color}
+                    glow={0.5}
+                  />
+                ))}
+              </group>
+            ))}
+          </>
+        ) : agent.status === "RETRYING" ? (
+          <Core
+            position={[0, 0.1, 0]}
+            scale={0.55}
+            color={style.color}
+            active={animate}
+          />
+        ) : style.warning ? (
+          <mesh position={[0, 0.1, 0]}>
+            <ringGeometry args={[0.18, 0.23, 3]} />
+            <meshBasicMaterial color={style.color} side={THREE.DoubleSide} />
+          </mesh>
+        ) : style.active ? (
+          <>
+            {[0, 1, 2].map((i) => (
+              <Block
+                key={i}
+                position={[i * 0.18 - 0.18, 0.1 + i * 0.08, 0]}
+                size={[0.1, 0.24, 0.035]}
+                color={style.color}
+                glow={0.7}
+              />
+            ))}
+          </>
+        ) : (
+          <Ring
+            position={[0, -0.2, 0]}
+            radius={0.22}
+            tube={0.012}
+            color={style.color}
+          />
+        )}
+      </group>
+    </group>
+  );
+}
 const LiveActor = memo(function LiveActor({
   agent,
   play,
   animate,
+  boss,
+  acknowledgments,
 }: {
   agent: HeadquartersAgent;
   play: React.RefObject<HandoffPlayback | null>;
   animate: boolean;
+  boss: React.RefObject<Vec3>;
+  acknowledgments: React.RefObject<Map<string, number>>;
 }) {
-  const definition = useMemo(() => visualDefinition(agent), [agent]);
-  const label = useRef<THREE.Group>(null);
+  const definition = useMemo(() => visualDefinition(agent), [agent]),
+    label = useRef<THREE.Group>(null);
   useFrame(() => {
     if (label.current) {
       const p = liveSample(agent, play.current, Date.now(), animate).position;
-      label.current.position.set(p[0], p[1] + 0.95, p[2]);
+      label.current.position.set(p[0], 0.32, p[2] + 0.8);
     }
   });
   if (!definition) return null;
-  const color = ["FAILED", "BLOCKED"].includes(agent.status)
-    ? "#efb094"
-    : agent.status === "PAUSED"
-      ? "#a5afb0"
-      : definition.color;
+  const color = presentationStatus(agent.status).color;
   return (
     <>
       <Bot
@@ -178,57 +295,152 @@ const LiveActor = memo(function LiveActor({
         equipment={
           <Equipment motif={ROLE_STATIONS[agent.roleId].motif} color={color} />
         }
+        attention={() => {
+          const now = Date.now(),
+            p = play.current,
+            sample = liveSample(agent, p, now, animate),
+            phase = p ? playbackPhase(p, now) : "";
+          if (animate && p && phase === "TRANSFER") {
+            if (agent.roleId === p.event.toRole)
+              return {
+                target: liveSample(
+                  { roleId: p.event.fromRole, status: "IDLE" },
+                  p,
+                  now,
+                  true,
+                ).position,
+                acknowledge: true,
+              };
+            if (agent.roleId === p.event.fromRole)
+              return {
+                target: ROLE_STATIONS[p.event.toRole]?.home ?? [10, 1.8, -15],
+                acknowledge: false,
+              };
+          }
+          if (
+            agent.roleId === "office-engineer" &&
+            ["WORKING", "REVIEWING"].includes(agent.status)
+          )
+            return { target: [13, 1.5, -7.5], acknowledge: false };
+          const near =
+            Math.hypot(
+              boss.current[0] - sample.position[0],
+              boss.current[2] - sample.position[2],
+            ) < 2.6;
+          return {
+            target: near && sample.state !== "FLOATING" ? boss.current : null,
+            acknowledge:
+              near &&
+              animate &&
+              (acknowledgments.current.get(agent.roleId) ?? 0) > now,
+          };
+        }}
       />
       <group ref={label}>
         <Sign
           position={[0, 0, 0]}
           text={agent.name.toUpperCase()}
-          sub={
-            agent.status + (agent.attempt ? " / ATTEMPT " + agent.attempt : "")
-          }
-          width={2.35}
-          height={0.45}
-          color="#304d56"
+          sub={agent.status + (agent.attempt ? " / " + agent.attempt : "")}
+          width={1.7}
+          height={0.28}
+          color="#536b71"
         />
       </group>
-      <Ring
-        position={[definition.home[0], 0.08, definition.home[2]]}
-        radius={0.55}
-        tube={0.012}
-        color={color}
-      />
+      <StationActivity agent={agent} animate={animate} />
     </>
   );
 });
-/** A persisted transition alone drives this visual core; no lifecycle callbacks. */
+/** Personal-space holds affect only visual time. The runner is never delayed. */
 function HandoffCore({
+  play: playRef,
+  animate,
+  boss,
+}: {
+  play: React.RefObject<HandoffPlayback | null>;
+  animate: boolean;
+  boss: React.RefObject<Vec3>;
+}) {
+  const root = useRef<THREE.Group>(null),
+    previous = useRef(0);
+  useFrame(() => {
+    const now = Date.now(),
+      dt = Math.min(100, now - previous.current);
+    previous.current = now;
+    const p = playRef.current,
+      group = root.current;
+    if (!group) return;
+    if (animate && p) {
+      const pos = liveSample(
+        { roleId: p.event.fromRole, status: "IDLE" },
+        p,
+        now,
+        true,
+      ).position;
+      if (Math.hypot(pos[0] - boss.current[0], pos[2] - boss.current[2]) < 1.15)
+        playRef.current = { ...p, pausedMs: (p.pausedMs ?? 0) + dt };
+    }
+    const t = p ? playbackProgress(p, now) : -1;
+    group.visible = !!(animate && p && t >= 0.42 && t < 0.62);
+    if (!group.visible || !p) return;
+    const from = p.path.at(-1)!,
+      to = ROLE_STATIONS[p.event.toRole]?.home ?? [10, 1.8, -15];
+    const f = Math.min(1, (t - 0.42) / 0.2),
+      dx = to[0] - from[0],
+      dz = to[2] - from[2],
+      length = Math.hypot(dx, dz) || 1;
+    group.position.set(
+      from[0] + (dx / length) * 0.6 + (dx - (dx / length) * 0.6) * f,
+      from[1] + (to[1] - from[1]) * f + 0.25 * Math.sin(f * Math.PI),
+      from[2] + (dz / length) * 0.6 + (dz - (dz / length) * 0.6) * f,
+    );
+    group.scale.setScalar(1);
+    group.children[0].visible = p.event.type !== "REMEDIATION";
+    group.children[1].visible = p.event.type === "REMEDIATION";
+  });
+  return (
+    <group ref={root} visible={false}>
+      <group>
+        <Core scale={0.8} color="#e5c78f" active={animate} />
+      </group>
+      <group>
+        <Core scale={0.8} color="#e49b64" active={animate} />
+        <mesh rotation={[0, 0, Math.PI / 4]}>
+          <torusGeometry args={[0.38, 0.025, 6, 4]} />
+          <meshStandardMaterial
+            color="#e49b64"
+            emissive="#e49b64"
+            emissiveIntensity={0.5}
+          />
+        </mesh>
+      </group>
+    </group>
+  );
+}
+function VerifiedCore({
+  id,
+  position,
   play,
   animate,
 }: {
+  id: string;
+  position: Vec3;
   play: React.RefObject<HandoffPlayback | null>;
   animate: boolean;
 }) {
   const root = useRef<THREE.Group>(null);
   useFrame(() => {
-    const p = play.current,
-      group = root.current;
-    if (!group) return;
-    const t = p ? (Date.now() - p.startedAt) / 12000 : -1;
-    group.visible = !!(animate && p && t >= 0.5 && t < 0.65);
-    if (!group.visible || !p) return;
-    const from = p.path.at(-1)!,
-      to = ROLE_STATIONS[p.event.toRole].home;
-    const f = Math.min(1, (t - 0.5) / 0.08);
-    group.position.set(
-      from[0] + (to[0] - from[0]) * f,
-      from[1] + (to[1] - from[1]) * f + 0.25 * Math.sin(f * Math.PI),
-      from[2] + (to[2] - from[2]) * f,
-    );
-    group.scale.setScalar(t > 0.58 ? Math.max(0, 1 - (t - 0.58) / 0.07) : 1);
+    if (root.current) {
+      const p = play.current;
+      root.current.visible = !(
+        p?.event.type === "DELIVERY" &&
+        p.event.projectId === id &&
+        playbackProgress(p, Date.now()) < 0.62
+      );
+    }
   });
   return (
-    <group ref={root} visible={false}>
-      <Core scale={0.65} color="#e4ca91" active={animate} />
+    <group ref={root}>
+      <Core position={position} scale={0.95} active={animate} />
     </group>
   );
 }
@@ -236,8 +448,12 @@ export const HeadquartersScene = memo(function HeadquartersScene({
   state,
   play,
   animate,
+  boss,
+  acknowledgments,
 }: {
   state: HeadquartersState;
+  boss: React.RefObject<Vec3>;
+  acknowledgments: React.RefObject<Map<string, number>>;
   play: React.RefObject<HandoffPlayback | null>;
   animate: boolean;
 }) {
@@ -273,9 +489,16 @@ export const HeadquartersScene = memo(function HeadquartersScene({
     ];
   return (
     <>
-      <HandoffCore play={play} animate={animate} />
+      <HandoffCore play={play} animate={animate} boss={boss} />
       {[...state.agents, engineer].map((a) => (
-        <LiveActor key={a.roleId} agent={a} play={play} animate={animate} />
+        <LiveActor
+          key={a.roleId}
+          agent={a}
+          play={play}
+          animate={animate}
+          boss={boss}
+          acknowledgments={acknowledgments}
+        />
       ))}
       <Sign
         position={[0, 2.25, 3.1]}
@@ -296,15 +519,7 @@ export const HeadquartersScene = memo(function HeadquartersScene({
           <mesh position={point(i)}>
             <octahedronGeometry args={[0.09]} />
             <meshBasicMaterial
-              color={
-                n.status === "DONE"
-                  ? "#80d6b8"
-                  : n.status === "IN_PROGRESS"
-                    ? "#e9ce98"
-                    : n.status === "FAILED" || n.status === "BLOCKED"
-                      ? "#ed997f"
-                      : "#8eabb8"
-              }
+              color={presentationStatus(dagStatus(n.visualStatus)).color}
             />
           </mesh>
           {n.dependsOn.map((id) => {
@@ -322,10 +537,11 @@ export const HeadquartersScene = memo(function HeadquartersScene({
       ))}
       {state.deliveries.slice(0, 3).map((d, i) => (
         <group key={d.id}>
-          <Core
+          <VerifiedCore
+            id={d.id}
             position={[[10, 13, 15.7][i], 1.8, -15]}
-            scale={0.95}
-            active={animate}
+            play={play}
+            animate={animate}
           />
           <Sign
             position={[[10, 13, 15.7][i], 2.7, -14.5]}
@@ -353,13 +569,17 @@ export const HeadquartersScene = memo(function HeadquartersScene({
       <Sign
         position={[0, 3.5, -11.2]}
         text="OWNER COMMAND"
-        sub={
-          state.approvals.length
-            ? state.approvals.length + " OWNER DECISIONS REQUIRED"
-            : "NO PENDING OWNER DECISIONS"
-        }
+        sub={`${state.office.activeProjects} PROJECTS / ${state.office.health} / ${state.approvals.length} APPROVALS`}
         width={5.1}
         height={0.6}
+      />
+      <Sign
+        position={[0, 2.65, -11.2]}
+        text={`BUDGET $${state.budget.remainingUsd.toFixed(2)} REMAINING`}
+        sub={`${state.incidents.filter((i) => i.status !== "RESOLVED").length} OPEN INCIDENTS`}
+        width={3.5}
+        height={0.5}
+        color={state.approvals.length ? "#d8ba81" : "#abc8be"}
       />
       <Sign
         position={[12, 3.3, -4.8]}

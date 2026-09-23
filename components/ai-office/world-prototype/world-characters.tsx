@@ -13,10 +13,12 @@ export function Bot({
   definition,
   sampleFrame,
   equipment,
+  attention,
 }: {
   definition?: PlacedAgent;
   sampleFrame?: () => ReturnType<typeof demoBot>;
   equipment?: React.ReactNode;
+  attention?: () => { target: Vec3 | null; acknowledge: boolean };
   id: BotId;
   time: React.RefObject<number | null>;
   active: boolean;
@@ -40,6 +42,7 @@ export function Bot({
     if (!root.current || !body.current) return;
     const sample = sampleFrame ? sampleFrame() : demoBot(id, time.current);
     const p = sample.position;
+    const social = attention?.();
     root.current.position.set(...p);
     if (active) elapsed.current += dt;
     body.current.position.y = active
@@ -48,6 +51,7 @@ export function Bot({
     const dx = p[0] - last.current.x,
       dz = p[2] - last.current.z;
     if (Math.hypot(dx, dz) > 0.001) yaw.current = Math.atan2(dx, dz);
+    else if (sampleFrame) yaw.current = b.workRotation;
     else if (sample.state === "WORKING") yaw.current = b.workRotation;
     else if (
       !sampleFrame &&
@@ -65,6 +69,7 @@ export function Bot({
       yaw.current = Math.atan2(target[0] - p[0], target[2] - p[2]);
     }
     if (
+      !attention &&
       (sample.state === "IDLE" || !!sampleFrame) &&
       Math.hypot(camera.position.x - p[0], camera.position.z - p[2]) < 4
     ) {
@@ -73,6 +78,14 @@ export function Bot({
         camera.position.z - p[2],
       );
     }
+    if (social?.target)
+      yaw.current = Math.atan2(
+        social.target[0] - p[0],
+        social.target[2] - p[2],
+      );
+    body.current.rotation.x = social?.acknowledge
+      ? Math.sin(elapsed.current * 7) * 0.09
+      : 0;
     const difference = Math.atan2(
       Math.sin(yaw.current - root.current.rotation.y),
       Math.cos(yaw.current - root.current.rotation.y),
@@ -81,7 +94,7 @@ export function Bot({
     last.current.set(...p);
     if (arms.current)
       arms.current.rotation.x =
-        sample.state === "INTERACTING"
+        sample.state === "INTERACTING" || social?.acknowledge
           ? -0.65
           : sample.state === "HANDOFF"
             ? -0.45

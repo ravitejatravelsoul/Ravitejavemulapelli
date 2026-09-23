@@ -1,16 +1,14 @@
 "use client";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import WorldExperience from "../world-prototype/world-experience";
 import { HeadquartersScene } from "./headquarters-scene";
 import { HeadquartersPanel } from "./headquarters-panel";
+import { useHeadquartersExperience } from "./use-headquarters-experience";
+import styles from "./headquarters-panel.module.css";
 import { useWorldState } from "./use-world-state";
 import {
-  greeting,
   ROLE_STATIONS,
   liveSample,
-  latestTransition,
-  handoffPath,
-  type HandoffPlayback,
 } from "@/lib/ai-office/headquarters/presentation";
 import type { Vec3 } from "../world-prototype/world-campus";
 const DESTINATIONS = [
@@ -22,66 +20,14 @@ const DESTINATIONS = [
 ];
 export default function HeadquartersWorld() {
   const [project, setProject] = useState<string | undefined>(() =>
-      typeof location !== "undefined"
-        ? (new URLSearchParams(location.search).get("project") ?? undefined)
-        : undefined,
-    ),
-    [motion, setMotion] = useState(true),
-    [transition, setTransition] = useState("");
-  const { state, error, refreshedAt, refresh } = useWorldState(project),
-    play = useRef<HandoffPlayback | null>(null),
-    seen = useRef(new Set<string>()),
-    lastProject = useRef<string | undefined>(undefined),
-    synced = useRef(false);
-  useEffect(() => {
-    const media = matchMedia("(prefers-reduced-motion: reduce)");
-    const update = () => {
-      setMotion(!document.hidden && !media.matches);
-      if (document.hidden) {
-        play.current = null;
-        synced.current = false;
-      }
-    };
-    update();
-    document.addEventListener("visibilitychange", update);
-    media.addEventListener("change", update);
-    return () => {
-      document.removeEventListener("visibilitychange", update);
-      media.removeEventListener("change", update);
-    };
-  }, []);
-  useEffect(() => {
-    if (!state) return;
-    const changed = lastProject.current !== state.project?.id;
-    const enabled =
-      synced.current &&
-      !changed &&
-      motion &&
-      !error &&
-      state.office.state === "OPEN" &&
-      state.project?.status !== "PAUSED";
-    const event = latestTransition(
-      state.transitions,
-      seen.current,
-      Date.now(),
-      enabled,
-    );
-    if (!enabled) {
-      play.current = null;
-      queueMicrotask(() => setTransition(""));
-    } else if (
-      event &&
-      (!play.current || Date.now() - play.current.startedAt > 12000)
-    ) {
-      const path = handoffPath(event);
-      if (path) {
-        play.current = { event, path, startedAt: Date.now() };
-        queueMicrotask(() => setTransition(event.id));
-      }
-    }
-    lastProject.current = state.project?.id;
-    synced.current = true;
-  }, [state, motion, error]);
+    typeof location !== "undefined"
+      ? (new URLSearchParams(location.search).get("project") ?? undefined)
+      : undefined,
+  );
+  const { state, error, refreshedAt, refresh } = useWorldState(project);
+  const experience = useHeadquartersExperience(state, error);
+  const { play, boss, acknowledgments, motion, view, bubble, notice } =
+    experience;
   const selectProject = useCallback((id: string) => {
     setProject(id);
     history.replaceState(
@@ -116,7 +62,7 @@ export default function HeadquartersWorld() {
     ] as [string, string, Vec3][])
       result[id] = { name, position: () => p };
     return result;
-  }, [state?.agents, animate]);
+  }, [state?.agents, animate, play]);
   if (!state)
     return (
       <section role="status" style={{ padding: 40 }}>
@@ -128,12 +74,85 @@ export default function HeadquartersWorld() {
   return (
     <WorldExperience
       headquarters={{
-        greeting: greeting(new Date(refreshedAt).getHours()),
         closed: state.office.state === "CLOSED",
-        transition,
+        transition: view.id,
+        boss,
+        onNear: experience.onNear,
+        cinematic: experience.watch,
+        cameraSample: experience.cameraSample,
+        stopWatching: experience.stopWatching,
+        watchHandoff: experience.startWatching,
+        hud: (
+          <>
+            {view.id && (
+              <aside
+                className={styles.eventCue}
+                data-testid="handoff-cue"
+                data-transition={view.id}
+                data-phase={view.phase}
+                data-pending={view.pending}
+              >
+                <small>
+                  {view.id.startsWith("delivery:")
+                    ? "DELIVERY VERIFIED"
+                    : view.id.startsWith("remediation:")
+                      ? "REMEDIATION IN PROGRESS"
+                      : "HANDOFF IN PROGRESS"}
+                </small>
+                <strong>
+                  {state.agents.find((a) => a.roleId === view.fromRole)?.name} →{" "}
+                  {view.id.startsWith("delivery:")
+                    ? "Delivery Vault"
+                    : state.agents.find((a) => a.roleId === view.toRole)?.name}
+                </strong>
+                <span>
+                  {view.phase.toLowerCase()}
+                  {view.held ? " · Owner nearby — keeping personal space" : ""}
+                </span>
+                <button
+                  onClick={
+                    experience.watch
+                      ? experience.stopWatching
+                      : experience.startWatching
+                  }
+                >
+                  {experience.watch ? "Return to Boss" : "Watch"}
+                </button>
+              </aside>
+            )}
+            {notice && (
+              <aside
+                className={styles.notice}
+                role="status"
+                data-testid="world-notice"
+              >
+                <b>{notice.title}</b>
+                <span>{notice.detail}</span>
+              </aside>
+            )}
+            {bubble && !experience.watch && (
+              <aside
+                className={styles.bubble}
+                role="status"
+                data-testid="proximity-briefing"
+                data-role={bubble.role}
+                data-revision={bubble.revision}
+              >
+                {bubble.text}
+                <small>E · Open full workspace briefing</small>
+              </aside>
+            )}
+          </>
+        ),
         actors,
         scene: (
-          <HeadquartersScene state={state} play={play} animate={!!animate} />
+          <HeadquartersScene
+            state={state}
+            play={play}
+            animate={!!animate}
+            boss={boss}
+            acknowledgments={acknowledgments}
+          />
         ),
         panel: (id, close) => (
           <HeadquartersPanel

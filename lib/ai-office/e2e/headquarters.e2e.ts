@@ -15,6 +15,9 @@ import {
   updateAgentRunStatus,
   addTaskDependency,
 } from "../domain/tasks.ts";
+import { createIncident, updateIncident } from "../domain/office-incidents.ts";
+import { setDeliveryState } from "../domain/workspace.ts";
+import { recordEvent } from "../domain/events.ts";
 import { createApproval, getApproval } from "../domain/project-outputs.ts";
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -208,6 +211,183 @@ test(
         .locator("xpath=self::*[string-length(@data-transition)>0]")
         .waitFor({ timeout: 12000 });
       await page.screenshot({ path: join(evidence, "owner-command.png") });
+      await page.getByRole("button", { name: "Close & resume" }).click();
+      await page.locator("[data-locked=true]").waitFor();
+      const beforeWatch = await root.evaluate((e) => ({
+        x: e.dataset.playerX,
+        z: e.dataset.playerZ,
+        yaw: e.dataset.yaw,
+      }));
+      await page.keyboard.press("KeyV");
+      await page.locator("[data-cinematic=true]").waitFor();
+      await page
+        .getByTestId("handoff-cue")
+        .locator('xpath=self::*[@data-phase="TRANSFER"]')
+        .waitFor({ timeout: 45000 });
+      await page.screenshot({ path: join(evidence, "handoff-transfer.png") });
+      await page.keyboard.press("Escape");
+      await page.locator("[data-cinematic=false]").waitFor();
+      await page.waitForTimeout(500);
+      assert.deepEqual(
+        await root.evaluate((e) => ({
+          x: e.dataset.playerX,
+          z: e.dataset.playerZ,
+          yaw: e.dataset.yaw,
+        })),
+        beforeWatch,
+        "Watch restores exact Boss pose",
+      );
+      await page
+        .getByTestId("handoff-cue")
+        .waitFor({ state: "detached", timeout: 45000 });
+      await page
+        .getByRole("button", { name: "Resume exploration →", exact: true })
+        .click();
+      const key = async (k: string, ms: number) => {
+        await page.keyboard.down(k);
+        await page.waitForTimeout(ms);
+        await page.keyboard.up(k);
+        await page.waitForTimeout(120);
+      };
+      const go = async (x: number, z: number) => {
+        const until = Date.now() + 20000;
+        while (Date.now() < until) {
+          const d = await root.evaluate((e) => e.dataset),
+            dx = x - Number(d.playerX),
+            dz = z - Number(d.playerZ);
+          if (Math.hypot(dx, dz) < 0.12) return;
+          await key(
+            Math.abs(dx) > 0.08
+              ? dx > 0
+                ? "KeyD"
+                : "KeyA"
+              : dz > 0
+                ? "KeyS"
+                : "KeyW",
+            Math.min(
+              350,
+              Math.max(
+                35,
+                (Math.abs(dx) > 0.08 ? Math.abs(dx) : Math.abs(dz)) * 250,
+              ),
+            ),
+          );
+        }
+        await page.screenshot({ path: join(evidence, "walk-blocked.png") });
+        throw Error(
+          "Walk blocked " +
+            x +
+            "," +
+            z +
+            " " +
+            JSON.stringify(await root.evaluate((e) => e.dataset)),
+        );
+      };
+      await go(0, 8);
+      await go(-5, 8);
+      await go(-5, -3);
+      await go(-15.2, -3);
+      await go(-15.2, -10);
+      await go(-12, -10);
+      await go(-12, -11);
+      const caption = page.getByTestId("proximity-briefing");
+      await caption.waitFor();
+      assert.match(await caption.innerText(), /testing: Test actual frontend/);
+      await page.screenshot({ path: join(evidence, "qa-proximity.png") });
+      await page.keyboard.press("KeyE");
+      assert.match(
+        await page.getByTestId("agent-briefing").innerText(),
+        /testing/i,
+      );
+      await page.getByRole("button", { name: "Close & resume" }).click();
+      await go(-12, -10);
+      await page.waitForTimeout(500);
+      await go(-12, -11);
+      assert.equal(
+        await caption.count(),
+        0,
+        "same state does not greet again after a brief departure",
+      );
+      await go(-12, -10);
+      await go(-15.2, -10);
+      await go(-15.2, -3);
+      await go(-5, -3);
+      await go(-5, 5);
+      await go(0, 5);
+      await go(0, 8);
+      await page.keyboard.press("Escape");
+      const retryAttempt = createTaskAttempt(db, task.id);
+      const retryRun = createAgentRunForAttempt(db, {
+        taskAttemptId: retryAttempt.id,
+        roleId: task.roleId,
+        provider: "groq",
+        model: "fixture-model",
+      });
+      updateAgentRunStatus(db, retryRun.id, "RUNNING");
+      updateTaskStatus(db, task.id, "IN_PROGRESS");
+      for (const role of ["qa-agent", "security-reviewer", "code-reviewer"]) {
+        const source =
+          role === "qa-agent"
+            ? nextTask
+            : createTask(db, {
+                projectId: project.id,
+                roleId: role,
+                title: "Review fixture",
+              });
+        updateTaskStatus(db, source.id, "FAILED");
+        recordEvent(db, {
+          projectId: project.id,
+          type: "agent_run.failed",
+          actor: role,
+          payload: {
+            taskId: source.id,
+            remediationTargetTaskIds: [task.id],
+            attemptNumber: 1,
+          },
+        });
+        const cue = page.getByTestId("handoff-cue");
+        await cue
+          .locator(
+            'xpath=self::*[starts-with(@data-transition,"remediation:")]',
+          )
+          .waitFor({ timeout: 60000 });
+        await page.getByRole("button", { name: "Watch", exact: true }).click();
+        await cue
+          .locator('xpath=self::*[@data-phase="TRANSFER"]')
+          .waitFor({ timeout: 45000 });
+        await page.screenshot({
+          path: join(evidence, "remediation-" + role + ".png"),
+        });
+        await cue.waitFor({ state: "detached", timeout: 45000 });
+      }
+
+      const incident = createIncident(db, {
+        projectId: project.id,
+        symptom: "runner-offline",
+        status: "REPAIRING",
+        diagnosis: "PRIVATE_REPAIR_DETAIL",
+      });
+      await page
+        .getByRole("button", { name: "Resume exploration →", exact: true })
+        .click();
+      await go(0, 8);
+      await go(5, 8);
+      await go(5, -3);
+      await go(11.5, -3);
+      await page.waitForTimeout(1800);
+      await page.screenshot({ path: join(evidence, "engineer-repairing.png") });
+      updateIncident(db, incident.id, { status: "ESCALATED" });
+      await page.waitForTimeout(1800);
+      await page.screenshot({
+        path: join(evidence, "engineer-owner-required.png"),
+      });
+      updateIncident(db, incident.id, {
+        status: "RESOLVED",
+        resolvedAt: Date.now(),
+      });
+      await page.waitForTimeout(1800);
+      await menu("Owner Command");
+
       await page
         .getByRole("button", { name: "Close Office", exact: true })
         .click();
@@ -264,6 +444,39 @@ test(
       });
       await page.waitForTimeout(1800);
       assert.ok(polls > hiddenPolls, "return synchronizes current truth");
+      // Representative remote state: browser consumes snapshots at 10s, without a runner.
+      let remotePolls = 0;
+      await page.route("**/office/headquarters-state*", (r) => {
+        remotePolls++;
+        return r.fulfill({
+          json: {
+            ...check.dto,
+            mode: "remote",
+            revision: "remote-fixture",
+            observedAt: Date.now(),
+          },
+        });
+      });
+      await page.reload();
+      await page.locator("[data-ready=true]").waitFor({ timeout: 45000 });
+      const remoteInitial = remotePolls;
+      await page.waitForTimeout(6500);
+      assert.equal(
+        remotePolls,
+        remoteInitial,
+        "remote snapshots do not use local polling cadence",
+      );
+      await page.waitForTimeout(4500);
+      assert.equal(
+        remotePolls,
+        remoteInitial + 1,
+        "remote consumes one snapshot per 10s",
+      );
+      await page.unroute("**/office/headquarters-state*");
+      await page.reload();
+      await page.locator("[data-ready=true]").waitFor({ timeout: 45000 });
+      await page.getByRole("button", { name: "ENTER OFFICE" }).click();
+      await page.keyboard.press("Escape");
       const cdp = await page.context().newCDPSession(page);
       await cdp.send("HeapProfiler.collectGarbage");
       const memoryBefore = await cdp.send("Runtime.getHeapUsage");
@@ -315,6 +528,47 @@ test(
           .isVisible(),
       );
       await mobile.close();
+      // Delivery fixture validates the animation only; it is not live-project evidence.
+      await page
+        .getByRole("button", { name: "Open Office", exact: true })
+        .click();
+      await page
+        .getByRole("button", { name: "Close Office", exact: true })
+        .waitFor();
+      await page.getByRole("button", { name: "Close & resume" }).click();
+      const release = createTask(db, {
+        projectId: project.id,
+        roleId: "release-agent",
+        title: "Release fixture",
+      });
+      const releaseAttempt = createTaskAttempt(db, release.id),
+        releaseRun = createAgentRunForAttempt(db, {
+          taskAttemptId: releaseAttempt.id,
+          roleId: release.roleId,
+          provider: "groq",
+          model: "fixture-model",
+        });
+      updateAgentRunStatus(db, releaseRun.id, "SUCCEEDED", Date.now());
+      db.prepare("UPDATE tasks SET status='DONE' WHERE projectId=?").run(
+        project.id,
+      );
+      updateProjectStatus(db, project.id, "READY_FOR_REVIEW");
+      setDeliveryState(db, project.id, "VERIFIED");
+      const deliveryCue = page.getByTestId("handoff-cue");
+      await deliveryCue
+        .locator('xpath=self::*[starts-with(@data-transition,"delivery:")]')
+        .waitFor({ timeout: 15000 });
+      await page.keyboard.press("KeyV");
+      await deliveryCue
+        .locator('xpath=self::*[@data-phase="TRANSFER"]')
+        .waitFor({ timeout: 20000 });
+      await page.screenshot({
+        path: join(evidence, "verified-delivery-transfer.png"),
+      });
+      await deliveryCue.waitFor({ state: "detached", timeout: 20000 });
+      await page.screenshot({
+        path: join(evidence, "verified-delivery-complete.png"),
+      });
       assert.deepEqual(errors, []);
       assert.deepEqual(external, []);
       writeFileSync(

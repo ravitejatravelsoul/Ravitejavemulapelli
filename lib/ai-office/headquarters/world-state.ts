@@ -119,7 +119,7 @@ export function getAIHeadquartersWorldState(
       attempt: a.attemptCount,
       maxAttempts: a.maxAttempts ?? null,
       blocker: failure
-        ? safeWorldText(failure.reason)
+        ? "A recorded task failure needs review. Open Workspace for its authorized details."
         : a.status === "BLOCKED"
           ? "Task is blocked; inspect workspace for details."
           : a.status === "WAITING" &&
@@ -314,6 +314,8 @@ export function getAIHeadquartersWorldState(
       title: safeWorldText(t.title),
       roleId: t.roleId,
       status: t.status,
+      visualStatus:
+        interaction?.nodes.find((n) => n.id === t.id)?.state ?? t.status,
       attempt: t.attemptCount,
       dependsOn: listTaskDependencies(db, t.id).map((d) => d.dependsOnTaskId),
     })),

@@ -237,8 +237,20 @@ export type HandoffPlayback = {
   event: OfficeTransition;
   startedAt: number;
   path: Vec3[];
+  durationMs?: number;
+  pausedMs?: number;
 };
 export function handoffPath(event: OfficeTransition): Vec3[] | null {
+  if (
+    event.type === "DELIVERY" &&
+    event.status === "VERIFIED" &&
+    event.fromRole === "release-agent"
+  )
+    return [
+      [...ROLE_STATIONS["release-agent"].home],
+      [11.5, 1.3, -13],
+      [11.5, 1.3, -14],
+    ];
   if (
     !["HANDOFF", "REMEDIATION"].includes(event.type) ||
     !ROLE_STATIONS[event.fromRole] ||
@@ -289,17 +301,31 @@ export function liveSample(
   )
     state = "WORKING";
   if (animate && play && play.event.fromRole === a.roleId) {
-    const t = (now - play.startedAt) / 12000;
+    const t =
+      (now - play.startedAt - (play.pausedMs ?? 0)) /
+      (play.durationMs ?? 12000);
     if (t >= 0 && t < 1) {
-      const f = t < 0.42 ? t / 0.42 : t < 0.58 ? 1 : 1 - (t - 0.58) / 0.42;
+      const raw =
+        t < 0.08
+          ? 0
+          : t < 0.42
+            ? (t - 0.08) / 0.34
+            : t < 0.62
+              ? 1
+              : t < 0.96
+                ? 1 - (t - 0.62) / 0.34
+                : 0;
+      const f = raw * raw * (3 - 2 * raw);
       position = along(play.path, Math.min(1, Math.max(0, f)));
-      state = t >= 0.42 && t < 0.58 ? "HANDOFF" : "FLOATING";
-      carry = t < 0.5;
+      state = t >= 0.42 && t < 0.62 ? "HANDOFF" : "FLOATING";
+      carry = t < 0.42;
     }
   }
   if (animate && play && play.event.toRole === a.roleId) {
-    const t = (now - play.startedAt) / 12000;
-    if (t > 0.42 && t < 0.58) state = "HANDOFF";
+    const t =
+      (now - play.startedAt - (play.pausedMs ?? 0)) /
+      (play.durationMs ?? 12000);
+    if (t >= 0.42 && t < 0.62) state = "HANDOFF";
   }
   return { position, state, carry };
 }

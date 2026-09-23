@@ -27,6 +27,13 @@ import {
 import styles from "./world.module.css";
 export type HeadquartersBridge = {
   greeting?: string;
+  boss?: RefObject<Vec3>;
+  onNear?: (id: string | null) => void;
+  cinematic?: boolean;
+  cameraSample?: () => { position: Vec3; target: Vec3 } | null;
+  stopWatching?: () => void;
+  watchHandoff?: () => void;
+  hud?: ReactNode;
   closed?: boolean;
   transition?: string;
   actors: Record<string, { name: string; position: () => Vec3 }>;
@@ -100,7 +107,13 @@ function Player({
     last = useRef({ play: 0, reset: 0 }),
     sample = useRef({ elapsed: 0, frames: 0 }),
     nearest = useRef<BotId | null>(null),
-    params = useRef(runtime);
+    params = useRef(runtime),
+    savedBoss = useRef<{
+      position: THREE.Vector3;
+      quaternion: THREE.Quaternion;
+      yaw: number;
+      pitch: number;
+    } | null>(null);
   useEffect(() => {
     params.current = runtime;
   }, [runtime]);
@@ -113,12 +126,18 @@ function Player({
   }, [camera, gl, onReady]);
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
+      if (e.code === "Escape") params.current.headquarters?.stopWatching?.();
       if (
         e.target instanceof HTMLInputElement ||
         e.target instanceof HTMLTextAreaElement
       )
         return;
       if (!params.current.entered || params.current.interacting) return;
+      if (e.code === "KeyV" && !e.repeat) {
+        params.current.headquarters?.watchHandoff?.();
+        return;
+      }
+      if (params.current.headquarters?.cinematic) return;
       if (
         [
           "KeyW",
@@ -154,7 +173,11 @@ function Player({
       velocity.current.set(0, 0);
     };
     const mouse = (e: MouseEvent) => {
-      if (document.pointerLockElement !== gl.domElement) return;
+      if (
+        document.pointerLockElement !== gl.domElement ||
+        params.current.headquarters?.cinematic
+      )
+        return;
       look.current.yaw -= e.movementX * params.current.sensitivity;
       look.current.pitch = THREE.MathUtils.clamp(
         look.current.pitch - e.movementY * params.current.sensitivity,
@@ -181,6 +204,41 @@ function Player({
   }, [gl, onInteract]);
   useFrame((_, delta) => {
     const dt = Math.min(delta, 0.15);
+    const cinematic = runtime.headquarters?.cinematic
+      ? runtime.headquarters.cameraSample?.()
+      : null;
+    if (cinematic) {
+      if (!savedBoss.current)
+        savedBoss.current = {
+          position: camera.position.clone(),
+          quaternion: camera.quaternion.clone(),
+          ...look.current,
+        };
+      keys.current.clear();
+      velocity.current.set(0, 0);
+      camera.position.lerp(
+        new THREE.Vector3(...cinematic.position),
+        Math.min(1, delta * 8),
+      );
+      camera.lookAt(...cinematic.target);
+      runtime.headquarters?.onNear?.(null);
+      return;
+    }
+    if (savedBoss.current) {
+      camera.position.copy(savedBoss.current.position);
+      camera.quaternion.copy(savedBoss.current.quaternion);
+      look.current = {
+        yaw: savedBoss.current.yaw,
+        pitch: savedBoss.current.pitch,
+      };
+      savedBoss.current = null;
+    }
+    if (runtime.headquarters?.boss)
+      runtime.headquarters.boss.current = [
+        camera.position.x,
+        camera.position.y,
+        camera.position.z,
+      ];
     if (runtime.reset !== last.current.reset) {
       last.current.reset = runtime.reset;
       camera.position.set(...SPAWN);
@@ -255,6 +313,9 @@ function Player({
     sample.current.elapsed += delta;
     sample.current.frames++;
     if (sample.current.elapsed > 0.25) {
+      runtime.headquarters?.onNear?.(
+        runtime.entered && !runtime.interacting ? closest : null,
+      );
       onTelemetry({
         x: camera.position.x,
         z: camera.position.z,
@@ -442,6 +503,7 @@ export default function WorldExperience({
       data-ready={ready}
       data-office-closed={headquarters?.closed || undefined}
       data-transition={headquarters?.transition ?? ""}
+      data-cinematic={!!headquarters?.cinematic}
       data-locked={locked}
       data-player-x={telemetry.x.toFixed(2)}
       data-player-z={telemetry.z.toFixed(2)}
@@ -531,7 +593,7 @@ export default function WorldExperience({
           </small>
         </section>
       )}
-      {entered && !locked && !info && (
+      {entered && !locked && !info && !headquarters?.cinematic && (
         <section className={styles.menu}>
           <span className={styles.eyebrow}>MOUSE RELEASED</span>
           <h2>Take your time.</h2>
@@ -598,7 +660,7 @@ export default function WorldExperience({
           </label>
         </section>
       )}
-      {locked && (
+      {locked && !headquarters?.cinematic && (
         <>
           <div className={styles.crosshair} />
           {telemetry.near && (
@@ -615,6 +677,7 @@ export default function WorldExperience({
           )}
         </>
       )}
+      {entered && !info && headquarters?.hud}
       {operationalPanel}
       {info && !headquarters && (
         <section
