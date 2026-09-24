@@ -120,3 +120,7 @@ export function getCapabilityContextBudget(capability: ModelCapability): Capabil
 
 /** Exposed for tests/telemetry display — never mutated at runtime. */
 export const DEFAULT_CAPABILITY_CONTEXT_BUDGETS: Readonly<Record<ModelCapability, CapabilityContextBudget>> = DEFAULTS;
+
+/** Bounded headroom for reasoning plus the complete structured answer in free orchestration.
+ * Included in context-fit selection and request telemetry, never an extra retry. */
+export const FREE_REASONING_OUTPUT_RESERVE = 4_096;

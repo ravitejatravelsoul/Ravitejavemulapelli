@@ -270,3 +270,26 @@ test('in-flight fallback run telemetry names the provider being called, before c
   assert.equal(result.outcome,'succeeded');assert.deepEqual(seen,['groq','gemini']);
  }finally{t.close();}
 });
+
+test("truncation evidence survives fallback and context fit includes reasoning reserve", async () => {
+ const t=createTestDb();
+ try {
+  const {project}=setupFreeOrchestrationProject(t);
+  upsertModelRegistryEntry(t.db,{provider:'groq',modelId:'short',displayName:'short',capabilities:['GENERAL'],contextWindow:4096});
+  upsertModelRegistryEntry(t.db,{provider:'groq',modelId:'truncated',displayName:'truncated',capabilities:['GENERAL'],contextWindow:32768});
+  upsertModelRegistryEntry(t.db,{provider:'groq',modelId:'complete',displayName:'complete',capabilities:['GENERAL'],contextWindow:32768});
+  setModelBenchmarkScore(t.db,'groq','short',{score:100,qualified:true});
+  setModelBenchmarkScore(t.db,'groq','truncated',{score:99,qualified:true});
+  const calls:string[]=[];
+  const task=createTask(t.db,{projectId:project.id,roleId:'product-owner',title:'Requirements'});
+  const result=await executeTask(t.db,task.id,{freeProviderFetchImpl:(async (_url,init)=>{
+   const body=JSON.parse(String(init?.body));calls.push(body.model);assert.equal(body.max_tokens,5120);
+   return jsonResponse({id:'gen-safe',choices:[{finish_reason:body.model==='truncated'?'length':'stop',message:{content:body.model==='truncated'?null:JSON.stringify(VALID_OUTPUT),reasoning:'DO_NOT_PERSIST'}}],usage:{prompt_tokens:10,completion_tokens:body.model==='truncated'?5120:20}});
+  }) as typeof fetch});
+  assert.equal(result.outcome,'succeeded');assert.deepEqual(calls,['truncated','complete']);
+  const events=t.db.prepare("SELECT payload FROM messages_events WHERE projectId=? AND type='model.request' ORDER BY createdAt").all(project.id).map(r=>JSON.parse(String(r.payload)));
+  assert.equal(events.length,2);assert.equal(events[0].responseDiagnostics.finishReason,'length');assert.equal(events[0].responseDiagnostics.maxOutputTokens,5120);
+  assert.equal(events[0].outputTokens,5120);assert.equal(events[0].structuredOutputValid,false);
+  assert.ok(!JSON.stringify(events).includes('DO_NOT_PERSIST'));
+ }finally{t.close();}
+});

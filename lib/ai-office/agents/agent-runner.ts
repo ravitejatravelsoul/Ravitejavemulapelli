@@ -314,6 +314,7 @@ async function runFreeModelWithFallback(
     recordEvent(db, { projectId: ctx.projectId, type: "model.request", actor: "system", payload: {
       agentRunId: ctx.agentRunId, provider: candidate.provider, model: candidate.modelId,
       freeEligibility: getFreeEligibility(candidate.provider, candidate.modelId),
+      responseDiagnostics: (result.raw as { responseDiagnostics?: unknown } | undefined)?.responseDiagnostics,
       latencyMs, status: result.status, structuredOutputValid: !(result.raw as { malformed?: boolean; threw?: boolean } | undefined)?.malformed && !(result.raw as { threw?: boolean } | undefined)?.threw, ...result.usage,
     } });
     const failureReason = result.output.failure?.reason ?? "";
@@ -979,7 +980,7 @@ export async function executeTask(
   // different candidate mid-attempt.
   const freeCapabilities = requiredCapabilitiesForTask(role.id, task.title);
   const freeContext = isFreeRouting(project)
-    ? await optimizeContextForPaidCall({ db, role, task, context, capability: capabilityForRole(role.id) }) : null;
+    ? await optimizeContextForPaidCall({ db, role, task, context, capability: capabilityForRole(role.id), routingMode: "FREE_MULTI_MODEL" }) : null;
   let freeModelSelection: SelectFreeModelResult | null = null;
   let freeRoutingDecisionId: string | null = null;
   let freeSuccessfulModel: { provider: string; modelId: string; latencyMs: number } | null = null;

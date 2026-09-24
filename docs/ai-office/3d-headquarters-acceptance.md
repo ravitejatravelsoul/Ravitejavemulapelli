@@ -66,3 +66,53 @@ Configured-secret scan of changed files and 70 client assets: zero matches and n
 **NOT READY for owner final acceptance of the complete live workflow.**
 
 Exact remaining gaps: the authorized real pilot blocked before Developer/QA/Code Review/Release; no real active QA briefing, successful delivery, or real Release → Vault ceremony was observed. The complete captured handoff is an active retry handoff, not a successful downstream completion. Fixture checks cannot substitute for those real-run requirements. No second real project was launched to conceal the failure. Owner/ChatGPT review and a separately authorized follow-up are required before claiming full live acceptance or considering a merge.
+
+
+## September 23 — free execution blocker investigation
+
+Follow-up base: `bdaf2486d42d214e91a3c267d6f950cdc6e09edc`. No Headquarters presentation code changed.
+
+The failed pilot's persisted registry showed both Groq GPT-OSS models still enabled and qualified, but UNAVAILABLE after three consecutive failures. Neither had a rate-limit cooldown. All three OpenRouter attempts consumed exactly 1,024 completion tokens. The historical request events did not retain HTTP envelopes or per-candidate error codes, so the original Groq errors cannot be reconstructed conclusively.
+
+Bounded reproduction of the same UI/UX context established:
+
+- Groq 20B and 120B returned HTTP 400 `json_validate_failed` at the 1,024-token limit (request IDs `req_01m3743qj6egptzk11xnr6970j` and `req_01m3743sa9e3ntfpz78yq8f809`). A further 20B diagnostic succeeded at the old limit: the failure is intermittent, not a deterministic claim that every Groq response truncates.
+- OpenRouter returned HTTP 200, `finish_reason: length`, null final content and 1,024 completion tokens (`gen-1790166822-5ZOGSYDJHiCWH1pz5j2k`). Its reported reasoning count was 1,282; this inconsistent provider count is retained as reported, not added to completion usage. Reasoning is never treated as final content.
+- The corrected free output budget is the existing capability output ceiling plus a bounded 4,096-token reasoning reserve. The same total is used by context-fit routing, telemetry and the actual request. No retry count changes. Standard/paid and direct Ollama budgets remain unchanged. Groq then produced valid complete answers using 933 and 1,775 completion tokens.
+- A larger ceiling alone did not repair Nex Mini: at 5,120 tokens it still returned `length` and null content (`gen-1790167353-0bgbKIVz0YOGKP7xFVi9`). Live model metadata reported default reasoning `high`, with supported efforts `high`, `medium`, `none`.
+- Local-only settings now explicitly use `AI_OFFICE_OPENROUTER_REASONING_EFFORT=none` and `AI_OFFICE_OPENROUTER_JSON_SCHEMA_MODELS=nex-agi/nex-n2.5-mini:free`. The adapter sends OpenRouter's `reasoning.effort` object. JSON-object mode with no reasoning produced an invalid contract and was correctly rejected. With the supported JSON-schema mode, the same UI/UX request completed validly in 854 completion tokens (`gen-1790167510-Gzv1PWzIAuWh7tZbWSED`). These settings are specific to this validated local model configuration; other models require their own supported settings and qualification. Production settings were not touched.
+
+The adapter accepts string or final text-part content, but rejects empty, reasoning-only, refusal, provider-error, tool-only and truncated generations, even if truncated JSON happens to parse. Safe request metadata (HTTP status, response/request IDs, finish reason, output ceiling and reported reasoning count) survives in `model.request`; prompts, answers, hidden reasoning and raw provider errors do not.
+
+The three-model registry and historical benchmark evidence were copied from the failed isolated pilot, preserving failure health. The existing focused benchmark workflow then reran `instruction-json` and `reasoning-order` once per model. Groq 120B passed both. Groq 20B passed the instruction check but failed reasoning, so it lost REASONING capability. Nex Mini passed reasoning but failed the exact instruction check and became UNQUALIFIED. No failed qualification was overridden or rerun to obtain a pass. Health recovery for eligible Groq models came from actual successful benchmark responses.
+
+Reference: [OpenRouter reasoning](https://openrouter.ai/docs/guides/best-practices/reasoning-tokens), [Groq structured outputs](https://console.groq.com/docs/structured-outputs). Private diagnostic envelopes, benchmark records and API request audits remain under ignored `.data/free-blocker-*` and `.data/headquarters-blocker-fix-pilot`. They contain no credentials in the saved diagnostic metadata and are not Git artifacts.
+
+## September 24 — single real follow-up result
+
+Final validation: **38/38 targeted provider/router/context tests; 965/965 AI Office tests; 14/14 browser tests; TypeScript, ESLint and build PASS.** The first prototype browser run was cancelled by its timeout across the long interruption; the same prototype suite passed on an uninterrupted rerun (301.6 seconds). No other test failure was hidden. Configured-secret scan: eight changed tracked files and 70 client assets, zero matches. Generated build-only tsconfig additions were restored.
+
+Exactly one new project was created through the normal local FREE_MULTI_MODEL form: **`8be6b869-16ae-48d8-a1db-3de91c34cadd`, Headquarters — Focus Counter**. It produced the requested small counter webpage and naturally completed all seven tasks: PO, Architect, UI/UX, Developer, QA, Code Review and Release. Final state **READY_FOR_REVIEW**, delivery **VERIFIED**. No forced states, fake responses, qualification overrides, paid fallback or increased retries were used.
+
+Nine external model requests used Groq GPT-OSS-120B (eight) and GPT-OSS-20B (one). Developer attempt 1 encountered two malformed structured answers, including an array where the contract requires an object. Both failures remained failures and their usage was recorded. The existing bounded retry completed Developer attempt 2 on 120B; the failure was resolved normally. The remaining tasks succeeded on 120B. OpenRouter was not used in this project because its focused requalification had failed. **Claude calls: 0. Recorded paid AI cost: $0.** No project execution blocker remains.
+
+Live protected snapshots and video prove Developer WORKING, QA TESTING, Code Review REVIEWING and Release WORKING. Developer's direct live briefing assertion matched revision `79192cb38e97a91b8eb30786fdf625ac22d50af40cb113fa137899498524403e`.
+
+The initial QA observer assertion raced between pages: one page had received TESTING while the briefing page still held QUEUED. That assertion remains recorded as an observer error; it was not erased. The open briefing then updated naturally. Review of the actual recording at **09:11:14 local / 14:11:14 UTC** proves the visible TESTING briefing, exact task, Groq 120B, attempt 1/3, RUNNING record and 2,941 tokens. Its full visible greeting was transcribed and checked against the saved authoritative snapshot **`6659c07c108da1d37b501974173300217a1de3bcfcfa7e3b5e059c94efc6598b`**, observed at 14:11:12.572 UTC. This is a recorded real-run match, not a fixture or a later rerun. Evidence: `qa-briefing-testing-video.png` and `qa-video-revision-match.json` in the ignored pilot folder.
+
+A real successful downstream handoff is recorded in the main video at approximately 190 seconds: **Frontend Developer → QA, transfer phase, 09:11:29 local**, while QA was still actively testing. Developer had succeeded at 14:11:07.774 UTC; QA then succeeded at 14:11:31.725 UTC.
+
+The real Release generated VERIFIED delivery transition `delivery:8589d3d1-202f-49eb-932e-4f759a9a8d97` at **14:11:38.845 UTC**, and the Vault displayed the real delivery. However, a completed physical **Release → Vault ceremony was NOT observed**. The main recording instead shows the preceding Code Review → Release carrier held at the Boss's location (`Owner nearby — keeping personal space`, around 270 seconds). The second observer stayed in its QA briefing after its initial assertion failed, so it did not supply independent ceremony evidence. A delivery event or static Vault item does not substitute for the requested completed ceremony.
+
+| Acceptance item | Result |
+| --- | --- |
+| Developer active | PASS |
+| QA actively TESTING | PASS |
+| QA Boss briefing grounded in authoritative revision | MATCH — recorded-frame cross-check; initial observer assertion race disclosed |
+| Code Review active | PASS |
+| Release active | PASS |
+| Successful downstream handoff | PASS — Developer to QA, followed by successful QA completion |
+| Real VERIFIED delivery | PASS |
+| Real Release → Vault ceremony | FAIL — not completed in captured observation |
+
+**FINAL: NOT READY.** Free execution reached VERIFIED delivery; the remaining acceptance gap is the complete real Release-to-Vault visual ceremony. No second project, state replay, new Headquarters change, master merge or production change was made. Local observer/server/runner processes were stopped at the end of capture. All pilot databases, workspaces, videos, response audits, credentials and `.env.local` remain uncommitted under ignored paths. This phase stops here with that limitation explicit.

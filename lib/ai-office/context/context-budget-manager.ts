@@ -9,7 +9,7 @@ import { listWorkspaceFileRecords } from "../domain/workspace.ts";
 import { workspaceExists, readFile } from "../workspace/workspace-service.ts";
 import { buildPrompt } from "../providers/shared/structured-output-contract.ts";
 import { estimateTokens } from "./token-estimate.ts";
-import { getCapabilityContextBudget, getGlobalAbsoluteMaxEstimatedInputTokens, type CapabilityContextBudget } from "./capability-budgets.ts";
+import { getCapabilityContextBudget, getGlobalAbsoluteMaxEstimatedInputTokens, FREE_REASONING_OUTPUT_RESERVE, type CapabilityContextBudget } from "./capability-budgets.ts";
 import { selectRelevantFiles, extractLocalReferences, type FileCandidate } from "./relevant-files.ts";
 
 /**
@@ -22,11 +22,9 @@ import { selectRelevantFiles, extractLocalReferences, type FileCandidate } from 
  * BLOCKED verdict — never a runaway prompt sent silently.
  *
  * This module is intentionally provider-agnostic (works from `TaskContext`,
- * not `ClaudeAdapter`), but is only ever invoked for the CLAUDE path
- * (agent-runner.ts's `prepareClaudeCall`) — LOCAL/Ollama calls are
- * deliberately left untouched (Part 12 — "LOCAL calls remain unaffected"),
- * since Ollama inference is free and this entire phase is about paid-call
- * economics.
+ * not `ClaudeAdapter`). The free orchestration path also uses these input
+ * bounds, with a separate bounded output reserve for reasoning models.
+ * Standard LOCAL/Ollama calls and paid-provider output limits are unchanged.
  */
 
 export interface ContextOptimizationTelemetry {
@@ -59,6 +57,8 @@ export interface OptimizeContextInput {
   role: AgentRoleRow;
   task: TaskRow;
   context: TaskContext;
+  /** Free reasoning models share their output ceiling with hidden reasoning. */
+  routingMode?: "STANDARD" | "FREE_MULTI_MODEL";
 }
 
 function estimateForContext(role: string, instructions: string, context: TaskContext): number {
@@ -137,7 +137,12 @@ async function selectAndReadFiles(
 
 export async function optimizeContextForPaidCall(input: OptimizeContextInput): Promise<OptimizeContextResult> {
   const { db, capability, role, task, context } = input;
-  const budget = getCapabilityContextBudget(capability);
+  const baseBudget = getCapabilityContextBudget(capability);
+  // The real free pilot exhausted a 1024-token ceiling before final content.
+  // Reserve bounded reasoning headroom BEFORE routing checks context fit;
+  // standard/paid and direct Ollama projects retain their existing ceilings.
+  const budget = { ...baseBudget, maxOutputTokens: baseBudget.maxOutputTokens +
+    (input.routingMode === "FREE_MULTI_MODEL" ? FREE_REASONING_OUTPUT_RESERVE : 0) };
   const sectionsIncluded = new Set<string>(["authoritative-request", "provider-contract"]);
   const shrinkStepsApplied: string[] = [];
 

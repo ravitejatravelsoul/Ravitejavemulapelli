@@ -53,8 +53,22 @@ export interface OpenAICompatibleAdapterOptions {
 }
 
 interface ChatCompletionResponse {
-  choices?: Array<{ message?: { content?: string } }>;
-  usage?: { prompt_tokens?: number; completion_tokens?: number };
+  id?: string;
+  error?: { code?: string };
+  choices?: Array<{ finish_reason?: string; message?: { content?: unknown; refusal?: unknown } }>;
+  usage?: { prompt_tokens?: number; completion_tokens?: number; completion_tokens_details?: { reasoning_tokens?: number } };
+}
+
+function safeIdentifier(value: unknown): string | undefined {
+  return typeof value === "string" && /^[a-zA-Z0-9_.:-]{1,160}$/.test(value) ? value : undefined;
+}
+
+/** Only final text parts are answer content. Never promote reasoning/tool/refusal parts. */
+function finalText(content: unknown): string | null {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content) || content.length === 0) return null;
+  if (!content.every(part => part && part.type === "text" && typeof part.text === "string")) return null;
+  return content.map(part => part.text).join("");
 }
 
 export class OpenAICompatibleAdapter implements AIProviderAdapter {
@@ -103,7 +117,9 @@ export class OpenAICompatibleAdapter implements AIProviderAdapter {
         },
         body: JSON.stringify({
           model: this.model,
-          ...(process.env[`AI_OFFICE_${this.name.toUpperCase()}_REASONING_EFFORT`] ? { reasoning_effort: process.env[`AI_OFFICE_${this.name.toUpperCase()}_REASONING_EFFORT`] } : {}),
+          ...(process.env[`AI_OFFICE_${this.name.toUpperCase()}_REASONING_EFFORT`] ? (this.name === "openrouter"
+            ? { reasoning: { effort: process.env.AI_OFFICE_OPENROUTER_REASONING_EFFORT } }
+            : { reasoning_effort: process.env[`AI_OFFICE_${this.name.toUpperCase()}_REASONING_EFFORT`] }) : {}),
           ...(this.name === "openrouter" ? { provider: { max_price: { prompt: 0, completion: 0 } } } : {}),
           messages: [{ role: "user", content: prompt }],
           response_format: (process.env[`AI_OFFICE_${this.name.toUpperCase()}_JSON_SCHEMA_MODELS`] ?? "").split(",").includes(this.model)
@@ -135,7 +151,7 @@ export class OpenAICompatibleAdapter implements AIProviderAdapter {
     if (!response.ok) {
       const errorBody = await response.json().catch(() => ({}));
       const code = String(errorBody?.error?.code ?? "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64);
-      if (code === "json_validate_failed") return malformedResult(`Operational: ${this.name} model output did not match the requested JSON schema.`);
+      if (code === "json_validate_failed") return { ...malformedResult(`Operational: ${this.name} model output did not match the requested JSON schema.`), raw: { malformed: true, responseDiagnostics: { httpStatus: response.status, errorCode: code, requestId: safeIdentifier(response.headers?.get("x-request-id")), maxOutputTokens: input.maxOutputTokens } } };
 
       throw new OpenAICompatibleConnectionError(
         `Operational: ${this.name} responded with HTTP ${response.status} (${code || "request_failed"}) for model "${this.model}".`,
@@ -149,22 +165,37 @@ export class OpenAICompatibleAdapter implements AIProviderAdapter {
       return malformedResult(`Operational: ${this.name}'s HTTP response body was not valid JSON.`);
     }
 
-    const usage = { inputTokens: body.usage?.prompt_tokens ?? 0, outputTokens: body.usage?.completion_tokens ?? 0, costUsd: 0 };
-    const content = body.choices?.[0]?.message?.content;
-    if (typeof content !== "string") {
-      return { ...malformedResult(`Operational: ${this.name} response included no message.`), usage };
-    }
-
+    const usage = { inputTokens: body?.usage?.prompt_tokens ?? 0, outputTokens: body?.usage?.completion_tokens ?? 0, costUsd: 0 };
+    const choice = body?.choices?.[0];
+    // Persist only protocol metadata, never prompts, answers, hidden reasoning,
+    // provider error messages, authorization headers, or failed_generation.
+    const responseDiagnostics = {
+      httpStatus: response.status,
+      requestId: safeIdentifier(response.headers?.get("x-request-id")),
+      responseId: safeIdentifier(body?.id),
+      finishReason: safeIdentifier(choice?.finish_reason),
+      errorCode: safeIdentifier(body?.error?.code),
+      maxOutputTokens: input.maxOutputTokens,
+      reasoningTokens: body?.usage?.completion_tokens_details?.reasoning_tokens,
+    };
+    const fail = (reason: string): AgentTaskResult => ({
+      ...malformedResult(`Operational: ${this.name} ${reason}`), usage,
+      raw: { malformed: true, responseDiagnostics },
+    });
+    if (body?.error) return fail("response included a provider error.");
+    if (choice?.finish_reason === "length") return fail("model output was truncated at the output token limit.");
+    if (choice?.finish_reason && choice.finish_reason !== "stop") return fail("response did not finish with a complete answer.");
+    if (choice?.message?.refusal) return fail("response refused the requested output.");
+    const content = finalText(choice?.message?.content);
+    if (!content?.trim()) return fail("response included no message.");
     const parsed = parseStructuredOutput(content);
-    if (!parsed.ok) {
-      return { ...malformedResult(`Operational: ${this.name} model output ${parsed.reason}`), usage };
-    }
+    if (!parsed.ok) return fail(`model output ${parsed.reason}`);
 
     return {
       status: parsed.output.failure ? "FAILED" : "SUCCEEDED",
       output: parsed.output,
       usage,
-      raw: { model: this.model, provider: this.name },
+      raw: { model: this.model, provider: this.name, responseDiagnostics },
     };
     } finally {
       clearTimeout(timer);
