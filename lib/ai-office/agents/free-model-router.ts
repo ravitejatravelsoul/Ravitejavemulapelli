@@ -146,3 +146,23 @@ export function selectFreeModel(db: DatabaseSync, input: SelectFreeModelInput): 
     candidates: scored,
   };
 }
+
+/**
+ * When `selectFreeModel` finds nobody, is that ONLY because otherwise-eligible
+ * models are cooling down after a provider rate limit? Returns the earliest
+ * epoch-ms at which one of them leaves its cooldown, or null when a cooldown is
+ * not the (only) reason. Everything else that makes a model ineligible — not
+ * qualified, missing capability, disabled, unconfigured, three consecutive
+ * failures — is still evaluated at that future time, so this can never be used
+ * to wait for, or route to, a model that fails those gates.
+ */
+export function earliestFreeModelAvailability(db: DatabaseSync, input: SelectFreeModelInput): number | null {
+  const now = Date.now();
+  let earliest: number | null = null;
+  for (const row of listModelRegistryEntries(db, { enabledOnly: true })) {
+    if (!isProviderEnabled(db, row.provider) || !row.rateLimitedUntil || row.rateLimitedUntil <= now) continue;
+    if (scoreModel(row, input, row.rateLimitedUntil + 1) === null) continue;
+    earliest = earliest === null ? row.rateLimitedUntil : Math.min(earliest, row.rateLimitedUntil);
+  }
+  return earliest;
+}

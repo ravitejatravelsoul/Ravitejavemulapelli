@@ -52,7 +52,7 @@ import { LocalModelRouter, capabilityForRole, type ModelFailureContext } from ".
 import { routeProvider } from "./provider-router.ts";
 import { ClaudeAdapter, isClaudeConfigured, isClaudeEnabledByConfig } from "../providers/claude/claude-adapter.ts";
 import { requiredCapabilitiesForTask } from "./free-model-capabilities.ts";
-import { selectFreeModel, type SelectFreeModelResult, type CandidateScore } from "./free-model-router.ts";
+import { selectFreeModel, earliestFreeModelAvailability, type SelectFreeModelResult, type CandidateScore } from "./free-model-router.ts";
 import { recordModelOutcome, recordRoutingDecision } from "../domain/model-registry.ts";
 import { createFreeProviderAdapter } from "../providers/free/free-adapter-factory.ts";
 import { optimizeContextForPaidCall } from "../context/context-budget-manager.ts";
@@ -78,7 +78,7 @@ import { HumanEscalationService } from "../escalation/escalation-service.ts";
  * note in docs/ai-office/11-implementation-phases.md.
  */
 
-export type ExecuteTaskOutcome = "not-eligible" | "budget-refused" | "claude-blocked" | "succeeded" | "retried" | "escalated";
+export type ExecuteTaskOutcome = "not-eligible" | "budget-refused" | "claude-blocked" | "deferred" | "succeeded" | "retried" | "escalated";
 
 export interface ExecuteTaskResult {
   outcome: ExecuteTaskOutcome;
@@ -250,6 +250,9 @@ function buildFreeProviderAdapter(candidate: FreeModelCandidate, options: { olla
 /** Bounded on purpose (see MAX_OPERATIONAL_RETRIES's identical rationale) — "preferred free model → rate limited/failure → next qualified free model → next qualified free model → ... → BLOCK/ESCALATE" per the brief, never an unbounded walk through every registered model. */
 const MAX_FREE_MODEL_FALLBACK_CANDIDATES = 3;
 
+/** Longest provider cooldown a task will wait out instead of failing; a longer one fails honestly through the normal path. */
+const MAX_FREE_ROUTING_DEFERRAL_MS = 5 * 60_000;
+
 /** Fraction of a route's per-request token limit a prompt may use — real prompts run ~3% above the chars/4 estimate, so this leaves headroom without starving the request. */
 const FREE_REQUEST_FIT_RATIO = 0.85;
 /** Never wait longer than this for a provider's own token window to reset before sending; a longer wait falls through to the normal 429/cooldown handling. */
@@ -349,6 +352,20 @@ async function runFreeModelWithFallback(
     if (known?.limit && currentEstimate > known.limit * FREE_REQUEST_FIT_RATIO && ctx.shrinkInput) {
       const fitted = await ctx.shrinkInput(Math.floor(known.limit * FREE_REQUEST_FIT_RATIO));
       if (fitted) { buildInput = fitted.buildInput; currentEstimate = fitted.estimatedInputTokens; }
+    }
+    // The route has already told us how large a request it can ever admit; a
+    // request that still exceeds that is never re-sent (it cannot succeed and
+    // would only spend the provider's quota). Not a model-health event.
+    if (known?.limit && currentEstimate > known.limit) {
+      lastResult = {
+        status: "FAILED",
+        output: { summary: "", artifacts: [], decisions: [], testResults: [], events: [], fileOperations: [], recommendedNextActions: [],
+          failure: { reason: `Operational: ${candidate.provider} request too large for model "${candidate.modelId}" (estimated ${currentEstimate} tokens exceeds the route's known limit of ${known.limit}); not sent.` } },
+        usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
+        raw: { requestTooLargeNotSent: true },
+      };
+      if (i < candidates.length - 1) fallbacksUsed.push(candidate);
+      continue;
     }
     // Respect the provider's own token window instead of provoking a rejection.
     if (known?.remaining !== undefined && known.resetAt && currentEstimate > known.remaining) {
@@ -1037,6 +1054,32 @@ export async function executeTask(
     }
   }
 
+  const freeCapabilities = requiredCapabilitiesForTask(role.id, task.title);
+  const freeContext = isFreeRouting(project)
+    ? await optimizeContextForPaidCall({ db, role, task, context, capability: capabilityForRole(role.id), routingMode: "FREE_MULTI_MODEL" }) : null;
+
+  // A provider rate limit is temporary and Retry-After says when it ends. If
+  // the ONLY reason no qualified free model can take this task is such a
+  // cooldown (bounded), wait instead of burning one of the task's real retry
+  // attempts on "no eligible model" — the same "not yet actionable" rule as
+  // the Claude gate above. Qualification, capability (e.g. REASONING), health
+  // gates and the free-only policy are unchanged; nothing is rerouted.
+  if (freeContext?.ok && !options.provider && !claudeCall) {
+    const routingInput = {
+      capability: freeCapabilities[0]!, requiredCapabilities: freeCapabilities,
+      estimatedInputTokens: freeContext.telemetry.estimatedInputTokens, estimatedOutputTokens: freeContext.allowedOutputTokens,
+    };
+    if (!selectFreeModel(db, routingInput)) {
+      const availableAt = earliestFreeModelAvailability(db, routingInput);
+      if (availableAt !== null && availableAt - Date.now() <= MAX_FREE_ROUTING_DEFERRAL_MS) {
+        updateTaskStatus(db, task.id, "PENDING");
+        recordEvent(db, { projectId: project.id, type: "task.free_routing_deferred", actor: "system",
+          payload: { taskId: task.id, roleId: role.id, requiredCapabilities: freeCapabilities, retryAfterMs: Math.max(0, availableAt - Date.now()) } });
+        return { outcome: "deferred", task: getTask(db, task.id)!, reason: `Every qualified free model for ${freeCapabilities.join(" + ")} is cooling down after a provider rate limit; retrying when the earliest cooldown ends.` };
+      }
+    }
+  }
+
   const attempt = createTaskAttempt(db, task.id);
 
   // Local multi-model routing: for a real Ollama project (and only when
@@ -1058,9 +1101,6 @@ export async function executeTask(
   // used — see the fallback-aware runFreeModelWithFallback() call
   // further down, which is the only thing allowed to move to a
   // different candidate mid-attempt.
-  const freeCapabilities = requiredCapabilitiesForTask(role.id, task.title);
-  const freeContext = isFreeRouting(project)
-    ? await optimizeContextForPaidCall({ db, role, task, context, capability: capabilityForRole(role.id), routingMode: "FREE_MULTI_MODEL" }) : null;
   let freeModelSelection: SelectFreeModelResult | null = null;
   let freeRoutingDecisionId: string | null = null;
   let freeSuccessfulModel: { provider: string; modelId: string; latencyMs: number } | null = null;
@@ -1622,7 +1662,16 @@ export async function executeTask(
     setDeliveryState(db, project.id, finalStatus === "PASS" ? "VERIFIED" : deliverableCheckUnavailable ? "VERIFYING" : "FAILED");
   }
 
-  if (freeSuccessfulModel) recordModelOutcome(db, freeSuccessfulModel.provider, freeSuccessfulModel.modelId, { succeeded: result.status === "SUCCEEDED", latencyMs: freeSuccessfulModel.latencyMs });
+  // Model health tracks the MODEL's own output. Real browser QA replaces a
+  // reviewer's verdict with an independent, deterministic one: a QA FAIL (or
+  // an unavailable deliverable check) is a verdict about the built product,
+  // not evidence that the QA model misbehaved — its output was valid, so
+  // repeated legitimate QA failures must never walk it toward the
+  // three-failure gate that also guards unrelated reasoning tasks.
+  if (freeSuccessfulModel) recordModelOutcome(db, freeSuccessfulModel.provider, freeSuccessfulModel.modelId, {
+    succeeded: result.status === "SUCCEEDED" || (result.raw as { realQaVerification?: boolean } | undefined)?.realQaVerification === true,
+    latencyMs: freeSuccessfulModel.latencyMs,
+  });
   if (freeRoutingDecisionId) {
     db.prepare("UPDATE model_routing_decisions SET result = ? WHERE id = ?").run(result.status === "SUCCEEDED" ? "SUCCEEDED" : "FAILED", freeRoutingDecisionId);
   }
