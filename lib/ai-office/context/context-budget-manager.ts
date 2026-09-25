@@ -59,6 +59,14 @@ export interface OptimizeContextInput {
   context: TaskContext;
   /** Free reasoning models share their output ceiling with hidden reasoning. */
   routingMode?: "STANDARD" | "FREE_MULTI_MODEL";
+  /**
+   * A hard per-request input ceiling (estimated tokens) learned from a
+   * specific provider route — e.g. a free tier's tokens-per-minute limit.
+   * Tightens both the target and burst ceilings so the existing shrink
+   * order runs until the request fits; if it still cannot fit, the result
+   * is `ok: false` (never a silently-oversized send). Unset = unchanged.
+   */
+  inputTokenCeiling?: number;
 }
 
 function estimateForContext(role: string, instructions: string, context: TaskContext): number {
@@ -141,8 +149,11 @@ export async function optimizeContextForPaidCall(input: OptimizeContextInput): P
   // The real free pilot exhausted a 1024-token ceiling before final content.
   // Reserve bounded reasoning headroom BEFORE routing checks context fit;
   // standard/paid and direct Ollama projects retain their existing ceilings.
+  const ceiling = input.inputTokenCeiling !== undefined && input.inputTokenCeiling > 0 ? input.inputTokenCeiling : Number.POSITIVE_INFINITY;
   const budget = { ...baseBudget, maxOutputTokens: baseBudget.maxOutputTokens +
-    (input.routingMode === "FREE_MULTI_MODEL" ? FREE_REASONING_OUTPUT_RESERVE : 0) };
+    (input.routingMode === "FREE_MULTI_MODEL" ? FREE_REASONING_OUTPUT_RESERVE : 0),
+    targetEstimatedInputTokens: Math.min(baseBudget.targetEstimatedInputTokens, ceiling),
+    burstEstimatedInputTokens: Math.min(baseBudget.burstEstimatedInputTokens, ceiling) };
   const sectionsIncluded = new Set<string>(["authoritative-request", "provider-contract"]);
   const shrinkStepsApplied: string[] = [];
 

@@ -161,7 +161,7 @@ async function runAdapterOnce(
       status: "FAILED",
       output: { summary: "", artifacts: [], decisions: [], testResults: [], events: [], fileOperations: [], recommendedNextActions: [], failure: { reason } },
       usage: { inputTokens: 0, outputTokens: 0, costUsd: 0 },
-      raw: { timedOut, threw: !timedOut, retryAfterMs: (error as { retryAfterMs?: number })?.retryAfterMs },
+      raw: { timedOut, threw: !timedOut, retryAfterMs: (error as { retryAfterMs?: number })?.retryAfterMs, responseDiagnostics: (error as { diagnostics?: unknown })?.diagnostics },
     };
   }
 }
@@ -250,6 +250,36 @@ function buildFreeProviderAdapter(candidate: FreeModelCandidate, options: { olla
 /** Bounded on purpose (see MAX_OPERATIONAL_RETRIES's identical rationale) — "preferred free model → rate limited/failure → next qualified free model → next qualified free model → ... → BLOCK/ESCALATE" per the brief, never an unbounded walk through every registered model. */
 const MAX_FREE_MODEL_FALLBACK_CANDIDATES = 3;
 
+/** Fraction of a route's per-request token limit a prompt may use — real prompts run ~3% above the chars/4 estimate, so this leaves headroom without starving the request. */
+const FREE_REQUEST_FIT_RATIO = 0.85;
+/** Never wait longer than this for a provider's own token window to reset before sending; a longer wait falls through to the normal 429/cooldown handling. */
+const MAX_TOKEN_WINDOW_WAIT_MS = 65_000;
+
+interface ProviderTokenBudget { limit?: number; remaining?: number; resetAt?: number }
+/** Last provider-reported token window per route (from `x-ratelimit-*` headers) — process-local and advisory only: it lets the runner avoid sending a request the provider has just said it cannot admit, and is never a substitute for handling a real 429/413. */
+const providerTokenBudgets = new Map<string, ProviderTokenBudget>();
+
+function noteProviderTokenBudget(key: string, diagnostics: unknown, now: number): void {
+  const d = (diagnostics ?? {}) as { tokenLimit?: number; remainingTokens?: number; resetMs?: number };
+  if (d.tokenLimit === undefined && d.remainingTokens === undefined) return;
+  const prev = providerTokenBudgets.get(key) ?? {};
+  providerTokenBudgets.set(key, {
+    limit: d.tokenLimit ?? prev.limit,
+    remaining: d.remainingTokens ?? prev.remaining,
+    resetAt: d.resetMs !== undefined ? now + d.resetMs : prev.resetAt,
+  });
+}
+
+/** Test seam: forget learned provider windows. */
+export function resetProviderTokenBudgetsForTests(): void {
+  providerTokenBudgets.clear();
+}
+
+interface ShrunkInput {
+  estimatedInputTokens: number;
+  buildInput: () => Parameters<AIProviderAdapter["runAgentTask"]>[0];
+}
+
 interface FreeModelExecutionOutcome {
   result: import("../providers/types.ts").AgentTaskResult;
   finalCandidate: FreeModelCandidate | null;
@@ -286,6 +316,11 @@ async function runFreeModelWithFallback(
     ollamaFetchImpl?: typeof fetch;
     freeProviderFetchImpl?: typeof fetch;
     timeoutMs: number;
+    /** Estimated prompt tokens of `buildInput()` — enables provider-limit fitting and pacing. */
+    estimatedInputTokens?: number;
+    /** Rebuilds the request through the existing context-budget manager under a hard input-token ceiling; null when it cannot fit. */
+    shrinkInput?: (ceilingTokens: number) => Promise<ShrunkInput | null>;
+    sleepImpl?: (ms: number) => Promise<void>;
   },
 ): Promise<FreeModelExecutionOutcome> {
   const candidates = ctx.selection.candidates.slice(0, MAX_FREE_MODEL_FALLBACK_CANDIDATES);
@@ -297,46 +332,89 @@ async function runFreeModelWithFallback(
   let inputTokens = 0;
   let outputTokens = 0;
 
+  let buildInput = ctx.buildInput;
+  let currentEstimate = ctx.estimatedInputTokens ?? 0;
+  const sleep = ctx.sleepImpl ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+
   for (let i = 0; i < candidates.length; i++) {
     const candidate = candidates[i]!;
     const adapter = buildFreeProviderAdapter(candidate, { ollamaFetchImpl: ctx.ollamaFetchImpl, freeProviderFetchImpl: ctx.freeProviderFetchImpl });
     if (!adapter) continue; // this candidate's provider became unconfigured between selection and now — skip, never crash
+    const routeKey = `${candidate.provider}:${candidate.modelId}`;
 
-    attempts += 1;
-    finalCandidate = candidate;
-    // Publish the actual in-flight fallback route for read-only office telemetry.
-    updateAgentRunProviderModel(db, ctx.agentRunId, { provider: candidate.provider, model: candidate.modelId });
-    const startedAt = Date.now();
-    const result = await runAdapterOnce(adapter, ctx.buildInput(), ctx.timeoutMs);
-    const latencyMs = Date.now() - startedAt;
-    finalLatencyMs = latencyMs;
-    recordAiUsage(db, { agentRunId: ctx.agentRunId, projectId: ctx.projectId, provider: candidate.provider, ...result.usage });
-    recordEvent(db, { projectId: ctx.projectId, type: "model.request", actor: "system", payload: {
-      agentRunId: ctx.agentRunId, provider: candidate.provider, model: candidate.modelId,
-      freeEligibility: getFreeEligibility(candidate.provider, candidate.modelId),
-      responseDiagnostics: (result.raw as { responseDiagnostics?: unknown } | undefined)?.responseDiagnostics,
-      latencyMs, status: result.status, structuredOutputValid: !(result.raw as { malformed?: boolean; threw?: boolean } | undefined)?.malformed && !(result.raw as { threw?: boolean } | undefined)?.threw, ...result.usage,
-    } });
-    const failureReason = result.output.failure?.reason ?? "";
-    const rateLimited = result.status === "FAILED" && /rate-limited/i.test(failureReason);
+    // Fit the request to what this route is known to admit BEFORE sending,
+    // through the existing context-budget shrink order (never by dropping
+    // the failing evidence or the files being repaired).
+    const known = providerTokenBudgets.get(routeKey);
+    if (known?.limit && currentEstimate > known.limit * FREE_REQUEST_FIT_RATIO && ctx.shrinkInput) {
+      const fitted = await ctx.shrinkInput(Math.floor(known.limit * FREE_REQUEST_FIT_RATIO));
+      if (fitted) { buildInput = fitted.buildInput; currentEstimate = fitted.estimatedInputTokens; }
+    }
+    // Respect the provider's own token window instead of provoking a rejection.
+    if (known?.remaining !== undefined && known.resetAt && currentEstimate > known.remaining) {
+      const wait = known.resetAt - Date.now();
+      if (wait > 0 && wait <= MAX_TOKEN_WINDOW_WAIT_MS) await sleep(wait + 250);
+    }
 
-    if (result.status !== "SUCCEEDED") recordModelOutcome(db, candidate.provider, candidate.modelId, {
-      succeeded: false,
-      latencyMs,
-      // A 60s cooldown before this exact model is eligible again — long
-      // enough to clear a short burst-limit window, short enough that a
-      // brief rate-limit never permanently sidelines a model for the
-      // rest of the office's session. Per the brief: "mark unhealthy/
-      // unavailable, do not repeatedly retry it."
-      rateLimitedForMs: rateLimited ? Number((result.raw as { retryAfterMs?: number } | undefined)?.retryAfterMs ?? 60_000) : undefined,
-      unavailable: /HTTP (401|403|404|410)/.test(failureReason),
-    });
+    let compactRetried = false;
+    for (;;) {
+      attempts += 1;
+      finalCandidate = candidate;
+      // Publish the actual in-flight fallback route for read-only office telemetry.
+      updateAgentRunProviderModel(db, ctx.agentRunId, { provider: candidate.provider, model: candidate.modelId });
+      const startedAt = Date.now();
+      const result = await runAdapterOnce(adapter, buildInput(), ctx.timeoutMs);
+      const latencyMs = Date.now() - startedAt;
+      finalLatencyMs = latencyMs;
+      const responseDiagnostics = (result.raw as { responseDiagnostics?: unknown } | undefined)?.responseDiagnostics;
+      noteProviderTokenBudget(routeKey, responseDiagnostics, Date.now());
+      recordAiUsage(db, { agentRunId: ctx.agentRunId, projectId: ctx.projectId, provider: candidate.provider, ...result.usage });
+      recordEvent(db, { projectId: ctx.projectId, type: "model.request", actor: "system", payload: {
+        agentRunId: ctx.agentRunId, provider: candidate.provider, model: candidate.modelId,
+        freeEligibility: getFreeEligibility(candidate.provider, candidate.modelId),
+        responseDiagnostics,
+        estimatedInputTokens: currentEstimate || undefined,
+        latencyMs, status: result.status, structuredOutputValid: !(result.raw as { malformed?: boolean; threw?: boolean } | undefined)?.malformed && !(result.raw as { threw?: boolean } | undefined)?.threw, ...result.usage,
+      } });
+      const failureReason = result.output.failure?.reason ?? "";
+      const rateLimited = result.status === "FAILED" && /rate-limited/i.test(failureReason);
+      const requestTooLarge = result.status === "FAILED" && /request too large/i.test(failureReason);
 
-    inputTokens += result.usage.inputTokens;
-    outputTokens += result.usage.outputTokens;
-    lastResult = { ...result, usage: { inputTokens, outputTokens, costUsd: 0 } };
-    if (result.status === "SUCCEEDED") break;
-    if (!isOperationalFailureReason(failureReason)) break; // semantic failure — never solved by switching models
+      // A request-size rejection says nothing about the model's health: it
+      // is never counted toward the three-failure gate or a cooldown.
+      if (result.status !== "SUCCEEDED" && !requestTooLarge) recordModelOutcome(db, candidate.provider, candidate.modelId, {
+        succeeded: false,
+        latencyMs,
+        // A cooldown before this exact model is eligible again — honors the
+        // provider's Retry-After (bounded conservative default otherwise).
+        rateLimitedForMs: rateLimited ? Number((result.raw as { retryAfterMs?: number } | undefined)?.retryAfterMs ?? 60_000) : undefined,
+        unavailable: /HTTP (401|403|404|410)/.test(failureReason),
+      });
+
+      inputTokens += result.usage.inputTokens;
+      outputTokens += result.usage.outputTokens;
+      lastResult = { ...result, usage: { inputTokens, outputTokens, costUsd: 0 } };
+
+      if (requestTooLarge && !compactRetried && ctx.shrinkInput) {
+        // One bounded compact retry through the existing shrink order,
+        // sized from the limit the provider actually reported.
+        compactRetried = true;
+        const reported = (responseDiagnostics as { tokenLimit?: number } | undefined)?.tokenLimit ?? providerTokenBudgets.get(routeKey)?.limit;
+        if (reported) {
+          const fitted = await ctx.shrinkInput(Math.floor(reported * FREE_REQUEST_FIT_RATIO));
+          if (fitted && fitted.estimatedInputTokens < currentEstimate) {
+            buildInput = fitted.buildInput;
+            currentEstimate = fitted.estimatedInputTokens;
+            continue;
+          }
+        }
+      }
+      break;
+    }
+
+    if (lastResult!.status === "SUCCEEDED") break;
+    const lastReason = lastResult!.output.failure?.reason ?? "";
+    if (!isOperationalFailureReason(lastReason)) break; // semantic failure — never solved by switching models
     if (i < candidates.length - 1) fallbacksUsed.push(candidate);
   }
 
@@ -552,6 +630,8 @@ export interface ExecuteTaskOptions {
   ollamaFetchImpl?: typeof fetch;
   /** Free multi-model orchestration phase — test-injection point for every free EXTERNAL provider adapter's own HTTP call (Groq/Gemini/OpenRouter, all constructed internally by `buildFreeProviderAdapter` for a `freeModelOrchestration` project) — one shared override rather than one per provider, since a test exercising cross-model fallback needs to control all of them identically. Real (non-test) runner operation never sets this; ignored when `options.provider` is already given. */
   freeProviderFetchImpl?: typeof fetch;
+  /** Test-injection point for the bounded wait that respects a provider's own token-window reset — real operation never sets this. */
+  freeProviderSleepImpl?: (ms: number) => Promise<void>;
   /**
    * Office Engineer's semantic-repair capability (see
    * lib/ai-office/engineer/semantic-repair-execution.ts) uses this to
@@ -1178,6 +1258,18 @@ export async function executeTask(
         ollamaFetchImpl: options.ollamaFetchImpl,
         freeProviderFetchImpl: options.freeProviderFetchImpl,
         timeoutMs: options.timeoutMs ?? DEFAULT_TASK_TIMEOUT_MS,
+        sleepImpl: options.freeProviderSleepImpl,
+        estimatedInputTokens: freeContext?.ok ? freeContext.telemetry.estimatedInputTokens : undefined,
+        shrinkInput: freeContext?.ok
+          ? async (ceilingTokens) => {
+              const shrunk = await optimizeContextForPaidCall({ db, role, task, context, capability: capabilityForRole(role.id), routingMode: "FREE_MULTI_MODEL", inputTokenCeiling: ceilingTokens });
+              if (!shrunk.ok) return null;
+              return {
+                estimatedInputTokens: shrunk.telemetry.estimatedInputTokens,
+                buildInput: () => ({ role: role.id, task: shrunk.context, instructions: `Perform your assigned "${role.name}" responsibilities for this task.`, maxOutputTokens: shrunk.allowedOutputTokens }),
+              };
+            }
+          : undefined,
       });
       result = outcome.result;
       if (result.status === "SUCCEEDED" && outcome.finalCandidate) freeSuccessfulModel = { ...outcome.finalCandidate, latencyMs: outcome.finalLatencyMs };
@@ -1410,7 +1502,7 @@ export async function executeTask(
           failure: { reason: describeIntegrityFailure(integrity) },
         },
         usage: result.usage,
-        raw: { workspaceIntegrityFailed: true, missingReferences: integrity.missingReferences },
+        raw: { workspaceIntegrityFailed: true, missingReferences: integrity.missingReferences, hiddenStateConflicts: integrity.hiddenStateConflicts },
       };
     }
   }

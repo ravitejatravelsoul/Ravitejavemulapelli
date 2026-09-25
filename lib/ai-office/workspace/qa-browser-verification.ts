@@ -1,3 +1,4 @@
+import { compactFailureEvidence } from "../agents/failure-evidence.ts";
 import "server-only";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -58,6 +59,35 @@ function stopServer(server: http.Server): Promise<void> {
 }
 
 /**
+ * Generic diagnosis for "<element> intercepts pointer events": finds
+ * elements that are marked hidden (hidden class/attribute/aria-hidden)
+ * yet are still rendered and cover a large part of the viewport, so a
+ * remediation attempt sees the concrete cause (a hidden state that does
+ * not actually hide the element), not just a timeout. Never throws.
+ */
+async function diagnoseHiddenOverlay(page: import("playwright").Page): Promise<string | null> {
+  try {
+    return await page.evaluate(() => {
+      const vw = window.innerWidth * window.innerHeight;
+      const found: string[] = [];
+      for (const el of Array.from(document.querySelectorAll("*"))) {
+        const marked = el.matches("[hidden], [aria-hidden='true']") || Array.from(el.classList).some((c) => /^(is-)?hidden$|^d-none$|^hide$/.test(c));
+        if (!marked) continue;
+        const cs = getComputedStyle(el);
+        if (cs.display === "none" || cs.visibility === "hidden" || cs.pointerEvents === "none") continue;
+        const r = el.getBoundingClientRect();
+        if (r.width * r.height < vw * 0.25) continue;
+        const desc = `<${el.tagName.toLowerCase()}${el.id ? ` id="${el.id}"` : ""} class="${el.className}">`;
+        found.push(`${desc} is marked hidden but is still rendered (computed display:${cs.display}, position:${cs.position}, ${Math.round((r.width * r.height * 100) / vw)}% of the viewport) and intercepts clicks on other controls — a CSS rule is overriding its hidden state`);
+      }
+      return found.length ? found.slice(0, 3).join("; ") : null;
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Verifies the real generated deliverable in a real headless browser:
  * page loads, a heading and a description-like paragraph exist, a button
  * exists and clicking it changes some visible text on the page, no
@@ -102,6 +132,7 @@ export async function runQABrowserVerification(
 
   let server: http.Server | undefined;
   let browser: import("playwright").Browser | undefined;
+  let activePage: import("playwright").Page | undefined;
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
   let targetUrl = "";
@@ -119,6 +150,7 @@ export async function runQABrowserVerification(
 
     browser = await chromium.launch({ headless: true });
     const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    activePage = page;
     page.on("console", (msg) => {
       if (msg.type() === "error") consoleErrors.push(msg.text());
     });
@@ -185,10 +217,13 @@ export async function runQABrowserVerification(
       buttonText: await button.textContent(),
     });
   } catch (error) {
+    const rawMessage = error instanceof Error ? error.message : String(error);
+    const overlay = /intercepts pointer events/i.test(rawMessage) && activePage ? await diagnoseHiddenOverlay(activePage) : null;
     return {
       status: "FAIL",
-      summary: `Browser verification threw an unexpected error: ${error instanceof Error ? error.message : String(error)}`,
-      details: { consoleErrors, pageErrors },
+      summary: `Browser verification threw an unexpected error: ${compactFailureEvidence(rawMessage)}${overlay ? `
+Diagnosis: ${overlay}` : ""}`,
+      details: { consoleErrors, pageErrors, ...(overlay ? { hiddenOverlayDiagnosis: overlay } : {}) },
       durationMs: Date.now() - startedAt,
       targetUrl,
     };
