@@ -70,15 +70,24 @@ export function advanceVisualQueue(
   let current = q.current;
   if (
     current &&
-    now - current.startedAt - (current.pausedMs ?? 0) >=
-      (current.durationMs ?? 12000)
+    (current.motion
+      ? current.motion.phase === "DONE"
+      : now - current.startedAt - (current.pausedMs ?? 0) >=
+        (current.durationMs ?? 12000))
   )
     current = null;
   const pending = [...q.pending, ...fresh]
     .filter(
-      (e) => now - e.occurredAt < VISUAL_FRESH_MS && e.id !== current?.event.id,
+      (e) =>
+        (e.type === "DELIVERY" || now - e.occurredAt < VISUAL_FRESH_MS) &&
+        e.id !== current?.event.id,
     )
-    .sort((a, b) => b.occurredAt - a.occurredAt || b.id.localeCompare(a.id))
+    .sort(
+      (a, b) =>
+        Number(b.type === "DELIVERY") - Number(a.type === "DELIVERY") ||
+        b.occurredAt - a.occurredAt ||
+        b.id.localeCompare(a.id),
+    )
     .slice(0, VISUAL_PENDING_LIMIT);
   if (!current) {
     const event = pending.shift();
@@ -96,6 +105,7 @@ export function advanceVisualQueue(
   return { ...base, current, pending };
 }
 export function playbackProgress(play: HandoffPlayback, now: number) {
+  if (play.motion) return play.motion.progress;
   return Math.max(
     0,
     Math.min(

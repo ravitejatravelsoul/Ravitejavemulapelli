@@ -23,11 +23,13 @@ export function useHeadquartersExperience(
   error: string,
 ) {
   const play = useRef<HandoffPlayback | null>(null),
+    resting = useRef<Record<string, Vec3>>({}),
     boss = useRef<Vec3>([0, 1.7, 15]),
     near = useRef<string | null>(null),
     greetings = useRef(new Map<string, { at: number; signature: string }>()),
     acknowledgments = useRef(new Map<string, number>()),
     queue = useRef(emptyVisualQueue()),
+    completed = useRef(""),
     noticeSeen = useRef(new Set<string>()),
     current = useRef({ state, error });
   const [motion, setMotion] = useState(true),
@@ -39,6 +41,11 @@ export function useHeadquartersExperience(
       held: false,
       fromRole: "",
       toRole: "",
+      completed: "",
+      position: [0, 0, 0] as Vec3,
+      detours: 0,
+      blockedMs: 0,
+      remote: false,
     }),
     [notice, setNotice] = useState<WorldNotice | null>(null),
     [bubble, setBubble] = useState<{
@@ -80,6 +87,7 @@ export function useHeadquartersExperience(
         s.project?.status !== "PAUSED";
       if (project !== s.project?.id) {
         queue.current = emptyVisualQueue();
+        completed.current = "";
         noticeSeen.current.clear();
         greetings.current.clear();
         acknowledgments.current.clear();
@@ -88,8 +96,8 @@ export function useHeadquartersExperience(
         setBubble(null);
       }
       const p = play.current;
-      let held = false;
-      if (enabled && p) {
+      let held = p?.motion?.held ?? false;
+      if (enabled && p && !p.motion) {
         const sample = liveSample(
           { roleId: p.event.fromRole, status: "IDLE" },
           p,
@@ -107,11 +115,18 @@ export function useHeadquartersExperience(
         queue.current.initialized = false;
         if (!document.hidden && s.observedAt >= resumeAfter) resumeAfter = 0;
       }
+      if (p?.motion?.phase === "DONE") completed.current = p.event.id;
       queue.current.current = play.current;
       const first = !queue.current.initialized;
       queue.current = advanceVisualQueue(
         queue.current,
-        s.transitions,
+        s.transitions.filter(
+          (e) =>
+            e.type !== "DELIVERY" ||
+            s.deliveries.some(
+              (d) => d.id === e.projectId && d.status === "VERIFIED",
+            ),
+        ),
         now,
         enabled,
       );
@@ -124,6 +139,11 @@ export function useHeadquartersExperience(
         held,
         fromRole: play.current?.event.fromRole ?? "",
         toRole: play.current?.event.toRole ?? "",
+        completed: completed.current,
+        position: [...(play.current?.motion?.position ?? [0, 0, 0])] as Vec3,
+        detours: play.current?.motion?.detours ?? 0,
+        blockedMs: play.current?.motion?.blockedMs ?? 0,
+        remote: play.current?.motion?.remote ?? false,
       };
       setView((old) =>
         JSON.stringify(old) === JSON.stringify(next) ? old : next,
@@ -188,6 +208,7 @@ export function useHeadquartersExperience(
   };
   return {
     play,
+    resting,
     boss,
     acknowledgments,
     motion,

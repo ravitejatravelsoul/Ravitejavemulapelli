@@ -1,4 +1,5 @@
 "use client";
+import { stepVisualMotion } from "@/lib/ai-office/headquarters/visual-motion";
 import { memo, useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import { Line } from "@react-three/drei";
@@ -264,12 +265,14 @@ function StationActivity({
 const LiveActor = memo(function LiveActor({
   agent,
   play,
+  resting,
   animate,
   boss,
   acknowledgments,
 }: {
   agent: HeadquartersAgent;
   play: React.RefObject<HandoffPlayback | null>;
+  resting: React.RefObject<Record<string, Vec3>>;
   animate: boolean;
   boss: React.RefObject<Vec3>;
   acknowledgments: React.RefObject<Map<string, number>>;
@@ -278,7 +281,13 @@ const LiveActor = memo(function LiveActor({
     label = useRef<THREE.Group>(null);
   useFrame(() => {
     if (label.current) {
-      const p = liveSample(agent, play.current, Date.now(), animate).position;
+      const p = liveSample(
+        agent,
+        play.current,
+        Date.now(),
+        animate,
+        resting.current,
+      ).position;
       label.current.position.set(p[0], 0.32, p[2] + 0.8);
     }
   });
@@ -291,14 +300,16 @@ const LiveActor = memo(function LiveActor({
         definition={definition}
         time={OFFLINE_TIME}
         active={animate}
-        sampleFrame={() => liveSample(agent, play.current, Date.now(), animate)}
+        sampleFrame={() =>
+          liveSample(agent, play.current, Date.now(), animate, resting.current)
+        }
         equipment={
           <Equipment motif={ROLE_STATIONS[agent.roleId].motif} color={color} />
         }
         attention={() => {
           const now = Date.now(),
             p = play.current,
-            sample = liveSample(agent, p, now, animate),
+            sample = liveSample(agent, p, now, animate, resting.current),
             phase = p ? playbackPhase(p, now) : "";
           if (animate && p && phase === "TRANSFER") {
             if (agent.roleId === p.event.toRole)
@@ -353,45 +364,52 @@ const LiveActor = memo(function LiveActor({
 /** Personal-space holds affect only visual time. The runner is never delayed. */
 function HandoffCore({
   play: playRef,
+  resting,
   animate,
   boss,
 }: {
   play: React.RefObject<HandoffPlayback | null>;
+  resting: React.RefObject<Record<string, Vec3>>;
   animate: boolean;
   boss: React.RefObject<Vec3>;
 }) {
-  const root = useRef<THREE.Group>(null),
-    previous = useRef(0);
+  const root = useRef<THREE.Group>(null);
+  useFrame(() => {
+    const p = playRef.current;
+    if (animate && p)
+      stepVisualMotion(p, boss.current, Date.now(), resting.current);
+  }, -2);
   useFrame(() => {
     const now = Date.now(),
-      dt = Math.min(100, now - previous.current);
-    previous.current = now;
-    const p = playRef.current,
+      p = playRef.current,
       group = root.current;
     if (!group) return;
-    if (animate && p) {
-      const pos = liveSample(
-        { roleId: p.event.fromRole, status: "IDLE" },
-        p,
-        now,
-        true,
-      ).position;
-      if (Math.hypot(pos[0] - boss.current[0], pos[2] - boss.current[2]) < 1.15)
-        playRef.current = { ...p, pausedMs: (p.pausedMs ?? 0) + dt };
-    }
     const t = p ? playbackProgress(p, now) : -1;
     group.visible = !!(animate && p && t >= 0.42 && t < 0.62);
     if (!group.visible || !p) return;
-    const from = p.path.at(-1)!,
+    const from = p.motion?.transferFrom ?? p.path.at(-1)!,
       to = ROLE_STATIONS[p.event.toRole]?.home ?? [10, 1.8, -15];
     const f = Math.min(1, (t - 0.42) / 0.2),
+      horizontal = p.motion?.remote
+        ? Math.max(0, Math.min(1, (f - 0.25) * 2))
+        : f,
       dx = to[0] - from[0],
       dz = to[2] - from[2],
       length = Math.hypot(dx, dz) || 1;
     group.position.set(
-      from[0] + (dx / length) * 0.6 + (dx - (dx / length) * 0.6) * f,
-      from[1] + (to[1] - from[1]) * f + 0.25 * Math.sin(f * Math.PI),
-      from[2] + (dz / length) * 0.6 + (dz - (dz / length) * 0.6) * f,
+      from[0] +
+        (dx / length) * (p.motion?.remote ? 0 : 0.6) +
+        (dx - (dx / length) * (p.motion?.remote ? 0 : 0.6)) * horizontal,
+      p.motion?.remote
+        ? f < 0.25
+          ? from[1] + (4.5 - from[1]) * f * 4
+          : f > 0.75
+            ? 4.5 + (to[1] - 4.5) * (f - 0.75) * 4
+            : 4.5
+        : from[1] + (to[1] - from[1]) * f + 0.25 * Math.sin(f * Math.PI),
+      from[2] +
+        (dz / length) * (p.motion?.remote ? 0 : 0.6) +
+        (dz - (dz / length) * (p.motion?.remote ? 0 : 0.6)) * horizontal,
     );
     group.scale.setScalar(1);
     group.children[0].visible = p.event.type !== "REMEDIATION";
@@ -427,10 +445,22 @@ function VerifiedCore({
   play: React.RefObject<HandoffPlayback | null>;
   animate: boolean;
 }) {
-  const root = useRef<THREE.Group>(null);
+  const root = useRef<THREE.Group>(null),
+    signal = useRef<THREE.Mesh>(null);
   useFrame(() => {
     if (root.current) {
       const p = play.current;
+      if (signal.current) {
+        const receiving = !!(
+          animate &&
+          p?.event.type === "DELIVERY" &&
+          p.event.projectId === id &&
+          playbackProgress(p, Date.now()) >= 0.42 &&
+          playbackProgress(p, Date.now()) < 0.62
+        );
+        signal.current.visible = receiving;
+        signal.current.scale.setScalar(1 + 0.08 * Math.sin(Date.now() / 140));
+      }
       root.current.visible = !(
         p?.event.type === "DELIVERY" &&
         p.event.projectId === id &&
@@ -439,14 +469,31 @@ function VerifiedCore({
     }
   });
   return (
-    <group ref={root}>
-      <Core position={position} scale={0.95} active={animate} />
-    </group>
+    <>
+      <mesh
+        ref={signal}
+        visible={false}
+        position={[position[0], 1.12, position[2]]}
+        rotation={[-Math.PI / 2, 0, 0]}
+      >
+        <ringGeometry args={[0.48, 0.65, 32]} />
+        <meshBasicMaterial
+          color="#c6f5dd"
+          transparent
+          opacity={0.85}
+          side={THREE.DoubleSide}
+        />
+      </mesh>
+      <group ref={root}>
+        <Core position={position} scale={0.95} active={animate} />
+      </group>
+    </>
   );
 }
 export const HeadquartersScene = memo(function HeadquartersScene({
   state,
   play,
+  resting,
   animate,
   boss,
   acknowledgments,
@@ -455,6 +502,7 @@ export const HeadquartersScene = memo(function HeadquartersScene({
   boss: React.RefObject<Vec3>;
   acknowledgments: React.RefObject<Map<string, number>>;
   play: React.RefObject<HandoffPlayback | null>;
+  resting: React.RefObject<Record<string, Vec3>>;
   animate: boolean;
 }) {
   const engineer: HeadquartersAgent = {
@@ -489,12 +537,18 @@ export const HeadquartersScene = memo(function HeadquartersScene({
     ];
   return (
     <>
-      <HandoffCore play={play} animate={animate} boss={boss} />
+      <HandoffCore
+        play={play}
+        resting={resting}
+        animate={animate}
+        boss={boss}
+      />
       {[...state.agents, engineer].map((a) => (
         <LiveActor
           key={a.roleId}
           agent={a}
           play={play}
+          resting={resting}
           animate={animate}
           boss={boss}
           acknowledgments={acknowledgments}

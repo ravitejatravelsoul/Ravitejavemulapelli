@@ -116,3 +116,38 @@ The real Release generated VERIFIED delivery transition `delivery:8589d3d1-202f-
 | Real Release → Vault ceremony | FAIL — not completed in captured observation |
 
 **FINAL: NOT READY.** Free execution reached VERIFIED delivery; the remaining acceptance gap is the complete real Release-to-Vault visual ceremony. No second project, state replay, new Headquarters change, master merge or production change was made. Local observer/server/runner processes were stopped at the end of capture. All pilot databases, workspaces, videos, response audits, credentials and `.env.local` remain uncommitted under ignored paths. This phase stops here with that limitation explicit.
+
+
+## September 24 — bounded visual ceremony follow-up
+
+Base: `7d6f8fe43f4bc2b10683e62cea144368636b507f`. This follow-up changes only Headquarters presentation and its deterministic tests. No model request, project execution, routing change, backend state change, production configuration change, merge or deployment.
+
+The visual deadlock came from adding personal-space holds to `pausedMs` every frame without a bound. A blocked carrier could remain current forever; its queued delivery could then expire under the 60-second freshness rule. Backend execution was already complete and was never the cause of this remaining gap.
+
+Carriers now wait 1.2 seconds, try a bounded collision-checked offset route, and safely send the core above head height after four seconds of accumulated obstruction if no route is available. A 50-second movement deadline also bounds repeated detours. Agents keep their last safe body position and attempt a safe return; a blocked return parks without teleporting. Swept Boss clearance is 1.15 meters; other agents and padded furniture are checked too. An admitted VERIFIED delivery is prioritized and retained while a predecessor resolves. New/stale-event admission, initial-history consumption and event-ID deduplication remain enforced. Delivery presentation additionally requires a matching VERIFIED project in the authoritative delivery list. No backend transition is created by this animation.
+
+Presentation-only review reuses project `8be6b869-16ae-48d8-a1db-3de91c34cadd` and unchanged event `delivery:8589d3d1-202f-49eb-932e-4f759a9a8d97` (original timestamp 14:11:38.845 UTC). The private browser harness reads a copy of the existing pilot database, releases the actual recorded transition IDs to the visual queue, and offsets only browser Date for freshness. It does not rerun tasks, alter delivery status or modify persisted events. A banner identifies the recording as a presentation replay. External/model requests and browser writes are blocked and audited.
+
+With Boss at the preceding Code Review-to-Release path, the actual handoff safely resolved and the queued real delivery completed: Release carried its core toward the Vault, transferred it, the receiving pedestal signaled, the verified core appeared, Release returned and the queue emptied. Both animations together took 16.0 seconds; observed carrier-to-Boss clearance stayed at least 1.2096 meters. Actual movement, transfer and final placement screenshots/video are under ignored `.data/headquarters-ceremony-review/blocked-predecessor-*`. The original project's VERIFIED label remains visible. These are actual-event presentation replays, not a new live AI run.
+
+Validation: **18/18 targeted Headquarters tests; 970/970 AI Office tests; 14/14 browser/E2E tests; TypeScript, ESLint and build PASS.** Deterministic tests cover safe detours, occupied destination, bounded predecessor plus queued delivery, completion without body teleport, stale refresh, deduplication, and rejection of FAILED/DONE/BLOCKED delivery events. The browser replay initially encountered a Playwright clock-instrumentation problem; a Date-only offset resolved the harness issue. The first walk to the second obstruction position was correctly stopped by Release's body; the observer route was adjusted around it. Neither issue changed backend state or triggered model calls.
+
+
+Direct Boss obstruction of Release was also validated in the real browser using the same existing delivery event. Boss stood at approximately `(11.5, -14)`. Release advanced toward the Vault, held at its last safe position, attempted offset navigation, and used the overhead core transfer when the occupied destination remained unavailable. The ceremony completed in **8.433 seconds**, with **minimum observed clearance 1.1689 meters**, no solid intersection, one delivery start and an empty final queue. The body remained safely parked; it did not walk through Boss or teleport. Captured transfer and dock frames show the receiving pedestal pulse and final verified core. This is distinct from the predecessor replay, where the new solid checks can resolve an obstructed carrier before it reaches Boss.
+
+Repeated polling of the same event did not replay the ceremony (the direct obstruction test asserted an empty queue every 100 ms for 12 seconds). Refresh consumed historical events without replay. Both scenarios recorded zero browser errors. Their IDs, traces, results and videos remain in ignored `.data/headquarters-ceremony-review`; `results.json` records both completed scenarios. The fixture-free ceremony evidence is the original real VERIFIED project/event. Unverified-event rejection is additionally covered by deterministic and existing browser guard tests.
+
+The final cleanup audit initially encountered SQLite `SQLITE_IOERR_DELETE` immediately after stopping the isolated server. A fresh read-only audit after shutdown passed `PRAGMA integrity_check` for both databases and confirmed **every logical table unchanged**, with source and copy both matching the pre-review SHA-256 `8b84695aacf2f63e28db4dcf17c6629292b1ba2d25c8c674696c4c3703f35a78`. Audit: `final-integrity.json`. **AI/model calls this phase: 0; project executions: 0; production changes: NONE.** No external request or browser mutation was allowed. Secret scan of eight changed files and 70 built client assets passed with zero matches and no forbidden paths; generated tsconfig additions were restored.
+
+| Final visual acceptance item | Result |
+| --- | --- |
+| Boss obstruction, personal space, no collision or indefinite hold | PASS |
+| Release moves toward Vault; safe send when destination occupied | PASS |
+| Vault receiving activation | PASS |
+| Verified Project Core placement | PASS |
+| Ceremony finishes and queue empties | PASS — both actual-event replays |
+| Verified-only guard | PASS |
+| Duplicate suppression | PASS |
+| Stale refresh replay prevention | PASS |
+
+**FINAL: READY FOR OWNER/CHATGPT FINAL REVIEW.** The prior real project's completed roles, QA briefing match and VERIFIED delivery remain as documented above; this authorized presentation-only phase closes its final visual gap. No new AI project, model call, backend replay, master merge or production deployment occurred. Review evidence and credentials remain uncommitted. Stop after pushing the same feature branch.

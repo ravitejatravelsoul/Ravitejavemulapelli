@@ -26,7 +26,7 @@ export default function HeadquartersWorld() {
   );
   const { state, error, refreshedAt, refresh } = useWorldState(project);
   const experience = useHeadquartersExperience(state, error);
-  const { play, boss, acknowledgments, motion, view, bubble, notice } =
+  const { play, resting, boss, acknowledgments, motion, view, bubble, notice } =
     experience;
   const selectProject = useCallback((id: string) => {
     setProject(id);
@@ -48,7 +48,8 @@ export default function HeadquartersWorld() {
         result[a.roleId] = {
           name: a.name,
           position: () =>
-            liveSample(a, play.current, Date.now(), !!animate).position,
+            liveSample(a, play.current, Date.now(), !!animate, resting.current)
+              .position,
         };
     result["office-engineer"] = {
       name: "Office Engineer",
@@ -62,7 +63,7 @@ export default function HeadquartersWorld() {
     ] as [string, string, Vec3][])
       result[id] = { name, position: () => p };
     return result;
-  }, [state?.agents, animate, play]);
+  }, [state?.agents, animate, play, resting]);
   if (!state)
     return (
       <section role="status" style={{ padding: 40 }}>
@@ -84,6 +85,18 @@ export default function HeadquartersWorld() {
         watchHandoff: experience.startWatching,
         hud: (
           <>
+            <span
+              hidden
+              data-testid="visual-playback"
+              data-current={view.id}
+              data-pending={view.pending}
+              data-completed={view.completed}
+              data-phase={view.phase}
+              data-position={JSON.stringify(view.position)}
+              data-detours={view.detours}
+              data-blocked-ms={view.blockedMs}
+              data-remote={view.remote}
+            />
             {view.id && (
               <aside
                 className={styles.eventCue}
@@ -107,7 +120,11 @@ export default function HeadquartersWorld() {
                 </strong>
                 <span>
                   {view.phase.toLowerCase()}
-                  {view.held ? " · Owner nearby — keeping personal space" : ""}
+                  {view.remote
+                    ? " · Sending core from a safe position"
+                    : view.held
+                      ? " · Owner nearby — keeping personal space"
+                      : ""}
                 </span>
                 <button
                   onClick={
@@ -149,6 +166,7 @@ export default function HeadquartersWorld() {
           <HeadquartersScene
             state={state}
             play={play}
+            resting={resting}
             animate={!!animate}
             boss={boss}
             acknowledgments={acknowledgments}

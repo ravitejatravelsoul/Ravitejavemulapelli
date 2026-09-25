@@ -1,3 +1,4 @@
+import type { VisualMotion } from "./visual-motion.ts";
 import type { HeadquartersState, HeadquartersAgent } from "./world-state.ts";
 import {
   OFFICE_WORLD,
@@ -239,6 +240,7 @@ export type HandoffPlayback = {
   path: Vec3[];
   durationMs?: number;
   pausedMs?: number;
+  motion?: VisualMotion;
 };
 export function handoffPath(event: OfficeTransition): Vec3[] | null {
   if (
@@ -288,9 +290,10 @@ export function liveSample(
   play: HandoffPlayback | null,
   now: number,
   animate: boolean,
+  resting: Record<string, Vec3> = {},
 ) {
   const home = ROLE_STATIONS[a.roleId]?.home ?? ([0, 1.4, 5] as Vec3);
-  let position = home,
+  let position = resting[a.roleId] ?? home,
     carry = false;
   let state: "IDLE" | "WORKING" | "FLOATING" | "HANDOFF" = "IDLE";
   if (
@@ -302,8 +305,9 @@ export function liveSample(
     state = "WORKING";
   if (animate && play && play.event.fromRole === a.roleId) {
     const t =
+      play.motion?.progress ??
       (now - play.startedAt - (play.pausedMs ?? 0)) /
-      (play.durationMs ?? 12000);
+        (play.durationMs ?? 12000);
     if (t >= 0 && t < 1) {
       const raw =
         t < 0.08
@@ -316,15 +320,17 @@ export function liveSample(
                 ? 1 - (t - 0.62) / 0.34
                 : 0;
       const f = raw * raw * (3 - 2 * raw);
-      position = along(play.path, Math.min(1, Math.max(0, f)));
+      position =
+        play.motion?.position ?? along(play.path, Math.min(1, Math.max(0, f)));
       state = t >= 0.42 && t < 0.62 ? "HANDOFF" : "FLOATING";
       carry = t < 0.42;
     }
   }
   if (animate && play && play.event.toRole === a.roleId) {
     const t =
+      play.motion?.progress ??
       (now - play.startedAt - (play.pausedMs ?? 0)) /
-      (play.durationMs ?? 12000);
+        (play.durationMs ?? 12000);
     if (t >= 0.42 && t < 0.62) state = "HANDOFF";
   }
   return { position, state, carry };
