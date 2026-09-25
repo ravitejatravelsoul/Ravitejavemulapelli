@@ -14,10 +14,12 @@ export function Bot({
   sampleFrame,
   equipment,
   attention,
+  speaking,
 }: {
   definition?: PlacedAgent;
   sampleFrame?: () => ReturnType<typeof demoBot>;
   equipment?: React.ReactNode;
+  speaking?: () => boolean;
   attention?: () => { target: Vec3 | null; acknowledge: boolean };
   id: BotId;
   time: React.RefObject<number | null>;
@@ -43,6 +45,7 @@ export function Bot({
     const sample = sampleFrame ? sampleFrame() : demoBot(id, time.current);
     const p = sample.position;
     const social = attention?.();
+    const talking = active && speaking?.();
     root.current.position.set(...p);
     if (active) elapsed.current += dt;
     body.current.position.y = active
@@ -83,9 +86,11 @@ export function Bot({
         social.target[0] - p[0],
         social.target[2] - p[2],
       );
-    body.current.rotation.x = social?.acknowledge
-      ? Math.sin(elapsed.current * 7) * 0.09
-      : 0;
+    body.current.rotation.x = talking
+      ? Math.sin(elapsed.current * 6) * 0.035
+      : social?.acknowledge
+        ? Math.sin(elapsed.current * 7) * 0.09
+        : 0;
     const difference = Math.atan2(
       Math.sin(yaw.current - root.current.rotation.y),
       Math.cos(yaw.current - root.current.rotation.y),
@@ -93,8 +98,9 @@ export function Bot({
     root.current.rotation.y += difference * Math.min(1, dt * 6);
     last.current.set(...p);
     if (arms.current)
-      arms.current.rotation.x =
-        sample.state === "INTERACTING" || social?.acknowledge
+      arms.current.rotation.x = talking
+        ? -0.25 + Math.sin(elapsed.current * 3) * 0.025
+        : sample.state === "INTERACTING" || social?.acknowledge
           ? -0.65
           : sample.state === "HANDOFF"
             ? -0.45

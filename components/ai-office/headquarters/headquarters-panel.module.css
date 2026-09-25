@@ -167,3 +167,32 @@
   font-size: 10px;
   letter-spacing: 1px;
 }
+
+.voiceControls {
+  position: absolute;
+  z-index: 6;
+  left: 26px;
+  bottom: 105px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: 270px;
+  color: #e3eee9;
+  background: #16343bef;
+  padding: 9px 12px;
+  border-radius: 10px;
+  font:
+    11px/1.4 "Segoe UI",
+    sans-serif;
+}
+.voiceControls button {
+  border: 1px solid #a1c5ba80;
+  padding: 5px 8px;
+  border-radius: 6px;
+}
+.voiceControls button:disabled {
+  opacity: 0.5;
+}
+.voiceControls small {
+  width: 100%;
+}

@@ -28,6 +28,7 @@ export default function HeadquartersWorld() {
   const experience = useHeadquartersExperience(state, error);
   const { play, resting, boss, acknowledgments, motion, view, bubble, notice } =
     experience;
+  const { speech } = experience;
   const selectProject = useCallback((id: string) => {
     setProject(id);
     history.replaceState(
@@ -85,6 +86,41 @@ export default function HeadquartersWorld() {
         watchHandoff: experience.startWatching,
         hud: (
           <>
+            <aside
+              className={styles.voiceControls}
+              aria-label="Office voice"
+              data-testid="office-voice"
+              data-status={speech.view.status}
+              data-speaker={speech.view.briefing?.role ?? ""}
+            >
+              <button onClick={speech.toggle} aria-pressed={speech.enabled}>
+                VOICE: {speech.enabled ? "ON" : "OFF"}
+              </button>
+              <button onClick={speech.stop} disabled={!speech.view.briefing}>
+                Stop Speaking
+              </button>
+              <small>
+                {speech.view.status === "unavailable"
+                  ? "Local voice unavailable — subtitles remain available."
+                  : speech.view.status === "speaking"
+                    ? "Speaking · " +
+                      (state.agents.find(
+                        (a) => a.roleId === speech.view.briefing?.role,
+                      )?.name ?? "Office Engineer")
+                    : "Local browser voice"}
+              </small>
+            </aside>
+            {speech.view.briefing && (
+              <aside
+                className={styles.bubble}
+                role="status"
+                data-testid="speech-subtitle"
+                data-role={speech.view.briefing.role}
+                data-revision={speech.view.briefing.revision}
+              >
+                {speech.view.briefing.text}
+              </aside>
+            )}
             <span
               hidden
               data-testid="visual-playback"
@@ -147,7 +183,7 @@ export default function HeadquartersWorld() {
                 <span>{notice.detail}</span>
               </aside>
             )}
-            {bubble && !experience.watch && (
+            {bubble && !experience.watch && !speech.view.briefing && (
               <aside
                 className={styles.bubble}
                 role="status"
@@ -170,6 +206,7 @@ export default function HeadquartersWorld() {
             animate={!!animate}
             boss={boss}
             acknowledgments={acknowledgments}
+            speaking={speech.speaking}
           />
         ),
         panel: (id, close) => (
@@ -177,7 +214,11 @@ export default function HeadquartersWorld() {
             key={id}
             id={id}
             state={state}
-            close={close}
+            close={() => {
+              speech.stop();
+              close();
+            }}
+            speech={speech}
             refresh={refresh}
             selectProject={selectProject}
             stale={!!error}

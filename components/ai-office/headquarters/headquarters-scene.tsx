@@ -269,6 +269,7 @@ const LiveActor = memo(function LiveActor({
   animate,
   boss,
   acknowledgments,
+  speaking,
 }: {
   agent: HeadquartersAgent;
   play: React.RefObject<HandoffPlayback | null>;
@@ -276,6 +277,7 @@ const LiveActor = memo(function LiveActor({
   animate: boolean;
   boss: React.RefObject<Vec3>;
   acknowledgments: React.RefObject<Map<string, number>>;
+  speaking: React.RefObject<string | null>;
 }) {
   const definition = useMemo(() => visualDefinition(agent), [agent]),
     label = useRef<THREE.Group>(null);
@@ -306,6 +308,7 @@ const LiveActor = memo(function LiveActor({
         equipment={
           <Equipment motif={ROLE_STATIONS[agent.roleId].motif} color={color} />
         }
+        speaking={() => animate && speaking.current === agent.roleId}
         attention={() => {
           const now = Date.now(),
             p = play.current,
@@ -330,6 +333,7 @@ const LiveActor = memo(function LiveActor({
           }
           if (
             agent.roleId === "office-engineer" &&
+            speaking.current !== agent.roleId &&
             ["WORKING", "REVIEWING"].includes(agent.status)
           )
             return { target: [13, 1.5, -7.5], acknowledge: false };
@@ -497,10 +501,12 @@ export const HeadquartersScene = memo(function HeadquartersScene({
   animate,
   boss,
   acknowledgments,
+  speaking,
 }: {
   state: HeadquartersState;
   boss: React.RefObject<Vec3>;
   acknowledgments: React.RefObject<Map<string, number>>;
+  speaking: React.RefObject<string | null>;
   play: React.RefObject<HandoffPlayback | null>;
   resting: React.RefObject<Record<string, Vec3>>;
   animate: boolean;
@@ -552,6 +558,7 @@ export const HeadquartersScene = memo(function HeadquartersScene({
           animate={animate}
           boss={boss}
           acknowledgments={acknowledgments}
+          speaking={speaking}
         />
       ))}
       <Sign

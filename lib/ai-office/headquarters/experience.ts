@@ -309,3 +309,7 @@ export function meaningfulNotices(s: HeadquartersState): WorldNotice[] {
       });
   return notices.sort((a, b) => b.at - a.at);
 }
+
+export function engineerBriefing(s: HeadquartersState, hour: number) {
+  return `${greeting(hour)} Recorded infrastructure status: ${s.office.health}. Runner: ${s.office.runner}.${s.mode === "remote" ? " Remote snapshot; this view does not probe or repair workers." : ""}`;
+}

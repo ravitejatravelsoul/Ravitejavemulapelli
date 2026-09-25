@@ -1,4 +1,6 @@
 "use client";
+import { engineerBriefing } from "@/lib/ai-office/headquarters/experience";
+import type { useOfficeSpeech } from "./use-office-speech";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { HeadquartersState } from "@/lib/ai-office/headquarters/world-state";
@@ -31,6 +33,7 @@ export function HeadquartersPanel({
   selectProject,
   stale,
   asOf,
+  speech,
 }: {
   id: string;
   state: HeadquartersState;
@@ -39,7 +42,13 @@ export function HeadquartersPanel({
   selectProject: (id: string) => void;
   stale: boolean;
   asOf: number;
+  speech: ReturnType<typeof useOfficeSpeech>;
 }) {
+  const { focus } = speech;
+  useEffect(() => {
+    focus(id);
+    return () => focus(null);
+  }, [id, focus]);
   const root = useRef<HTMLElement>(null),
     [asked, setAsked] = useState(false),
     [newProject, setNewProject] = useState(false),
@@ -94,6 +103,12 @@ export function HeadquartersPanel({
       }}
     >
       <button onClick={close}>Close & resume</button>
+      <button onClick={speech.toggle} aria-pressed={speech.enabled}>
+        VOICE: {speech.enabled ? "ON" : "OFF"}
+      </button>
+      <button onClick={speech.stop} disabled={!speech.view.briefing}>
+        Stop Speaking
+      </button>
       <p className={styles.status}>
         TEJA / OWNER · {stale ? "STALE SNAPSHOT" : "PERSISTED OFFICE STATE"}
       </p>
@@ -103,13 +118,39 @@ export function HeadquartersPanel({
           <p
             className={styles.briefing}
             data-testid="agent-briefing"
-            data-revision={state.revision}
+            data-speaking={
+              speech.view.status === "speaking" &&
+              speech.view.briefing?.role === id
+            }
+            data-revision={
+              speech.view.briefing?.role === id &&
+              speech.view.briefing.priority === 2
+                ? speech.view.briefing.revision
+                : state.revision
+            }
             data-role={agent.roleId}
           >
-            {agentBriefing(agent, state, new Date(asOf).getHours())}
+            {speech.view.briefing?.role === id &&
+            speech.view.briefing.priority === 2
+              ? speech.view.briefing.text
+              : agentBriefing(agent, state, new Date(asOf).getHours())}
           </p>
           <button
+            disabled={!speech.enabled || stale}
+            onClick={() =>
+              speech.speak({
+                role: id,
+                text: agentBriefing(agent, state, new Date(asOf).getHours()),
+                revision: state.revision,
+                priority: 2,
+              })
+            }
+          >
+            Speak Briefing
+          </button>
+          <button
             onClick={() => {
+              speech.stop();
               setAsked(true);
               refresh();
             }}
@@ -378,10 +419,20 @@ export function HeadquartersPanel({
       )}
       {id === "office-engineer" && (
         <>
-          <p>
-            {greeting(new Date(asOf).getHours())} Recorded infrastructure
-            status: {state.office.health}.
-          </p>
+          <p>{engineerBriefing(state, new Date(asOf).getHours())}</p>
+          <button
+            disabled={!speech.enabled || stale}
+            onClick={() =>
+              speech.speak({
+                role: id,
+                text: engineerBriefing(state, new Date(asOf).getHours()),
+                revision: state.revision,
+                priority: 2,
+              })
+            }
+          >
+            Speak Briefing
+          </button>
           <p>Runner: {state.office.runner}</p>
           {state.mode === "remote" && (
             <p>Remote snapshot; this view does not probe or repair workers.</p>

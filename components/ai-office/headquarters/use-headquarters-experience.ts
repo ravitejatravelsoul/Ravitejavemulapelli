@@ -1,4 +1,5 @@
 "use client";
+import { useOfficeSpeech } from "./use-office-speech";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { HeadquartersState } from "@/lib/ai-office/headquarters/world-state";
 import {
@@ -8,6 +9,7 @@ import {
   shouldGreet,
   briefSignature,
   proximityBriefing,
+  engineerBriefing,
   playbackPhase,
   playbackProgress,
   cinematicPose,
@@ -22,6 +24,8 @@ export function useHeadquartersExperience(
   state: HeadquartersState | null,
   error: string,
 ) {
+  const speech = useOfficeSpeech();
+  const { speak, stop, leave } = speech;
   const play = useRef<HandoffPlayback | null>(null),
     resting = useRef<Record<string, Vec3>>({}),
     boss = useRef<Vec3>([0, 1.7, 15]),
@@ -69,6 +73,7 @@ export function useHeadquartersExperience(
         queue.current = emptyVisualQueue();
         play.current = null;
         near.current = null;
+        stop();
       }
       setMotion(!document.hidden && !media.matches);
     };
@@ -88,6 +93,7 @@ export function useHeadquartersExperience(
       if (project !== s.project?.id) {
         queue.current = emptyVisualQueue();
         completed.current = "";
+        stop();
         noticeSeen.current.clear();
         greetings.current.clear();
         acknowledgments.current.clear();
@@ -165,8 +171,24 @@ export function useHeadquartersExperience(
         observedRevision = s.revision;
       }
       if (now > noticeUntil || document.hidden) setNotice(null);
+      if (near.current === "office-engineer" && !document.hidden && !e) {
+        const role = "office-engineer",
+          signature = JSON.stringify([
+            s.project?.id,
+            s.office.health,
+            s.office.runner,
+          ]);
+        if (shouldGreet(greetings.current.get(role), signature, now)) {
+          greetings.current.set(role, { at: now, signature });
+          const text = engineerBriefing(s, new Date(now).getHours());
+          speak({ role, text, revision: s.revision, priority: 1 });
+          setBubble({ role, text, revision: s.revision, until: now + 8000 });
+        } else setBubble((old) => (old && old.until < now ? null : old));
+        return;
+      }
       const a = s.agents.find((a) => a.roleId === near.current);
       if (!a || document.hidden || e) {
+        if (document.hidden || e) stop();
         setBubble(null);
         return;
       }
@@ -174,9 +196,11 @@ export function useHeadquartersExperience(
       if (shouldGreet(greetings.current.get(a.roleId), signature, now)) {
         greetings.current.set(a.roleId, { at: now, signature });
         acknowledgments.current.set(a.roleId, now + 1600);
+        const text = proximityBriefing(a, s, new Date(now).getHours());
+        speak({ role: a.roleId, text, revision: s.revision, priority: 1 });
         setBubble({
           role: a.roleId,
-          text: proximityBriefing(a, s, new Date(now).getHours()),
+          text,
           revision: s.revision,
           until: now + 8000,
         });
@@ -190,10 +214,14 @@ export function useHeadquartersExperience(
       document.removeEventListener("visibilitychange", visibility);
       media.removeEventListener("change", visibility);
     };
-  }, []);
-  const onNear = useCallback((id: string | null) => {
-    near.current = id;
-  }, []);
+  }, [speak, stop]);
+  const onNear = useCallback(
+    (id: string | null) => {
+      near.current = id;
+      leave(id);
+    },
+    [leave],
+  );
   const cameraSample = useCallback(
     () => (play.current ? cinematicPose(play.current, Date.now()) : null),
     [],
@@ -203,10 +231,12 @@ export function useHeadquartersExperience(
     if (play.current) {
       if (document.pointerLockElement) document.exitPointerLock();
       setBubble(null);
+      stop();
       setWatch(true);
     }
   };
   return {
+    speech,
     play,
     resting,
     boss,

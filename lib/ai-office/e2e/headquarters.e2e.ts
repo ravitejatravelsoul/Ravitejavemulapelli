@@ -99,6 +99,54 @@ test(
       const page = await browser.newPage({
         viewport: { width: 1440, height: 900 },
       });
+      // Deterministic browser lifecycle checks; real native voice is a separate release gate.
+      await page.addInitScript(() => {
+        Object.defineProperty(window, "SpeechSynthesisUtterance", {
+          value: class {
+            text: string;
+            constructor(text: string) {
+              this.text = text;
+            }
+          },
+        });
+        const audit = {
+          calls: [] as string[],
+          cancels: 0,
+          events: [] as string[],
+        };
+        Object.defineProperty(window, "__officeSpeechAudit", { value: audit });
+        Object.defineProperty(window, "speechSynthesis", {
+          value: {
+            getVoices: () => [
+              {
+                name: "Test local",
+                voiceURI: "test-local",
+                lang: "en-US",
+                localService: true,
+                default: true,
+              },
+            ],
+            speak: (u: SpeechSynthesisUtterance) => {
+              audit.calls.push(u.text);
+              audit.events.push("speak " + Date.now() + " " + u.text);
+              u.onstart?.call(u, new Event("start") as SpeechSynthesisEvent);
+            },
+            cancel: () => {
+              audit.cancels++;
+              audit.events.push(
+                "cancel " +
+                  Date.now() +
+                  " near=" +
+                  document
+                    .querySelector("[data-testid=world-prototype]")
+                    ?.getAttribute("data-near"),
+              );
+            },
+            addEventListener: () => {},
+            removeEventListener: () => {},
+          },
+        });
+      });
       const errors: string[] = [],
         external: string[] = [];
       page.on("pageerror", (e) => errors.push(e.message));
@@ -290,16 +338,74 @@ test(
       await go(-15.2, -10);
       await go(-12, -10);
       await go(-12, -11);
-      const caption = page.getByTestId("proximity-briefing");
-      await caption.waitFor();
+      const caption = page.getByTestId("speech-subtitle");
+      await caption.waitFor().catch(async (e) => {
+        console.log(
+          "Speech browser failure",
+          await page.evaluate(() => ({
+            audit: (window as unknown as { __officeSpeechAudit: unknown })
+              .__officeSpeechAudit,
+            voice: document.querySelector("[data-testid=office-voice]")
+              ?.outerHTML,
+            world: document
+              .querySelector("[data-testid=world-prototype]")
+              ?.getAttribute("data-near"),
+            text: document.querySelector("[data-testid=proximity-briefing]")
+              ?.textContent,
+          })),
+        );
+        await page.screenshot({ path: join(evidence, "voice-failure.png") });
+        throw e;
+      });
       assert.match(await caption.innerText(), /testing: Test actual frontend/);
+      assert.equal(
+        await page.getByTestId("office-voice").getAttribute("data-status"),
+        "speaking",
+      );
+      const spoken = await page.evaluate(() =>
+        (
+          window as unknown as { __officeSpeechAudit: { calls: string[] } }
+        ).__officeSpeechAudit.calls.at(-1),
+      );
+      assert.equal(
+        await caption.innerText(),
+        spoken,
+        "subtitle and utterance are identical",
+      );
       await page.screenshot({ path: join(evidence, "qa-proximity.png") });
+      await go(-12, -9.5);
+      assert.equal(
+        await page.getByTestId("office-voice").getAttribute("data-status"),
+        "idle",
+        "walk-away cancels speech",
+      );
+      await go(-12, -11);
+      assert.equal(
+        await caption.count(),
+        0,
+        "crossing back does not repeat the same greeting",
+      );
       await page.keyboard.press("KeyE");
       assert.match(
         await page.getByTestId("agent-briefing").innerText(),
         /testing/i,
       );
+      await page
+        .getByRole("button", { name: "Speak Briefing", exact: true })
+        .click();
+      assert.equal(
+        await page.getByTestId("agent-briefing").innerText(),
+        await page.evaluate(() =>
+          (
+            window as unknown as { __officeSpeechAudit: { calls: string[] } }
+          ).__officeSpeechAudit.calls.at(-1),
+        ),
+      );
       await page.getByRole("button", { name: "Close & resume" }).click();
+      assert.equal(
+        await page.getByTestId("office-voice").getAttribute("data-status"),
+        "idle",
+      );
       await go(-12, -10);
       await page.waitForTimeout(500);
       await go(-12, -11);
@@ -445,9 +551,9 @@ test(
       await page.waitForTimeout(1800);
       assert.ok(polls > hiddenPolls, "return synchronizes current truth");
       // Representative remote state: browser consumes snapshots at 10s, without a runner.
-      let remotePolls = 0;
+      const remotePollTimes: number[] = [];
       await page.route("**/office/headquarters-state*", (r) => {
-        remotePolls++;
+        remotePollTimes.push(Date.now());
         return r.fulfill({
           json: {
             ...check.dto,
@@ -459,18 +565,15 @@ test(
       });
       await page.reload();
       await page.locator("[data-ready=true]").waitFor({ timeout: 45000 });
-      const remoteInitial = remotePolls;
-      await page.waitForTimeout(6500);
-      assert.equal(
-        remotePolls,
-        remoteInitial,
-        "remote snapshots do not use local polling cadence",
-      );
-      await page.waitForTimeout(4500);
-      assert.equal(
-        remotePolls,
-        remoteInitial + 1,
-        "remote consumes one snapshot per 10s",
+      // Measure request spacing, not time since WebGL finished loading.
+      // Initialization itself can consume part of the first 10-second interval.
+      const remoteDeadline = Date.now() + 16000;
+      while (remotePollTimes.length < 2 && Date.now() < remoteDeadline)
+        await page.waitForTimeout(100);
+      assert.ok(remotePollTimes.length >= 2, "remote polling continues");
+      assert.ok(
+        remotePollTimes[1] - remotePollTimes[0] >= 9500,
+        "remote snapshots use 10-second cadence, not the local 1.5-second cadence",
       );
       await page.unroute("**/office/headquarters-state*");
       await page.reload();
@@ -569,6 +672,28 @@ test(
       await page.screenshot({
         path: join(evidence, "verified-delivery-complete.png"),
       });
+      await page.keyboard.press("Escape");
+      await page
+        .getByRole("button", { name: "VOICE: ON", exact: true })
+        .click({ force: true });
+      assert.equal(
+        await page.evaluate(() =>
+          localStorage.getItem("ai-office-local-voice"),
+        ),
+        "off",
+      );
+      await page.reload();
+      await page.locator("[data-ready=true]").waitFor({ timeout: 45000 });
+      await page
+        .getByRole("button", { name: "ENTER OFFICE →", exact: true })
+        .click();
+      await page
+        .getByRole("button", { name: "VOICE: OFF", exact: true })
+        .waitFor();
+      assert.equal(
+        await page.getByTestId("office-voice").getAttribute("data-status"),
+        "idle",
+      );
       assert.deepEqual(errors, []);
       assert.deepEqual(external, []);
       writeFileSync(
