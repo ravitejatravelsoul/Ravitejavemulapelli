@@ -21,3 +21,15 @@ The walkthrough combined static navigation with one final all-or-nothing actor c
 The single new real run will inherit the failed registry and qualification records, including failure counters. It will not reset model health. Normal runner polling is configured to 20 seconds to allow walking between brief tasks and avoid bursts; no responses or backend states are delayed, intercepted or fabricated.
 
 Headquarters browser/E2E passed (257 seconds), including speech cancellation/cooldown, prior movement/delivery safety and fallback. Final pre-run TypeScript and ESLint passed.
+
+## Final real project: STOPPED — NOT READY
+
+Exactly one new real project was created: `7b3e7c76-b9e9-42e0-828c-c46ae423a6ac` (Secure Task Notes). It blocked at Product Owner, with 0/8 tasks complete and delivery NOT_STARTED. The runner stopped on the blocked state. There were zero provider requests, zero Claude calls and $0 paid cost.
+
+Four bounded routing decisions, spaced by the configured 20-second runner cadence, each recorded an empty candidate list and zero model attempts. Product Owner requires GENERAL + REASONING + STRUCTURED_OUTPUT. GPT-OSS-120B was excluded by its inherited three consecutive failures. GPT-OSS-20B had an expired cooldown and two failures, but its persisted qualified capabilities do not include REASONING. All other registry models were unqualified. Thus no eligible model could execute the first task. No fresh 429 occurred: this is an inherited health/capability availability blocker, not a new HTTP failure.
+
+The preflight verified cooldown eligibility but did not check the entire first-task capability intersection against the real registry before creating the project. That was a validation omission; the final attempt could have been identified as unroutable without starting it. It is not grounds to reset health, bypass qualification, alter the task, or launch another project. The three-failure guard remains intact.
+
+No active live spoken briefing, handoff or delivery acceptance was established for this project. Deterministic voice/collision/browser checks remain passed, but do not substitute for those live gates. No full release suite was started because the instruction permits it only after VERIFIED delivery. No cutover, feature push, merge or deployment occurred. Both implementation commits are preserved locally; production configuration is unchanged.
+
+Evidence is local and ignored under `.data/recovery-pilot/`: database, routing decisions, registry snapshot, native speech events, world snapshots, video and stopped screenshot. The absent request log agrees with zero model attempts; no secret evidence is included in source control.
