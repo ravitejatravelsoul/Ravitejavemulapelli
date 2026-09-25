@@ -41,14 +41,27 @@ async function buildRemediationContext(
 ): Promise<RemediationContext | undefined> {
   if (attemptNumber <= 1 || !isDevelopmentRole(role)) return undefined;
 
-  const failingChecks = listUnresolvedFailures(db, task.projectId)
-    .filter((f) => f.taskId === task.id)
-    .map((f) => f.reason);
+  const failures = listUnresolvedFailures(db, task.projectId).filter((f) => f.taskId === task.id);
+  const failingChecks = failures.map((f) => f.reason);
+  const evidence = failures.flatMap((failure) => {
+    if (!failure.agentRunId) return [];
+    // Join through the originating review run, not every historical project failure.
+    return db.prepare(`
+      SELECT tr.summary, tr.details FROM agent_runs ar
+      JOIN task_attempts ta ON ta.id = ar.taskAttemptId
+      JOIN test_results tr ON tr.taskId = ta.taskId
+      WHERE ar.id = ? AND tr.status = 'FAIL'
+        AND tr.createdAt >= ar.startedAt AND tr.createdAt <= ?
+      ORDER BY tr.createdAt
+    `).all(failure.agentRunId, failure.createdAt)
+      .map((row) => ({ summary: String(row.summary), details: String(row.details ?? "{}") }));
+  });
 
   return {
     attemptNumber,
     failureReason: failingChecks[failingChecks.length - 1] ?? null,
     failingChecks,
+    evidence,
     currentFiles: await buildCurrentFiles(task.projectId),
     preserveRequirements: PRESERVE_REQUIREMENTS_GUIDANCE,
   };
@@ -108,6 +121,8 @@ export async function buildTaskContext(
   options: { scenario?: string; attemptNumber?: number } = {},
 ): Promise<TaskContext> {
   const allowedInputs: string[] = JSON.parse(role.allowedInputs);
+  // Existing persisted role catalogs also need the authoritative acceptance criteria.
+  if (isDevelopmentRole(role) && !allowedInputs.includes("requirements")) allowedInputs.unshift("requirements");
   const allArtifacts = listArtifactsForProject(db, task.projectId);
 
   // Latest artifact per allowed type only — a role never sees artifact

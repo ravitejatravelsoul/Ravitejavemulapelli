@@ -117,3 +117,10 @@ describe("buildPromptSegments (Claude-only system/user split for prompt caching)
     assert.ok(userText.includes("// current real file content"));
   });
 });
+
+ test("acceptance criteria and complete implementation specifications survive prompt rendering", () => {
+  const content = "Context. ".repeat(100) + "Required behavior at end: preserve user changes after restart.";
+  const prompt = buildPrompt(input({ relevantArtifacts: ["requirements", "architecture", "ux-spec"].map(type => ({type, content})), remediationContext: {attemptNumber: 2, failureReason: "Failed criterion", failingChecks: ["Failed criterion"], currentFiles: [], preserveRequirements: "Preserve", evidence: [{summary: "Actual check", details: '{"observed":"wrong value"}'}]}}));
+  assert.equal(prompt.split(content).length - 1, 3);
+  assert.ok(prompt.includes('wrong value'));
+ });

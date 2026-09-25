@@ -181,3 +181,10 @@ test("OpenRouter uses its reasoning object and retains zero-price route constrai
     else process.env.AI_OFFICE_OPENROUTER_REASONING_EFFORT = prior;
   }
 });
+
+ test("Retry-After supports seconds and HTTP dates and defaults safely for invalid values", () => {
+  assert.equal(new OpenAICompatibleRateLimitError("429", "12.5").retryAfterMs, 12500);
+  const future = new Date(Date.now() + 120000).toUTCString();
+  assert.ok(new OpenAICompatibleRateLimitError("429", future).retryAfterMs >= 118000);
+  for (const value of [null, "", "invalid", "-5"]) assert.equal(new OpenAICompatibleRateLimitError("429", value).retryAfterMs, 60000);
+ });

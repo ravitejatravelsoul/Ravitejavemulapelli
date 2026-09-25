@@ -32,9 +32,11 @@ export class OpenAICompatibleRateLimitError extends Error {
   retryAfterMs: number;
   constructor(message: string, retryAfter: string | null = null) {
     super(message);
-    const seconds = Number(retryAfter);
-    this.retryAfterMs = retryAfter && Number.isFinite(seconds) ? Math.max(1000, seconds * 1000)
-      : Math.max(1000, (retryAfter ? Date.parse(retryAfter) - Date.now() : 60_000) || 60_000);
+    const seconds = retryAfter?.trim() ? Number(retryAfter) : NaN;
+    const dateDelay = retryAfter ? Date.parse(retryAfter) - Date.now() : NaN;
+    const delay = Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000
+      : Number.isFinite(dateDelay) && dateDelay > 0 ? dateDelay : 60_000;
+    this.retryAfterMs = Math.max(1000, delay);
   }
 }
 

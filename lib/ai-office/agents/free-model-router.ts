@@ -66,6 +66,7 @@ function scoreModel(row: ModelRegistryRow, input: SelectFreeModelInput, now: num
   if (!parseCapabilities(row.capabilities).includes(input.capability)) return null;
   if (input.requiredCapabilities?.some((c) => !parseCapabilities(row.capabilities).includes(c))) return null;
   if (input.requiredCapabilities?.includes("STRUCTURED_OUTPUT") && !row.structuredOutput) return null;
+  if (row.recentFailureCount >= 3) return null;
   if (row.health === "UNAVAILABLE" && (!row.rateLimitedUntil || row.rateLimitedUntil > now)) return null;
   if (row.rateLimitedUntil && row.rateLimitedUntil > now) return null;
   if (row.contextWindow && input.estimatedInputTokens && input.estimatedInputTokens + (input.estimatedOutputTokens ?? 0) > row.contextWindow) return null;

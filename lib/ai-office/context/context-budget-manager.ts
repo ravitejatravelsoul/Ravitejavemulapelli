@@ -194,7 +194,7 @@ export async function optimizeContextForPaidCall(input: OptimizeContextInput): P
 
   // c. Prefer summaries over raw artifact content.
   if (estimatedInputTokens > budget.targetEstimatedInputTokens && workingContext.relevantArtifacts.some((a) => a.content.length > 800)) {
-    workingContext = { ...workingContext, relevantArtifacts: workingContext.relevantArtifacts.map((a) => ({ ...a, content: truncate(a.content, 800) })) };
+    workingContext = { ...workingContext, relevantArtifacts: workingContext.relevantArtifacts.map((a) => ({ ...a, content: ["requirements", "architecture", "ux-spec"].includes(a.type) ? a.content : truncate(a.content, 800) })) };
     shrinkStepsApplied.push("summarized (truncated) oversized artifacts");
     estimatedInputTokens = estimateForContext(role.id, `Perform your assigned "${role.name}" responsibilities for this task.`, workingContext);
   }

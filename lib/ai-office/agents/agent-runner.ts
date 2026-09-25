@@ -63,7 +63,7 @@ import {
   getBudgetSnapshot,
 } from "../budget/budget-service.ts";
 import { applyFileOperations } from "../workspace/apply-file-operations.ts";
-import { workspaceExists, listFiles } from "../workspace/workspace-service.ts";
+import { workspaceExists, listFiles, readFile } from "../workspace/workspace-service.ts";
 import { validateWorkspaceIntegrity, describeIntegrityFailure } from "../workspace/workspace-integrity.ts";
 import { getWorkspace, listWorkspaceFileRecords, setDeliveryState } from "../domain/workspace.ts";
 import { HumanEscalationService } from "../escalation/escalation-service.ts";
@@ -1476,6 +1476,8 @@ export async function executeTask(
       const builtDescription = [
         `Observed browser test: ${verification.summary}`,
         `Actual workspace files: ${(await listFiles(project.id)).join(", ")}`,
+        "The browser probe is a structural smoke test, not exhaustive functional coverage. Review the actual implementation below against every requirement; an empty initial screen alone is not evidence of missing behavior.",
+        ...(await Promise.all((await listFiles(project.id)).map(async (path) => `--- ${path} ---\n${await readFile(project.id, path)}`))),
         `Button label: ${String(verification.details.buttonText ?? "")}`,
         `Visible text before click: ${String(verification.details.bodyTextBefore ?? "")}`,
         `Visible text after click: ${String(verification.details.bodyTextAfter ?? "")}`,

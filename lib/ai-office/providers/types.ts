@@ -79,6 +79,8 @@ export interface RemediationContext {
   failureReason: string | null;
   /** Every unresolved failure reason currently on record for this task, oldest first — usually one entry, but a task can accumulate more than one before it's next attempted. */
   failingChecks: string[];
+  /** Exact persisted failed review observations, tied to the originating run. */
+  evidence?: Array<{ summary: string; details: string }>;
   /** The real, current content of every file already in the project's workspace — not just this role's own prior files — so a corrective attempt can see exactly what exists and preserve whatever isn't the reported problem, rather than reinventing it from scratch. */
   currentFiles: Array<{ path: string; content: string }>;
   /** Fixed, idea-independent guidance — never mentions this project's specific product, on purpose. */

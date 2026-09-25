@@ -115,12 +115,12 @@ export function demoBot(
 export function canStand(x: number, z: number, radius = 0.32) {
   return canStandInWorld(OFFICE_WORLD, OFFICE_WORLD.activeFloor, x, z, radius);
 }
-export function movePlayer(x: number, z: number, dx: number, dz: number) {
+export function movePlayer(x: number, z: number, dx: number, dz: number, actorClear: (x: number, z: number) => boolean = () => true) {
   // Substeps prevent tunnelling during frame stalls; axis separation permits sliding.
   const steps = Math.max(1, Math.ceil(Math.hypot(dx, dz) / 0.12));
   for (let i = 0; i < steps; i++) {
-    if (canStand(x + dx / steps, z)) x += dx / steps;
-    if (canStand(x, z + dz / steps)) z += dz / steps;
+    if (canStand(x + dx / steps, z) && actorClear(x + dx / steps, z)) x += dx / steps;
+    if (canStand(x, z + dz / steps) && actorClear(x, z + dz / steps)) z += dz / steps;
   }
   return [x, z] as const;
 }

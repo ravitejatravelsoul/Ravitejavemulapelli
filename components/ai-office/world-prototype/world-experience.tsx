@@ -279,12 +279,6 @@ function Player({
           speed;
       velocity.current.x = THREE.MathUtils.damp(velocity.current.x, vx, 10, dt);
       velocity.current.y = THREE.MathUtils.damp(velocity.current.y, vz, 10, dt);
-      const p = movePlayer(
-        camera.position.x,
-        camera.position.z,
-        velocity.current.x * dt,
-        velocity.current.y * dt,
-      );
       const clear = (x: number, z: number) =>
         Object.keys(runtime.headquarters?.actors ?? BOTS)
           .filter((id) => !id.startsWith("terminal:"))
@@ -294,7 +288,14 @@ function Player({
               demoBot(id, runtime.time.current).position;
             return Math.hypot(b[0] - x, b[2] - z) > 0.82;
           });
-      if (clear(p[0], p[1])) camera.position.set(p[0], 1.7, p[1]);
+      const p = movePlayer(
+        camera.position.x,
+        camera.position.z,
+        velocity.current.x * dt,
+        velocity.current.y * dt,
+        clear,
+      );
+      camera.position.set(p[0], 1.7, p[1]);
     }
     camera.rotation.set(look.current.pitch, look.current.yaw, 0, "YXZ");
     let closest: BotId | null = null,
