@@ -1,3 +1,5 @@
+import { compactFailureEvidence } from "./failure-evidence.ts";
+import { isOperationalFailureReason } from "./failure-classification.ts";
 import "server-only";
 import type { DatabaseSync } from "node:sqlite";
 // Relative + extension-explicit — see lib/ai-office/db/client.ts's comment.
@@ -33,6 +35,17 @@ async function buildCurrentFiles(projectId: string): Promise<Array<{ path: strin
  * mechanism. See `RemediationContext`'s docblock in providers/types.ts
  * for why this exists.
  */
+/** Drops empty collections (`{"consoleErrors":[],"pageErrors":[]}` carries no information) while keeping every populated detail exactly. */
+function compactEvidenceDetails(json: string): string {
+  try {
+    const parsed = JSON.parse(json) as Record<string, unknown>;
+    const kept = Object.fromEntries(Object.entries(parsed).filter(([, v]) => !(Array.isArray(v) && v.length === 0) && v !== null && v !== ""));
+    return Object.keys(kept).length === 0 ? "" : JSON.stringify(kept);
+  } catch {
+    return compactFailureEvidence(json);
+  }
+}
+
 async function buildRemediationContext(
   db: DatabaseSync,
   task: TaskRow,
@@ -41,14 +54,41 @@ async function buildRemediationContext(
 ): Promise<RemediationContext | undefined> {
   if (attemptNumber <= 1 || !isDevelopmentRole(role)) return undefined;
 
-  const failingChecks = listUnresolvedFailures(db, task.projectId)
-    .filter((f) => f.taskId === task.id)
-    .map((f) => f.reason);
+  // Provider/routing infrastructure failures (an HTTP 413/429, a model that
+  // was unavailable) say nothing about what is wrong with the deliverable;
+  // presenting them as "unresolved issues" would only distract the model
+  // and spend tokens. Only real task/deliverable failures are remediation
+  // input — infrastructure failures stay in the failures table and events.
+  const failures = listUnresolvedFailures(db, task.projectId).filter(
+    (f) => f.taskId === task.id && !isOperationalFailureReason(f.reason) && !/^No eligible free model/i.test(f.reason),
+  );
+  // Raw review/log output (e.g. a Playwright call log with terminal colour
+  // codes and a retry loop) is compacted deterministically — the primary
+  // error, every distinct diagnostic line and the repeat counts all
+  // survive; only escape codes and repeated retry noise are dropped.
+  const failingChecks = failures.map((f) => compactFailureEvidence(f.reason));
+  const evidence = failures.flatMap((failure) => {
+    if (!failure.agentRunId) return [];
+    // Join through the originating review run, not every historical project failure.
+    return db.prepare(`
+      SELECT tr.summary, tr.details FROM agent_runs ar
+      JOIN task_attempts ta ON ta.id = ar.taskAttemptId
+      JOIN test_results tr ON tr.taskId = ta.taskId
+      WHERE ar.id = ? AND tr.status = 'FAIL'
+        AND tr.createdAt >= ar.startedAt AND tr.createdAt <= ?
+      ORDER BY tr.createdAt
+    `).all(failure.agentRunId, failure.createdAt)
+      .map((row) => ({ summary: compactFailureEvidence(String(row.summary)), details: compactEvidenceDetails(String(row.details ?? "{}")) }))
+      // The same observation is already listed verbatim in failingChecks;
+      // never send the identical text twice.
+      .filter((row) => !(failingChecks.includes(row.summary) && row.details === ""));
+  });
 
   return {
     attemptNumber,
     failureReason: failingChecks[failingChecks.length - 1] ?? null,
     failingChecks,
+    evidence,
     currentFiles: await buildCurrentFiles(task.projectId),
     preserveRequirements: PRESERVE_REQUIREMENTS_GUIDANCE,
   };
@@ -108,6 +148,8 @@ export async function buildTaskContext(
   options: { scenario?: string; attemptNumber?: number } = {},
 ): Promise<TaskContext> {
   const allowedInputs: string[] = JSON.parse(role.allowedInputs);
+  // Existing persisted role catalogs also need the authoritative acceptance criteria.
+  if (isDevelopmentRole(role) && !allowedInputs.includes("requirements")) allowedInputs.unshift("requirements");
   const allArtifacts = listArtifactsForProject(db, task.projectId);
 
   // Latest artifact per allowed type only — a role never sees artifact

@@ -162,11 +162,7 @@ export function recordModelOutcome(db: DatabaseSync, provider: string, modelId: 
   const tasksFailed = row.tasksFailed + (input.succeeded ? 0 : 1);
   const recentFailureCount = input.succeeded ? 0 : row.recentFailureCount + 1;
   const rateLimitedUntil = input.rateLimitedForMs !== undefined ? now + input.rateLimitedForMs : input.succeeded ? null : row.rateLimitedUntil;
-  // A model with several consecutive recent failures (not just one blip)
-  // is downgraded to DEGRADED automatically — never fully UNAVAILABLE
-  // from ordinary failures alone (that's reserved for an explicit
-  // rate-limit window or a health-check connection failure), so a model
-  // having a rough patch is still eligible, just scored lower.
+  // Three consecutive failures remain unavailable even after a prior cooldown expires.
   const health: ModelHealth = input.unavailable || input.rateLimitedForMs !== undefined ? "UNAVAILABLE" : recentFailureCount >= 3 ? "UNAVAILABLE" : input.succeeded ? "HEALTHY" : row.health;
 
   db.prepare(

@@ -366,3 +366,23 @@ describe("optimizeContextForPaidCall — token-gate hardening: target/burst/glob
     }
   });
 });
+
+test("free reasoning reserve is bounded and included in routing telemetry; standard output ceilings unchanged", async () => {
+  const t = createTestDb();
+  try {
+    const { project } = setupProject(t);
+    const task = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "Requirements" });
+    const role = getAgentRole(t.db, "product-owner")!;
+    const context = await buildTaskContext(t.db, task, role, { attemptNumber: 1 });
+    for (const capability of ["FAST", "GENERAL", "REASONING", "REVIEW", "CODING"] as const) {
+      const input = { db: t.db, capability, role, task, context };
+      const standard = await optimizeContextForPaidCall(input);
+      const free = await optimizeContextForPaidCall({ ...input, routingMode: "FREE_MULTI_MODEL" });
+      assert.ok(standard.ok && free.ok);
+      assert.equal(standard.allowedOutputTokens, getCapabilityContextBudget(capability).maxOutputTokens);
+      assert.equal(free.allowedOutputTokens, standard.allowedOutputTokens + 4096);
+      assert.equal(free.telemetry.allowedOutputTokens, free.allowedOutputTokens);
+      assert.equal(free.telemetry.estimatedInputTokens, standard.telemetry.estimatedInputTokens);
+    }
+  } finally { t.close(); }
+});

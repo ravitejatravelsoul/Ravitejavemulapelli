@@ -1,23 +1,17 @@
 "use client";
+import { VISUAL_LABEL } from "@/lib/ai-office/dashboard/office-visual-state";
 
+import { summarizeVisualAgents, isActiveVisualState as isActive } from "@/lib/ai-office/dashboard/office-visual-state";
 import { cn } from "@/lib/utils";
 import { getRoleVisual } from "./role-visuals";
 import { WorkstationThumb } from "./workstation-thumb";
 import { useAgentSelection } from "./use-agent-selection";
 import type { OfficeFloorView, OfficeAgentView } from "@/lib/ai-office/dashboard/office-floor-data";
 
-const STATUS_LABEL: Record<string, string> = {
-  IDLE: "Idle",
-  WORKING: "Working",
-  THINKING: "Thinking",
-  REVIEWING: "Reviewing",
-  WAITING: "Waiting",
-  BLOCKED: "Blocked",
-  DONE: "Done",
-  PAUSED: "Paused",
-};
+const STATUS_LABEL = VISUAL_LABEL;
 
 const STATUS_DOT: Record<string, string> = {
+  QUEUED: "bg-amber-300", TESTING: "bg-emerald-300", FAILED: "bg-red-400", RETRYING: "bg-cyan-300",
   IDLE: "bg-muted-foreground/50",
   WORKING: "bg-primary",
   THINKING: "bg-accent-2",
@@ -28,12 +22,10 @@ const STATUS_DOT: Record<string, string> = {
   PAUSED: "bg-muted-foreground/30",
 };
 
-function isActive(status: string): boolean {
-  return status === "WORKING" || status === "THINKING" || status === "REVIEWING";
-}
+
 
 /**
- * The below-`md` fallback for the cinematic floor (a full spatial office
+ * The below-`lg` fallback for the cinematic floor (a full spatial office
  * doesn't survive being shrunk to a phone screen) and the side panel's
  * "Agents" section. Clicking an agent shares the same `?agent=` URL
  * selection the office image's hotspots write to, so it opens the exact
@@ -43,11 +35,17 @@ function isActive(status: string): boolean {
  * never a generated icon.
  */
 export function AgentsList({ floor, showHero = true }: { floor: OfficeFloorView; showHero?: boolean }) {
-  const { selectRole } = useAgentSelection();
+  const { selectedRoleId, selectRole } = useAgentSelection();
   const heroAgent: OfficeAgentView | undefined = showHero ? floor.agents.find((a) => isActive(a.status)) : undefined;
 
+  const summary = summarizeVisualAgents(floor.agents);
   return (
     <>
+      <div className="mb-3 rounded-xl border border-white/10 bg-[#101827] p-3 text-xs text-slate-200" data-testid="mobile-office-summary">
+        <p className="font-mono text-cyan-200">{summary.active ? "LIVE OFFICE" : "OFFICE AT REST"}</p>
+        <p className="mt-1">{summary.active} active · {summary.waiting} waiting · {summary.reviewing} reviewing · {summary.blocked} blocked / failed</p>
+        <p className="mt-1 text-slate-300">{Object.entries(summary.providers).map(([p,n]) => `${p} ${n}`).join(" · ")}</p>
+      </div>
       {heroAgent && (
         <button
           type="button"
@@ -64,14 +62,16 @@ export function AgentsList({ floor, showHero = true }: { floor: OfficeFloorView;
         </button>
       )}
 
-      <ul className="flex flex-col gap-2">
+      <ul className="flex flex-col gap-2 pb-16">
         {floor.agents.map((agent) => {
           const visual = getRoleVisual(agent.roleId);
           return (
-            <li key={agent.roleId}>
+            <li key={agent.roleId} data-mobile-agent={agent.roleId} data-state={agent.status}>
               <button
                 type="button"
                 onClick={() => selectRole(agent.roleId)}
+                aria-pressed={selectedRoleId === agent.roleId}
+                aria-label={[agent.roleName, agent.status, agent.currentTaskTitle, agent.provider, agent.model].filter(Boolean).join(" — ")}
                 style={{ "--role-accent": visual.accent } as React.CSSProperties}
                 className="glass flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition-colors hover:border-(--role-accent)/50"
               >
@@ -85,6 +85,8 @@ export function AgentsList({ floor, showHero = true }: { floor: OfficeFloorView;
                       </span>
                     )}
                   </p>
+                  {agent.provider && <p className="truncate font-mono text-[0.65rem] text-cyan-800 dark:text-cyan-200">{agent.provider} · {agent.model ?? "Model not recorded"}</p>}
+                  {agent.attemptCount > 0 && <p className="text-[0.65rem] text-muted-foreground">Attempt {agent.attemptCount}/{agent.maxAttempts ?? "—"}</p>}
                   {agent.currentTaskTitle && <p className="truncate text-xs text-muted-foreground">{agent.currentTaskTitle}</p>}
                   {!agent.currentTaskTitle && agent.lastCompletedTaskTitle && (
                     <p className="truncate text-xs text-muted-foreground">Last: {agent.lastCompletedTaskTitle}</p>

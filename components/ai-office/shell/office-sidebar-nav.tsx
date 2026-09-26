@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
-import { LayoutGrid, FolderKanban, Users, FolderOpen, Cpu, BarChart3, Settings, Menu, LogOut, ShieldCheck, Wrench, MessageCircle } from "lucide-react";
+import { LayoutGrid, FolderKanban, Users, FolderOpen, Cpu, BarChart3, Settings, Menu, LogOut, ShieldCheck, Wrench, MessageCircle, History } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Badge } from "@/components/ui/badge";
@@ -16,15 +16,16 @@ import { Button } from "@/components/ui/button";
  * phase; nothing here is a placeholder link to a page that doesn't exist.
  */
 const NAV_ITEMS = [
-  { href: "/office", label: "Office", icon: LayoutGrid },
+  { href: "/office", label: "Headquarters", icon: LayoutGrid },
   { href: "/office/projects", label: "Projects", icon: FolderKanban },
   { href: "/office/agents", label: "Agents", icon: Users },
   { href: "/office/workspaces", label: "Workspaces", icon: FolderOpen },
   { href: "/office/local-models", label: "Models", icon: Cpu },
   { href: "/office/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/office/engineer", label: "Engineer", icon: Wrench },
-  { href: "/office/communications", label: "Communications", icon: MessageCircle },
+  { href: "/office/communications", label: "Communications", icon: MessageCircle, History },
   { href: "/office/settings", label: "Settings", icon: Settings },
+  { href: "/office/classic", label: "Classic Office", icon: History },
 ] as const;
 
 function isActive(pathname: string, href: string): boolean {

@@ -175,6 +175,8 @@ describe("Office navigation — real clicks, real browser, isolated database", (
     await page.fill('input[name="password"]', TEST_PASSWORD);
     await page.click('button[type="submit"]');
     await page.waitForURL(`${BASE}/office`, { timeout: 15_000 });
+    // /office is the fullscreen Headquarters (it covers the shell); the shell's own nav is exercised from Classic Office.
+    await page.goto(`${BASE}/office/classic`);
 
     const destinations = [
       "/office/projects",
@@ -183,6 +185,7 @@ describe("Office navigation — real clicks, real browser, isolated database", (
       "/office/local-models",
       "/office/analytics",
       "/office/settings",
+      "/office/classic",
       "/office",
     ];
 
@@ -210,6 +213,8 @@ describe("Office navigation — real clicks, real browser, isolated database", (
     await page.fill('input[name="password"]', TEST_PASSWORD);
     await page.click('button[type="submit"]');
     await page.waitForURL(`${BASE}/office`, { timeout: 15_000 });
+    // The assistant lives in the shared shell; the Headquarters scene is fullscreen, so drive it from Classic Office.
+    await page.goto(`${BASE}/office/classic`);
 
     const launcher = page.getByRole("button", { name: /Open Teja assistant/i });
     await launcher.waitFor({ state: "visible", timeout: 10_000 });

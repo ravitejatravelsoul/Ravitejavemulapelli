@@ -20,7 +20,7 @@ export async function generateMetadata(): Promise<Metadata> {
   };
 }
 
-const mediaIcon: Record<AchievementMedia["type"], React.ElementType> = {
+const mediaIcon: Record<AchievementMedia["type"], React.ComponentType<{ className?: string }>> = {
   image: ImageIcon,
   video: Video,
   document: FileText,

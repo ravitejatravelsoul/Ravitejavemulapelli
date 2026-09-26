@@ -123,3 +123,14 @@ describe("checkIntentConsistency", () => {
     assert.equal(called, false, "must not call Ollama when there's nothing to compare");
   });
 });
+
+ test("review receives complete implementation evidence past the former 4000-character cutoff", async () => {
+  const candidate = "A".repeat(5000) + "END_IMPLEMENTATION";
+  const result = await checkIntentConsistency({authoritativeUserRequest:"Implement behavior",candidate,checkpointLabel:"built deliverable",fetchImpl: (async (_url, init) => {
+   assert.ok(JSON.parse(String(init?.body)).prompt.includes("END_IMPLEMENTATION"));
+   return jsonResponse({response:JSON.stringify({consistent:true,reason:"Complete evidence"})});
+  }) as typeof fetch});
+  assert.equal(result.outcome,"consistent");
+  const oversized = await checkIntentConsistency({authoritativeUserRequest:"Implement behavior",candidate:"A".repeat(32001),checkpointLabel:"built deliverable",fetchImpl:(async()=>{throw Error("must not call")}) as typeof fetch});
+  assert.equal(oversized.outcome,"unavailable");
+ });

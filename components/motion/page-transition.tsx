@@ -24,7 +24,8 @@ export function PageTransition({ children }: { children: React.ReactNode }) {
           scale: shouldReduceMotion ? 1 : 0.985,
           filter: shouldReduceMotion ? "none" : "blur(10px)",
         }}
-        animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)" }}
+        // Clear the filter surface after entry so animated descendants can composite independently.
+        animate={{ opacity: 1, y: 0, scale: 1, filter: "blur(0px)", transitionEnd: { filter: "none" } }}
         exit={{
           opacity: 0,
           y: shouldReduceMotion ? 0 : -12,

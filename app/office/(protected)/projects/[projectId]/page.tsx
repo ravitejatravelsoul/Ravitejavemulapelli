@@ -40,7 +40,9 @@ function formatDate(ms: number): string {
   return new Date(ms).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
-export default async function ProjectDetailPage({ params }: { params: Promise<{ projectId: string }> }) {
+export default async function ProjectDetailPage({ params, searchParams }: { params: Promise<{ projectId: string }>; searchParams: Promise<{tab?:string}> }) {
+  const requestedTab=(await searchParams).tab;
+  const initialTab=requestedTab&&['overview','workspace','preview','activity','technical'].includes(requestedTab)?requestedTab:'overview';
   const { projectId } = await params;
   const db = await getOfficeDb();
   const detail = getProjectDetail(db, projectId);
@@ -301,7 +303,7 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
       )}
 
       {/* ---- Everything else, organized into tabs (Section 21) ---- */}
-      <Tabs defaultValue="overview">
+      <Tabs defaultValue={initialTab}>
         <TabsList className="h-auto flex-wrap">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="workspace">Workspace</TabsTrigger>

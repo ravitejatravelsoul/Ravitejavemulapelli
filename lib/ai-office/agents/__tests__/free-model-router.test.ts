@@ -102,3 +102,19 @@ function upsertModelRegistryEntry(...args: Parameters<typeof rawUpsert>) {
   setModelBenchmarkScore(db, entry.provider, entry.modelId, { score: 60, qualified: true });
   return result;
 }
+
+ test("cooldown recovery preserves three-failure protection and independent fallback", () => {
+  const t = createTestDb();
+  try {
+   for (const modelId of ["recovering", "alternate"]) upsertModelRegistryEntry(t.db, {provider:"groq", modelId, displayName:modelId, capabilities:["CODING"]});
+   recordModelOutcome(t.db,"groq","recovering",{succeeded:false,rateLimitedForMs:60000});
+   assert.equal(selectFreeModel(t.db,{capability:"CODING"})?.modelId,"alternate");
+   t.db.prepare("UPDATE model_registry SET rateLimitedUntil = ? WHERE modelId = ?").run(Date.now()-1,"recovering");
+   assert.ok(selectFreeModel(t.db,{capability:"CODING"})?.candidates.some(c=>c.modelId==="recovering"));
+   recordModelOutcome(t.db,"groq","recovering",{succeeded:false});
+   recordModelOutcome(t.db,"groq","recovering",{succeeded:false});
+   assert.ok(!selectFreeModel(t.db,{capability:"CODING"})?.candidates.some(c=>c.modelId==="recovering"));
+   recordModelOutcome(t.db,"groq","alternate",{succeeded:false,rateLimitedForMs:60000});
+   assert.equal(selectFreeModel(t.db,{capability:"CODING"}),null);
+  } finally {t.close();}
+ });

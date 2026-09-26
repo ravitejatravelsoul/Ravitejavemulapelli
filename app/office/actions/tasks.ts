@@ -31,7 +31,7 @@ export async function retryTaskAction(taskId: string, note?: string): Promise<Ta
 
   const task = getTask(db, taskId);
   const result = retryEscalatedTask(db, taskId, owner.id, note?.trim() || undefined);
-  revalidatePath("/office");
+  revalidatePath("/office", "layout");
   if (task) revalidatePath(`/office/projects/${task.projectId}`);
   return result.ok ? {} : { error: result.reason };
 }

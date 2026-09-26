@@ -71,7 +71,7 @@ export interface IntentConsistencyInput {
 const DEFAULT_BASE_URL = "http://127.0.0.1:11434";
 const DEFAULT_MODEL = "gemma4:latest";
 const DEFAULT_TIMEOUT_MS = 60_000;
-const MAX_CANDIDATE_CHARS = 4000;
+const MAX_CANDIDATE_CHARS = 32000;
 
 /**
  * Bounded, in-process immediate retries for a transient infrastructure
@@ -93,7 +93,7 @@ function buildCheckPrompt(authoritativeUserRequest: string, candidate: string): 
     authoritativeUserRequest,
     "",
     "CANDIDATE (the plan, built result, or proposed change to check against that request):",
-    candidate.slice(0, MAX_CANDIDATE_CHARS),
+    candidate,
     "",
     "Does the candidate serve the authoritative user request? Ignore project titles, tool names, or provider names that may appear in either text — judge only whether the actual product described/built matches what was asked for.",
     'Respond with ONLY a single JSON object: {"consistent": boolean, "reason": string}. "reason" must be one concise sentence.',
@@ -154,6 +154,7 @@ export async function checkIntentConsistency(input: IntentConsistencyInput): Pro
     return { outcome: "consistent", reason: "Nothing to compare yet — skipping the intent-consistency check." };
   }
 
+  if (input.candidate.length > MAX_CANDIDATE_CHARS) return { outcome: "unavailable", reason: "Candidate evidence exceeds the bounded review context; refusing to review silently truncated evidence." };
   let result = await attemptOnce(input);
   let retries = 0;
   while (result.outcome === "unavailable" && retries < MAX_INTERNAL_RETRIES) {

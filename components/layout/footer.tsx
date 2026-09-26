@@ -12,7 +12,7 @@ import { GitHubIcon, LinkedInIcon, XIcon } from "@/components/icons/brand-icons"
 import { isPlaceholderUrl } from "@/lib/placeholder";
 import type { SocialLink } from "@/lib/data/types";
 
-const iconMap: Record<SocialLink["icon"], React.ElementType> = {
+const iconMap: Record<SocialLink["icon"], React.ComponentType<{ className?: string }>> = {
   github: GitHubIcon,
   linkedin: LinkedInIcon,
   twitter: XIcon,

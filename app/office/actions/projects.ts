@@ -109,7 +109,7 @@ export async function createProjectAction(_prevState: CreateProjectState | undef
     return { error: "The project was created, but automatic planning failed. Open the project to try again." };
   }
 
-  revalidatePath("/office");
+  revalidatePath("/office", "layout");
   redirect(`/office/projects/${project.id}`);
 }
 
@@ -136,7 +136,7 @@ export async function pauseProjectAction(projectId: string): Promise<ProjectTran
       const r = pauseProject(db, projectId, REMOTE_OWNER_FALLBACK);
       return r.ok ? { ok: true, value: undefined } : { ok: false, error: r.reason };
     });
-    revalidatePath("/office");
+    revalidatePath("/office", "layout");
     revalidatePath(`/office/projects/${projectId}`);
     return result.ok ? {} : { error: result.error };
   }
@@ -145,7 +145,7 @@ export async function pauseProjectAction(projectId: string): Promise<ProjectTran
   if ("error" in ctx) return ctx;
 
   const result = pauseProject(ctx.db, projectId, ctx.ownerId);
-  revalidatePath("/office");
+  revalidatePath("/office", "layout");
   revalidatePath(`/office/projects/${projectId}`);
   return result.ok ? {} : { error: result.reason };
 }
@@ -164,7 +164,7 @@ export async function resumeProjectAction(projectId: string): Promise<ProjectTra
       },
       { dispatchContinue: true },
     );
-    revalidatePath("/office");
+    revalidatePath("/office", "layout");
     revalidatePath(`/office/projects/${projectId}`);
     return result.ok ? {} : { error: result.error };
   }
@@ -174,7 +174,7 @@ export async function resumeProjectAction(projectId: string): Promise<ProjectTra
   if (!isAiOfficeOperationalModeEnabled()) return { error: OPERATIONAL_MODE_DISABLED_MESSAGE };
 
   const result = resumeProject(ctx.db, projectId, ctx.ownerId);
-  revalidatePath("/office");
+  revalidatePath("/office", "layout");
   revalidatePath(`/office/projects/${projectId}`);
   return result.ok ? {} : { error: result.reason };
 }

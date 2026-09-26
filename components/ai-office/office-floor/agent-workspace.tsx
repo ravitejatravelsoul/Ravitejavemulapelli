@@ -1,4 +1,5 @@
 "use client";
+import { VISUAL_LABEL } from "@/lib/ai-office/dashboard/office-visual-state";
 
 import { useEffect, useRef } from "react";
 import { X } from "lucide-react";
@@ -15,16 +16,7 @@ import type { AgentDetailView, AgentTaskStepState } from "@/lib/ai-office/dashbo
 import type { RolePerformanceSummary } from "@/lib/ai-office/dashboard/agent-workspace-data";
 import type { RoleSpecialization } from "@/lib/ai-office/agents/role-specializations";
 
-const STATUS_LABEL: Record<string, string> = {
-  IDLE: "Idle",
-  WORKING: "Working",
-  THINKING: "Thinking",
-  REVIEWING: "Reviewing",
-  WAITING: "Waiting",
-  BLOCKED: "Blocked",
-  DONE: "Done",
-  PAUSED: "Paused",
-};
+const STATUS_LABEL = VISUAL_LABEL;
 
 const TAB_TRIGGER_CLASS = "text-white/60 data-[state=active]:bg-white/15 data-[state=active]:text-white data-[state=active]:shadow-none";
 

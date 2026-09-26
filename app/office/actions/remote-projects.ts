@@ -144,6 +144,6 @@ export async function createRemoteProjectAction(_prevState: CreateRemoteProjectS
     action: "start",
   });
 
-  revalidatePath("/office");
+  revalidatePath("/office", "layout");
   return { projectId: project.id };
 }

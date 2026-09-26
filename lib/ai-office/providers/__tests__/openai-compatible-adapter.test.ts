@@ -134,3 +134,57 @@ describe("OpenAICompatibleAdapter — failure classification", () => {
     assert.match(result.output.failure!.reason, /model output was not valid JSON/);
   });
 });
+
+describe("free provider response envelope hardening", () => {
+  async function run(body: unknown) {
+    const adapter = new OpenAICompatibleAdapter({ providerName: "groq", baseUrl: "https://api.groq.com/openai/v1", apiKey: "k", model: "m1", fetchImpl: (async () => jsonResponse(body)) as typeof fetch });
+    return adapter.runAgentTask({ role: "product-owner", task: context(), instructions: "x", maxOutputTokens: 5120 });
+  }
+  test("accepts final text parts without promoting reasoning", async () => {
+    const text = JSON.stringify(VALID_STRUCTURED_OUTPUT);
+    const result = await run({ choices: [{ finish_reason: "stop", message: { content: [{ type: "text", text: text.slice(0, 20) }, { type: "text", text: text.slice(20) }], reasoning: "private reasoning" } }] });
+    assert.equal(result.status, "SUCCEEDED");
+    assert.ok(!JSON.stringify(result.raw).includes("private reasoning"));
+  });
+  test("reasoning-only length response fails with usage and safe evidence; valid truncated JSON also fails", async () => {
+    for (const content of [null, JSON.stringify(VALID_STRUCTURED_OUTPUT)]) {
+      const result = await run({ id: "gen-test", choices: [{ finish_reason: "length", message: { content, reasoning: "private" } }], usage: { prompt_tokens: 795, completion_tokens: 1024, completion_tokens_details: { reasoning_tokens: 1282 } } });
+      assert.equal(result.status, "FAILED");
+      assert.match(result.output.failure!.reason, /truncated/);
+      assert.equal(result.usage.outputTokens, 1024);
+      assert.deepEqual((result.raw as {responseDiagnostics: unknown}).responseDiagnostics, { httpStatus: 200, requestId: undefined, responseId: "gen-test", finishReason: "length", errorCode: undefined, maxOutputTokens: 5120, reasoningTokens: 1282 });
+      assert.ok(!JSON.stringify(result.raw).includes("private"));
+    }
+  });
+  test("empty, refusal, tool, reasoning parts and HTTP-200 error never succeed", async () => {
+    for (const body of [null, {}, { error: { code: "upstream_error", message: "sensitive" } }, ...[null, " ", [], [{ type: "reasoning", text: JSON.stringify(VALID_STRUCTURED_OUTPUT) }], [{ type: "text", text: JSON.stringify(VALID_STRUCTURED_OUTPUT) }, { type: "image_url", image_url: "x" }]].map(content => ({ choices: [{ message: { content } }] })), { choices: [{ finish_reason: "stop", message: { content: JSON.stringify(VALID_STRUCTURED_OUTPUT), refusal: "refused" } }] }, { choices: [{ finish_reason: "tool_calls", message: { content: JSON.stringify(VALID_STRUCTURED_OUTPUT) } }] }]) {
+      assert.equal((await run(body)).status, "FAILED");
+    }
+  });
+});
+
+test("OpenRouter uses its reasoning object and retains zero-price route constraints", async () => {
+  const prior = process.env.AI_OFFICE_OPENROUTER_REASONING_EFFORT;
+  process.env.AI_OFFICE_OPENROUTER_REASONING_EFFORT = "none";
+  try {
+    let body: Record<string, unknown> = {};
+    const adapter = new OpenAICompatibleAdapter({ providerName: "openrouter", baseUrl: "https://openrouter.ai/api/v1", apiKey: "k", model: "test:free", fetchImpl: (async (_url, init) => {
+      body = JSON.parse(String(init?.body));
+      return jsonResponse({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify(VALID_STRUCTURED_OUTPUT) } }] });
+    }) as typeof fetch });
+    assert.equal((await adapter.runAgentTask({ role: "product-owner", task: context(), instructions: "x", maxOutputTokens: 5120 })).status, "SUCCEEDED");
+    assert.deepEqual(body.reasoning, { effort: "none" });
+    assert.equal(body.reasoning_effort, undefined);
+    assert.deepEqual(body.provider, { max_price: { prompt: 0, completion: 0 } });
+  } finally {
+    if (prior === undefined) delete process.env.AI_OFFICE_OPENROUTER_REASONING_EFFORT;
+    else process.env.AI_OFFICE_OPENROUTER_REASONING_EFFORT = prior;
+  }
+});
+
+ test("Retry-After supports seconds and HTTP dates and defaults safely for invalid values", () => {
+  assert.equal(new OpenAICompatibleRateLimitError("429", "12.5").retryAfterMs, 12500);
+  const future = new Date(Date.now() + 120000).toUTCString();
+  assert.ok(new OpenAICompatibleRateLimitError("429", future).retryAfterMs >= 118000);
+  for (const value of [null, "", "invalid", "-5"]) assert.equal(new OpenAICompatibleRateLimitError("429", value).retryAfterMs, 60000);
+ });

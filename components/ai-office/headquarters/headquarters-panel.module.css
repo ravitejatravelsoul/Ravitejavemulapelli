@@ -1,0 +1,198 @@
+.panel {
+  position: absolute;
+  right: 24px;
+  top: 100px;
+  bottom: 85px;
+  width: min(660px, calc(100vw - 48px));
+  overflow: auto;
+  background: linear-gradient(145deg, #18343cf5, #10212cfb);
+  border: 1px solid #acc9c65e;
+  box-shadow: 0 24px 100px #07151ba0;
+  border-radius: 22px;
+  color: #e4efeb;
+  padding: 28px;
+  z-index: 5;
+  font:
+    14px/1.6 "Segoe UI",
+    sans-serif;
+}
+.panel h2 {
+  font-size: 28px;
+  line-height: 1.2;
+  margin: 8px 0 20px;
+}
+.panel h3 {
+  font-size: 17px;
+  margin: 22px 0 8px;
+  color: #d6c4a4;
+}
+.panel small {
+  color: #acc7c6;
+}
+.panel button,
+.panel a {
+  display: inline-block;
+  padding: 9px 13px;
+  margin: 5px 5px 5px 0;
+  border: 1px solid #a8c6c64c;
+  border-radius: 8px;
+  background: #cce0d90b;
+  color: #f0f4e9;
+}
+.panel button:focus-visible,
+.panel a:focus-visible,
+.panel select:focus-visible {
+  outline: 2px solid #efd19a;
+  outline-offset: 2px;
+}
+.panel dl {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 8px;
+  margin: 20px 0;
+}
+.panel dt {
+  color: #9cbbbb;
+}
+.panel dd {
+  overflow-wrap: anywhere;
+}
+.panel article {
+  border-top: 1px solid #a1c4bf33;
+  padding: 16px 0;
+}
+.panel select {
+  width: 100%;
+  padding: 10px;
+  background: #1b3945;
+  color: #f0f4e9;
+  border: 1px solid #91b0aa66;
+  border-radius: 8px;
+}
+.briefing {
+  border-left: 2px solid #a8d8c8;
+  padding: 12px 18px;
+  background: #89c3b80b;
+  margin: 16px 0;
+}
+.status {
+  font: 11px/1.6 monospace;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: #b7d7cb;
+}
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.muted {
+  color: #a0b6b9;
+}
+.panel ul {
+  padding-left: 20px;
+}
+.panel li {
+  margin: 5px 0;
+}
+.panel svg {
+  max-width: 100%;
+}
+
+.eventCue,
+.notice,
+.bubble {
+  position: absolute;
+  z-index: 4;
+  color: #e3eee9;
+  background: #16343bef;
+  border: 1px solid #a8cfc44d;
+  border-radius: 14px;
+  box-shadow: 0 8px 35px #13283130;
+  backdrop-filter: blur(12px);
+  font:
+    13px/1.5 "Segoe UI",
+    sans-serif;
+}
+.eventCue {
+  right: 26px;
+  top: 116px;
+  max-width: 340px;
+  padding: 15px 18px;
+  display: grid;
+  gap: 5px;
+}
+.eventCue small,
+.notice b {
+  font-size: 10px;
+  letter-spacing: 1.4px;
+  color: #cbd9ba;
+}
+.eventCue strong {
+  font-size: 15px;
+  font-weight: 500;
+}
+.eventCue span {
+  font-size: 11px;
+  color: #a6c4c1;
+}
+.eventCue button {
+  border: 1px solid #a1c5ba80;
+  border-radius: 7px;
+  padding: 6px 14px;
+  width: fit-content;
+  background: #e5eee01a;
+}
+.notice {
+  left: 26px;
+  top: 146px;
+  max-width: 280px;
+  padding: 12px 16px;
+  display: grid;
+  gap: 4px;
+  pointer-events: none;
+}
+.bubble {
+  left: 50%;
+  bottom: 145px;
+  transform: translateX(-50%);
+  width: min(510px, calc(100vw - 48px));
+  padding: 16px 20px;
+  pointer-events: none;
+}
+.bubble small {
+  display: block;
+  margin-top: 7px;
+  color: #acd2c3;
+  font-size: 10px;
+  letter-spacing: 1px;
+}
+
+.voiceControls {
+  position: absolute;
+  z-index: 6;
+  left: 26px;
+  bottom: 105px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: 270px;
+  color: #e3eee9;
+  background: #16343bef;
+  padding: 9px 12px;
+  border-radius: 10px;
+  font:
+    11px/1.4 "Segoe UI",
+    sans-serif;
+}
+.voiceControls button {
+  border: 1px solid #a1c5ba80;
+  padding: 5px 8px;
+  border-radius: 6px;
+}
+.voiceControls button:disabled {
+  opacity: 0.5;
+}
+.voiceControls small {
+  width: 100%;
+}

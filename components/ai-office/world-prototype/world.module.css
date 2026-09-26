@@ -1,0 +1,449 @@
+.world {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  isolation: isolate;
+  background: #c2d3d7;
+  color: #edf3ef;
+  font-family: Inter, "Segoe UI", Arial, sans-serif;
+}
+.world canvas {
+  display: block;
+  outline: none;
+}
+.header {
+  position: absolute;
+  inset: 0 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  pointer-events: none;
+  padding: 22px 30px;
+  background: linear-gradient(#1a30385c, transparent);
+}
+.header > div {
+  display: flex;
+  gap: 17px;
+  align-items: center;
+}
+.header b {
+  font-weight: 400;
+  color: #f0eee5;
+  font-size: 29px;
+}
+.header span {
+  font-size: 11px;
+  letter-spacing: 0.15em;
+}
+.header small {
+  display: block;
+  margin-top: 7px;
+  font:
+    8px "Segoe UI",
+    sans-serif;
+  letter-spacing: 0.2em;
+  color: #e0e9e5;
+}
+.header a {
+  pointer-events: auto;
+  border: 1px solid #cedad855;
+  padding: 11px 15px;
+  border-radius: 24px;
+  background: #24394088;
+  backdrop-filter: blur(14px);
+  font:
+    11px "Segoe UI",
+    sans-serif;
+}
+.badge {
+  position: absolute;
+  left: 34px;
+  letter-spacing: 0.14em;
+  border-left: 2px solid #e6bc83;
+  top: 94px;
+  font:
+    8px "Segoe UI",
+    sans-serif;
+  border: 1px solid #fff3;
+  border-radius: 20px;
+  background: #294149aa;
+  backdrop-filter: blur(14px);
+  padding: 8px 13px;
+}
+.badge span {
+  margin-left: 14px;
+  color: #c6d8d4;
+}
+.welcome {
+  position: absolute;
+  left: 5%;
+  top: auto;
+  bottom: 150px;
+  width: 390px;
+  padding: 30px;
+  border-radius: 20px;
+  border: 1px solid #ffffff55;
+  background: linear-gradient(130deg, #23373ddb, #3e5559b8);
+  backdrop-filter: blur(24px);
+  box-shadow: 0 24px 70px #21313724;
+}
+.eyebrow {
+  font:
+    9px "Segoe UI",
+    sans-serif;
+  letter-spacing: 0.16em;
+  color: #d8d6c1;
+}
+.welcome h1 {
+  line-height: 1.08;
+  font-size: 43px;
+  letter-spacing: -0.045em;
+  font-weight: 350;
+  margin: 19px 0;
+}
+.welcome > p:not(.eyebrow) {
+  font-size: 13px;
+  line-height: 1.8;
+  color: #d0dfda;
+}
+.world button {
+  cursor: pointer;
+}
+.welcome button,
+.menu button:first-of-type,
+.info button {
+  display: block;
+  border: 0;
+  padding: 15px 20px;
+  text-align: left;
+  width: 100%;
+  margin-top: 24px;
+  background: #e0e8df;
+  color: #213c43;
+  border-radius: 9px;
+  font:
+    11px "Segoe UI",
+    sans-serif;
+  letter-spacing: 0.06em;
+}
+.welcome button:disabled {
+  opacity: 0.5;
+}
+.welcome small {
+  display: block;
+  margin-top: 17px;
+  font:
+    10px/1.8 "Segoe UI",
+    sans-serif;
+  color: #bad0cc;
+}
+.footer {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: end;
+  gap: 20px;
+  pointer-events: none;
+  background: linear-gradient(transparent, #263b43bb);
+  padding: 42px 30px 21px;
+}
+.footer strong {
+  display: block;
+  font-weight: 400;
+  margin-top: 8px;
+  font-size: 12px;
+}
+.footer p {
+  color: #dce5dd;
+  font:
+    10px/2 "Segoe UI",
+    sans-serif;
+}
+.footer small {
+  color: #d4e0dc;
+}
+.footer kbd,
+.interact kbd {
+  border: 1px solid #aac6c36b;
+  padding: 3px 5px;
+  font-size: 9px;
+  border-radius: 4px;
+  background: #263d4244;
+}
+.footer progress {
+  display: block;
+  width: 230px;
+  height: 2px;
+  accent-color: #e4bf8c;
+  margin-top: 10px;
+}
+.metrics {
+  font: 9px/1.6 monospace;
+  text-align: right;
+  color: #d6e4df;
+  font-size: 8px;
+  opacity: 0.75;
+}
+.menu,
+.info {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 320px;
+  max-height: 75vh;
+  overflow: auto;
+  background: #142831f5;
+  border: 1px solid #9eb6b15e;
+  padding: 28px;
+  border-radius: 4px;
+  box-shadow: 0 20px 100px #07141ba0;
+}
+.menu h2,
+.info h2 {
+  font-size: 25px;
+  font-weight: 400;
+  margin: 12px 0;
+}
+.menu button {
+  display: block;
+  width: 100%;
+  border: 1px solid #96afb33b;
+  padding: 10px 14px;
+  text-align: left;
+  margin-top: 8px;
+  font:
+    11px "Segoe UI",
+    sans-serif;
+  border-radius: 8px;
+  transition: background 0.15s;
+}
+.menu button:first-of-type {
+  margin-top: 16px;
+}
+.menu label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 17px;
+  gap: 10px;
+  color: #bed0cf;
+  font:
+    11px "Segoe UI",
+    sans-serif;
+}
+.menu input {
+  width: 110px;
+  accent-color: #edcf9f;
+}
+.menu select {
+  padding: 5px;
+  color: #d7e3de;
+  max-width: 120px;
+  border-radius: 6px;
+  background: #4b6269;
+}
+.crosshair {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  height: 4px;
+  width: 4px;
+  border-radius: 50%;
+  background: #fff9e5;
+  box-shadow: 0 0 1px 2px #16313a66;
+  pointer-events: none;
+}
+.interact {
+  position: absolute;
+  top: 58%;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 12px 17px;
+  border: 1px solid #bdd2cb44;
+  font:
+    12px "Segoe UI",
+    sans-serif;
+  border-radius: 30px;
+  background: #243d42c9;
+  backdrop-filter: blur(12px);
+}
+.info dt {
+  font: 9px monospace;
+  color: #98b5b7;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-top: 20px;
+}
+.info dd {
+  font-size: 13px;
+  margin: 6px 0;
+  line-height: 1.5;
+}
+.map {
+  position: absolute;
+  top: 25%;
+  right: 3%;
+  background: #152c35f5;
+  border: 1px solid #a1b8b255;
+  width: 320px;
+  padding: 22px;
+}
+.map > div {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 7px;
+  margin: 20px 0;
+}
+.map span,
+.map strong {
+  display: grid;
+  place-content: center;
+  min-height: 60px;
+  border: 1px solid #a8bcbc55;
+  font: 10px/1.5 monospace;
+  text-align: center;
+  padding: 7px;
+}
+.map strong {
+  color: #edd2a4;
+  border-color: #edd2a4;
+}
+.map p:last-child {
+  font: 10px/1.7 monospace;
+  color: #a5bcbd;
+}
+.notice {
+  position: absolute;
+  bottom: 110px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 16px;
+  background: #172c36;
+  border: 1px solid #e6bd8e;
+  width: min(500px, 90%);
+  font-size: 12px;
+  border-radius: 12px;
+}
+.error {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  text-align: center;
+  padding: 30px;
+  background: radial-gradient(ellipse at top, #667d80, #243840);
+  gap: 16px;
+}
+.error h1 {
+  font-size: 26px;
+  margin-bottom: 15px;
+}
+.error a {
+  text-decoration: underline;
+  margin-top: 20px;
+}
+.world :is(a, button, input, select):focus-visible {
+  outline: 2px solid #f8d69b;
+  outline-offset: 4px;
+}
+@media (max-width: 700px) {
+  .header {
+    padding: 18px;
+  }
+  .header span {
+    font-size: 10px;
+  }
+  .header a {
+    font-size: 9px;
+    padding: 8px;
+  }
+  .badge {
+    left: 18px;
+    top: 87px;
+  }
+  .welcome {
+    left: 5%;
+    top: 23%;
+    width: 90%;
+    max-width: 380px;
+    padding: 24px;
+  }
+  .welcome h1 {
+    font-size: 38px;
+  }
+  .footer {
+    padding: 20px 18px;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .footer p {
+    font-size: 8px;
+  }
+  .metrics {
+    display: none;
+  }
+  .map {
+    right: 5%;
+    width: 90%;
+    top: 20%;
+    z-index: 2;
+  }
+  .menu {
+    width: 300px;
+  }
+  .badge span {
+    display: none;
+  }
+}
+/* World study 02: quiet architectural glass, compact typography. */
+.menu,
+.info,
+.map {
+  background: linear-gradient(125deg, #243940ed, #3d5158dc);
+  backdrop-filter: blur(24px);
+  border: 1px solid #e7f2ef55;
+  border-radius: 18px;
+  box-shadow: 0 24px 100px #132b3944;
+}
+.menu {
+  width: 340px;
+}
+.menu button:hover {
+  background: #9cafab25;
+}
+.menu button:first-of-type:hover {
+  background: #f3f6ef;
+}
+.info dt,
+.map p:last-child,
+.map span,
+.map strong {
+  font-family: "Segoe UI", sans-serif;
+}
+@media (max-width: 700px) {
+  .welcome {
+    bottom: 155px;
+    width: 90%;
+    left: 5%;
+  }
+  .header {
+    padding: 18px;
+  }
+  .badge {
+    top: 88px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .menu button {
+    transition: none;
+  }
+}
+
+/* After-hours tint is presentation only; persisted task labels remain intact. */
+.world[data-office-closed="true"] canvas {
+  filter: saturate(0.7) brightness(0.84);
+}

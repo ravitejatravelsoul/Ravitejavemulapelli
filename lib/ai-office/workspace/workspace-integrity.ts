@@ -1,6 +1,7 @@
 import "server-only";
 import { posix } from "node:path";
 import { listFiles, readFile } from "./workspace-service.ts";
+import { findHiddenStateConflicts, describeHiddenStateConflict, type HiddenStateConflict } from "./css-visibility.ts";
 
 /**
  * Deterministic deliverable integrity validation (deliverable integrity
@@ -33,6 +34,8 @@ export interface MissingReference {
 export interface WorkspaceIntegrityResult {
   status: "PASS" | "FAIL";
   missingReferences: MissingReference[];
+  /** Elements meant to be hidden whose own display rule wins the CSS cascade (see css-visibility.ts) — always present, empty when none. */
+  hiddenStateConflicts?: HiddenStateConflict[];
 }
 
 const SCRIPT_SRC_PATTERN = /<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>/gi;
@@ -111,12 +114,24 @@ export async function validateWorkspaceIntegrity(projectId: string): Promise<Wor
     }
   }
 
-  return missingReferences.length > 0 ? { status: "FAIL", missingReferences } : { status: "PASS", missingReferences: [] };
+  const cssFiles = files.filter((f) => /\.css$/i.test(f));
+  const hiddenStateConflicts = findHiddenStateConflicts({
+    html: await Promise.all(htmlFiles.map(async (file) => ({ file, content: await readFile(projectId, file) }))),
+    css: await Promise.all(cssFiles.map(async (file) => ({ file, content: await readFile(projectId, file) }))),
+  });
+
+  return missingReferences.length > 0 || hiddenStateConflicts.length > 0
+    ? { status: "FAIL", missingReferences, hiddenStateConflicts }
+    : { status: "PASS", missingReferences: [], hiddenStateConflicts: [] };
 }
 
 /** A single, human-readable sentence for the first missing reference — used as both the semantic failure reason and the corrective-attempt context, so the message a developer role sees is exactly the message recorded as the failure. */
 export function describeIntegrityFailure(result: WorkspaceIntegrityResult): string {
   const first = result.missingReferences[0];
+  if (!first && result.hiddenStateConflicts?.[0]) {
+    const extra = result.hiddenStateConflicts.length - 1;
+    return `Workspace integrity validation failed: ${describeHiddenStateConflict(result.hiddenStateConflicts[0])}${extra > 0 ? ` (and ${extra} more hidden-state conflict${extra === 1 ? "" : "s"})` : ""}`;
+  }
   if (!first) return "Workspace integrity validation failed.";
   const rest = result.missingReferences.length - 1;
   const suffix = rest > 0 ? ` (and ${rest} more missing reference${rest === 1 ? "" : "s"})` : "";
