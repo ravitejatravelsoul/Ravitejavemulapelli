@@ -14,10 +14,11 @@ import {
   listTaskDependencies,
   listTaskAttempts,
   getAgentRun,
+  type TaskRow,
 } from "../domain/tasks.ts";
 import { listProjects } from "../domain/projects.ts";
-import { getWorkspace } from "../domain/workspace.ts";
-import { listFailuresForTask } from "../domain/project-outputs.ts";
+import { getWorkspace, listWorkspaceFileRecords, type WorkspaceFileRow } from "../domain/workspace.ts";
+import { listFailuresForTask, listArtifactsForProject, listTestResultsForTask, type ArtifactRow } from "../domain/project-outputs.ts";
 import { listRecentIncidents } from "../domain/office-incidents.ts";
 import { computeOfficeHealthStatus } from "../engineer/office-engineer.ts";
 import {
@@ -46,6 +47,47 @@ export function safeWorldText(value: unknown, limit = 220): string {
     .replace(/[\u0000-\u001f]/g, " ")
     .slice(0, limit);
 }
+const ARTIFACT_LABEL: Record<string, string> = {
+  requirements: "a requirements document",
+  architecture: "an architecture plan",
+  "ux-spec": "a UX flow specification",
+  code: "an implementation note",
+  "test-report": "a test report",
+  "security-report": "a security report",
+  "review-notes": "code review notes",
+  "release-summary": "a release summary",
+  "research-notes": "research notes",
+};
+
+/** Facts about a role's finished task, all read from persisted state — artifact types/sizes, files it wrote, its recorded run and any real test result. No model output text is copied, so nothing here can be invented or leak raw content. */
+function completedWorkFor(
+  db: DatabaseSync,
+  task: TaskRow,
+  artifacts: ArtifactRow[],
+  files: WorkspaceFileRow[],
+  deliveryState: string,
+) {
+  const succeeded = listTaskAttempts(db, task.id).flatMap((a) => {
+    const r = a.agentRunId ? getAgentRun(db, a.agentRunId) : null;
+    return r?.status === "SUCCEEDED" ? [{ r, attempt: a.attemptNumber }] : [];
+  });
+  const last = succeeded.at(-1);
+  const test = listTestResultsForTask(db, task.id).at(-1);
+  return {
+    taskTitle: safeWorldText(task.title),
+    finishedAt: last?.r.finishedAt ?? task.updatedAt,
+    attempt: last?.attempt ?? task.attemptCount,
+    provider: last ? safeWorldText(last.r.provider) : null,
+    model: last ? safeWorldText(last.r.model) || null : null,
+    deliverables: artifacts
+      .filter((x) => x.taskId === task.id)
+      .map((x) => ({ label: ARTIFACT_LABEL[x.type] ?? "a " + safeWorldText(x.type, 40), characters: x.content.length })),
+    files: files.filter((f) => f.lastModifiedByTaskId === task.id).map((f) => safeWorldText(f.path, 80)).slice(0, 12),
+    test: test ? { status: test.status, summary: safeWorldText(test.summary, 180) } : null,
+    delivery: task.roleId === "release-agent" ? deliveryState : null,
+  };
+}
+
 export function getAIHeadquartersWorldState(
   db: DatabaseSync,
   projectId?: string,
@@ -75,6 +117,8 @@ export function getAIHeadquartersWorldState(
       estimatedCostUsd: a.estimatedCostUsd ?? null,
       escalationStatus: safeWorldText(a.escalationStatus),
     }));
+  const projectArtifacts = project ? listArtifactsForProject(db, project.id) : [],
+    projectFiles = project ? listWorkspaceFileRecords(db, project.id) : [];
   const agents = floor.agents.map((a) => {
     const task = tasks.find((t) => t.id === a.taskId),
       failure = task
@@ -107,9 +151,15 @@ export function getAIHeadquartersWorldState(
     });
     const ids = new Set(runs.map((r) => r.id)),
       ownUsage = usage.filter((u) => ids.has(u.agentRunId));
+    const ownTasks = tasks.filter((t) => t.roleId === a.roleId),
+      finished = ownTasks.filter((t) => t.status === "DONE").sort((x, y) => y.updatedAt - x.updatedAt)[0];
     return {
       roleId: a.roleId,
       name: safeWorldText(a.roleName),
+      participating: ownTasks.length > 0,
+      completedWork: finished
+        ? completedWorkFor(db, finished, projectArtifacts, projectFiles, interaction?.deliveryState ?? "NOT_STARTED")
+        : null,
       status: a.status,
       taskId: task?.id ?? null,
       task: safeWorldText(a.currentTaskTitle) || null,

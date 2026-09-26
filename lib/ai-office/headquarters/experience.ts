@@ -2,6 +2,9 @@ import type { HeadquartersState, HeadquartersAgent } from "./world-state.ts";
 import type { OfficeTransition } from "../dashboard/office-transitions.ts";
 import {
   greeting,
+  briefingKind,
+  whenPhrase,
+  resultSentence,
   handoffPath,
   ROLE_STATIONS,
   liveSample,
@@ -165,6 +168,9 @@ export function briefSignature(a: HeadquartersAgent, projectId?: string) {
     a.model,
     a.blocker,
     a.waitingOn,
+    a.participating,
+    a.completedWork?.taskTitle,
+    a.completedWork?.finishedAt,
   ]);
 }
 export function shouldGreet(
@@ -193,12 +199,19 @@ export function proximityBriefing(
       .slice(0, 3);
     return `${first} ${p.title}: ${p.completed} of ${p.total} tasks complete. ${active.length ? active.join(", ") + " active." : "No active roles recorded."} ${s.approvals.filter((x) => x.projectId === p.id).length} owner approvals. Recorded cost $${p.costUsd.toFixed(2)}.`;
   }
-  const task = a.task ?? a.lastCompletedTask;
-  const fact = a.task
-    ? `${a.status.toLowerCase()}: ${task}`
-    : task
-      ? `Last completed: ${task}`
-      : `${a.status.toLowerCase()} for ${p.title}`;
+  const kind = briefingKind(a);
+  if (kind === "COMPLETED" && a.completedWork) {
+    const w = a.completedWork;
+    return `${first} I completed ${w.taskTitle} ${whenPhrase(w.finishedAt, s.observedAt)}. ${resultSentence(w)}${w.provider ? ` Recorded run: ${w.provider}${w.model ? " / " + w.model : ""}.` : ""} Attempt ${w.attempt}. No active task now.`;
+  }
+  if (kind === "NOT_PARTICIPATING")
+    return `${first} I was not assigned any task in ${p.title}; I did not take part. I am idle and available.`;
+  if (kind === "IDLE") return `${first} ${p.title}: I am idle with no active task.`;
+  if (kind === "WAITING")
+    return `${first} ${p.title}: waiting${a.task ? " to start " + a.task : ""}${a.waitingOn.length ? " for " + a.waitingOn.join(", ") : a.blocker ? ". " + a.blocker : "; no blocking dependency is recorded"}.`;
+  if (kind === "BLOCKED")
+    return `${first} Blocked${a.task ? " on " + a.task : ""}. ${a.blocker ?? "Task is blocked; inspect workspace for details."}`;
+  const fact = `${a.status.toLowerCase()}: ${a.task}`;
   const route = a.provider
     ? ` Recorded run: ${a.provider}${a.model ? " / " + a.model : ""}.`
     : "";

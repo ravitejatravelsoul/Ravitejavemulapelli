@@ -514,6 +514,8 @@ export const HeadquartersScene = memo(function HeadquartersScene({
   const engineer: HeadquartersAgent = {
     roleId: "office-engineer",
     name: "Office Engineer",
+    participating: true,
+    completedWork: null,
     status:
       state.office.health === "REPAIRING"
         ? "WORKING"

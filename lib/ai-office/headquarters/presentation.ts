@@ -188,6 +188,45 @@ export function greeting(hour: number) {
       ? "Good afternoon, Boss."
       : "Good evening, Boss.";
 }
+const ACTIVE_STATUSES = new Set(["WORKING", "THINKING", "TESTING", "REVIEWING", "RETRYING"]);
+export type BriefingKind = "COORDINATOR" | "ACTIVE" | "BLOCKED" | "WAITING" | "COMPLETED" | "NOT_PARTICIPATING" | "IDLE";
+/**
+ * One authoritative classification for what an agent may truthfully say. Active
+ * work always wins (completed work is never presented as current); a recorded
+ * failure/blocked status is a blocker; waiting is only claimed from a recorded
+ * waiting status; completed work is only claimed from persisted completion.
+ */
+export function briefingKind(a: HeadquartersAgent): BriefingKind {
+  if (a.roleId === "orchestrator") return "COORDINATOR";
+  if (ACTIVE_STATUSES.has(a.status)) return "ACTIVE";
+  if (a.status === "BLOCKED" || a.blocker?.startsWith("A recorded task failure")) return "BLOCKED";
+  if (a.status === "WAITING" || (a.task && a.waitingOn.length)) return "WAITING";
+  if (a.completedWork && !a.task) return "COMPLETED";
+  if (!a.participating) return "NOT_PARTICIPATING";
+  return "IDLE";
+}
+export function whenPhrase(finishedAt: number, observedAt: number) {
+  const ms = Math.max(0, observedAt - finishedAt);
+  return ms < 120_000 ? "just now" : ms < 3_600_000 ? Math.round(ms / 60_000) + " minutes ago" : "earlier";
+}
+const list = (items: string[]) =>
+  items.length < 2 ? items.join("") : items.slice(0, -1).join(", ") + " and " + items.at(-1);
+/** A grounded result sentence built only from persisted facts (artifact types/sizes, files written, real test result, delivery state). */
+export function resultSentence(w: NonNullable<HeadquartersAgent["completedWork"]>) {
+  const parts: string[] = [];
+  if (w.deliverables.length)
+    parts.push(
+      "produced " +
+        list(w.deliverables.map((d) => d.label + " (" + d.characters.toLocaleString("en-US") + " characters)")),
+    );
+  if (w.files.length) parts.push("wrote " + list(w.files));
+  if (w.test) parts.push("real browser test " + w.test.status + ": " + w.test.summary.replace(/\.$/, ""));
+  if (w.delivery) parts.push("delivery state " + w.delivery);
+  return parts.length ? "The result: " + parts.join("; ") + "." : "The task is recorded as done.";
+}
+function runSentence(a: HeadquartersAgent) {
+  return a.provider ? " Recorded run: " + a.provider + (a.model ? " / " + a.model : "") + "." : "";
+}
 export function agentBriefing(
   a: HeadquartersAgent,
   state: HeadquartersState,
@@ -196,30 +235,54 @@ export function agentBriefing(
   const parts = [greeting(hour)];
   if (!state.project)
     return parts.concat("No project is selected. I am available.").join(" ");
-  parts.push(state.project.title + ": " + a.status.toLowerCase() + ".");
+  const kind = briefingKind(a),
+    title = state.project.title;
+  if (kind === "COMPLETED" && a.completedWork) {
+    const w = a.completedWork;
+    return [
+      ...parts,
+      'I completed "' + w.taskTitle + '" ' + whenPhrase(w.finishedAt, state.observedAt) + ".",
+      resultSentence(w),
+      (w.provider ? "Recorded run: " + w.provider + (w.model ? " / " + w.model : "") + ", " : "Recorded ") +
+        "attempt " + w.attempt + ".",
+      "I have no active task now.",
+    ].join(" ");
+  }
+  if (kind === "NOT_PARTICIPATING")
+    return [...parts, "I was not assigned any task in " + title + ", so I did not take part in this project. I am idle and available."].join(" ");
+  if (kind === "IDLE") return [...parts, title + ": I am idle. I have no active task right now."].join(" ");
+  if (kind === "WAITING")
+    return [
+      ...parts,
+      title + ":",
+      a.waitingOn.length
+        ? "I am waiting" + (a.task ? ' to start "' + a.task + '"' : "") + " for " + a.waitingOn.join(", ") + "."
+        : a.blocker
+          ? a.blocker + "."
+          : "my recorded status is waiting; no blocking dependency is recorded.",
+    ].join(" ");
+  if (kind === "BLOCKED")
+    return [
+      ...parts,
+      "I am blocked" + (a.task ? ' on "' + a.task + '"' : "") + ".",
+      (a.blocker ?? "Task is blocked; inspect workspace for details.") +
+        (a.attempt ? " Attempt " + a.attempt + (a.maxAttempts ? " of " + a.maxAttempts : "") + "." : ""),
+    ].join(" ");
+  parts.push(title + ": " + a.status.toLowerCase() + ".");
   if (a.roleId === "orchestrator")
     parts.push(
       state.project.completed +
         " of " +
         state.project.total +
         " tasks complete; " +
-        state.agents.filter((a) =>
-          ["WORKING", "THINKING", "TESTING", "REVIEWING", "RETRYING"].includes(
-            a.status,
-          ),
-        ).length +
+        state.agents.filter((x) => ACTIVE_STATUSES.has(x.status)).length +
         " active roles; " +
         state.approvals.filter((p) => p.projectId === state.project?.id)
           .length +
         " pending approvals.",
     );
   else if (a.task) parts.push(a.task + ".");
-  else if (a.lastCompletedTask)
-    parts.push("Last completed: " + a.lastCompletedTask + ".");
-  if (a.provider)
-    parts.push(
-      "Recorded run: " + a.provider + (a.model ? " / " + a.model : "") + ".",
-    );
+  parts.push(runSentence(a).trim());
   if (a.attempt)
     parts.push(
       "Attempt " +
@@ -227,12 +290,9 @@ export function agentBriefing(
         (a.maxAttempts ? " of " + a.maxAttempts : "") +
         ".",
     );
-  if (a.blocker) parts.push(a.blocker);
-  else if (a.waitingOn.length)
-    parts.push("Waiting for " + a.waitingOn.join(", ") + ".");
   if (state.office.state === "CLOSED")
     parts.push("Office is closed; no new work is claimed.");
-  return parts.join(" ");
+  return parts.filter(Boolean).join(" ");
 }
 export type HandoffPlayback = {
   event: OfficeTransition;
