@@ -82,7 +82,7 @@ class WorldBoundary extends Component<
           This prototype needs WebGL 2 and hardware acceleration. You can safely
           return to the Office.
         </p>
-        <a href="/office">Exit 3D Office</a>
+        <a href="/office/classic">Exit 3D Office</a>
       </div>
     ) : (
       this.props.children
@@ -492,7 +492,7 @@ export default function WorldExperience({
                 ? "This prototype needs WebGL 2. Enable hardware acceleration in your browser, or return to the Office."
                 : "Use a laptop or desktop with a keyboard and mouse to walk through this 3D prototype."}
           </p>
-          <a href="/office">Return to Office</a>
+          <a href="/office/classic">Return to Office</a>
         </section>
       </div>
     );
@@ -529,7 +529,7 @@ export default function WorldExperience({
             gl={{ antialias: true, powerPreference: "high-performance" }}
             fallback={
               <div className={styles.error}>
-                WebGL is unavailable. <a href="/office">Return to Office</a>
+                WebGL is unavailable. <a href="/office/classic">Return to Office</a>
               </div>
             }
           >
@@ -557,12 +557,12 @@ export default function WorldExperience({
           </span>
         </div>
         <a
-          href="/office"
+          href="/office/classic"
           onClick={() => {
             if (document.pointerLockElement) document.exitPointerLock();
           }}
         >
-          Exit 3D Office ↗
+          {headquarters ? "Classic Office ↗" : "Exit 3D Office ↗"}
         </a>
       </header>
       <div className={styles.badge}>

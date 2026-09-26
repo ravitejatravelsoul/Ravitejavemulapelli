@@ -192,7 +192,7 @@ export function HeadquartersPanel({
           </dl>
           <Link
             href={
-              "/office?" +
+              "/office/classic?" +
               new URLSearchParams({
                 ...(pid ? { project: pid } : {}),
                 agent: agent.roleId,
@@ -544,7 +544,7 @@ export function HeadquartersPanel({
         </>
       )}
       <hr />
-      <Link href="/office">Classic Office</Link>
+      <Link href="/office/classic">Classic Office</Link>
     </section>
   );
 }

@@ -35,7 +35,7 @@ export async function approveApprovalAction(approvalId: string, projectId?: stri
   if (isRemoteExecutionMode()) {
     if (!projectId) return { error: "Missing project for remote approval." };
     const result = await decideRemoteApproval(projectId, approvalId, note, "approve");
-    revalidatePath("/office");
+    revalidatePath("/office", "layout");
     revalidatePath(`/office/projects/${projectId}`);
     return result;
   }
@@ -47,7 +47,7 @@ export async function approveApprovalAction(approvalId: string, projectId?: stri
   if (!owner) return { error: "Owner account not found." };
 
   const result = approveApproval(db, { approvalId, decidedByUserId: owner.id, note: note?.trim() || undefined });
-  revalidatePath("/office");
+  revalidatePath("/office", "layout");
   if (result.ok && result.approval.projectId) revalidatePath(`/office/projects/${result.approval.projectId}`);
   return result.ok ? {} : { error: result.reason };
 }
@@ -60,7 +60,7 @@ export async function rejectApprovalAction(approvalId: string, projectId?: strin
   if (isRemoteExecutionMode()) {
     if (!projectId) return { error: "Missing project for remote approval." };
     const result = await decideRemoteApproval(projectId, approvalId, note, "reject");
-    revalidatePath("/office");
+    revalidatePath("/office", "layout");
     revalidatePath(`/office/projects/${projectId}`);
     return result;
   }
@@ -70,7 +70,7 @@ export async function rejectApprovalAction(approvalId: string, projectId?: strin
   if (!owner) return { error: "Owner account not found." };
 
   const result = rejectApproval(db, { approvalId, decidedByUserId: owner.id, note: note?.trim() || undefined });
-  revalidatePath("/office");
+  revalidatePath("/office", "layout");
   if (result.ok && result.approval.projectId) revalidatePath(`/office/projects/${result.approval.projectId}`);
   return result.ok ? {} : { error: result.reason };
 }
@@ -103,7 +103,7 @@ export async function revokeApprovalAction(approvalId: string, note?: string): P
   if (!owner) return { error: "Owner account not found." };
 
   const result = revokeApproval(db, { approvalId, revokedByUserId: owner.id, note: note?.trim() || undefined });
-  revalidatePath("/office");
+  revalidatePath("/office", "layout");
   if (result.ok && result.approval.projectId) revalidatePath(`/office/projects/${result.approval.projectId}`);
   return result.ok ? {} : { error: result.reason };
 }

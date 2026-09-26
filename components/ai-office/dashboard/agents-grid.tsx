@@ -31,7 +31,7 @@ export function AgentsGrid({ cards }: { cards: AgentCardData[] }) {
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
       {cards.map(({ agent, description }) => (
-        <Link key={agent.roleId} href={`/office?agent=${agent.roleId}`} className="text-left" aria-label={`Open ${agent.roleName}'s workspace`}>
+        <Link key={agent.roleId} href={`/office/classic?agent=${agent.roleId}`} className="text-left" aria-label={`Open ${agent.roleName}'s workspace`}>
           <GlassCard className="flex h-full flex-col gap-2 p-4 transition-colors hover:border-primary/40">
             <div className="flex items-start justify-between gap-2">
               <div>

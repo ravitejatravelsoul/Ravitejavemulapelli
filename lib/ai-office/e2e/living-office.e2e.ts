@@ -199,7 +199,7 @@ async function login(page: import('playwright').Page) {
   await page.fill('input[name="password"]', TEST_PASSWORD);
   await page.click('button[type="submit"]');
   await page.waitForURL(`${BASE}/office`, {timeout:15000});
-  await page.goto(`${BASE}/office?project=${fixtureId}`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${BASE}/office/classic?project=${fixtureId}`, { waitUntil: "domcontentloaded" });
   await page.getByTestId("living-office").waitFor({state:"attached"});
 }
 
@@ -370,7 +370,7 @@ describe("Living Office 2.0 — persisted fixtures, zero inference", () => {
     const db=openDatabase(join(dbDir,'office.db'));
     const page=await browser.newPage({viewport:{width:1440,height:900}});
     let requests=0,totalRscRequests=0;const errors:string[]=[];
-    page.on('request',r=>{if(r.url().includes('_rsc')){totalRscRequests++;if(new URL(r.url()).pathname==='/office'&&!r.headers()['next-router-prefetch'])requests++;}});page.on('pageerror',e=>errors.push(e.message));
+    page.on('request',r=>{if(r.url().includes('_rsc')){totalRscRequests++;if(new URL(r.url()).pathname==='/office/classic'&&!r.headers()['next-router-prefetch'])requests++;}});page.on('pageerror',e=>errors.push(e.message));
     const client=await page.context().newCDPSession(page);
     try {
       db.prepare("UPDATE projects SET status='IN_PROGRESS' WHERE id=?").run(fixtureId);setScene(true);
@@ -382,12 +382,12 @@ describe("Living Office 2.0 — persisted fixtures, zero inference", () => {
       const before=await metrics(),start=Date.now();let maxPackets=0;
       for(let i=0;i<60;i++){
         for(let n=0;n<5;n++)recordEvent(db,{projectId:fixtureId,type:'agent_run.failed',actor:'qa-agent',payload:{taskId:qa.id,roleId:'qa-agent',attemptNumber:i+1,remediationTargetTaskIds:[dev.id]}});
-        if(i%15===0){await page.goto(BASE+'/office?project='+alternate,{waitUntil:'domcontentloaded'});assert.equal(await page.getByTestId('office-packet').count(),0);}
-        await page.goto(BASE+'/office?project='+fixtureId+(i%10===0?'&agent=frontend-developer':''),{waitUntil:'domcontentloaded'});
+        if(i%15===0){await page.goto(BASE+'/office/classic?project='+alternate,{waitUntil:'domcontentloaded'});assert.equal(await page.getByTestId('office-packet').count(),0);}
+        await page.goto(BASE+'/office/classic?project='+fixtureId+(i%10===0?'&agent=frontend-developer':''),{waitUntil:'domcontentloaded'});
         await page.waitForTimeout(2000);
         maxPackets=Math.max(maxPackets,await page.getByTestId('office-packet').count());
       }
-      await page.goto(BASE+'/office?project='+fixtureId,{waitUntil:'domcontentloaded'});
+      await page.goto(BASE+'/office/classic?project='+fixtureId,{waitUntil:'domcontentloaded'});
       await page.getByRole('button',{name:'Pause office motion'}).click();await page.waitForTimeout(1000);
       assert.equal(await page.getByTestId('office-packet').count(),0);
       const beforeIdleRequests=requests;await page.waitForTimeout(30000);const idleRefreshes=requests-beforeIdleRequests;

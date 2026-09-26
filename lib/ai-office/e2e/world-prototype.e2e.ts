@@ -77,9 +77,7 @@ test(
       await page.fill("[name=password]", password);
       await page.click("button[type=submit]");
       await page.waitForURL(base + "/office");
-      await page
-        .getByRole("link", { name: "3D Prototype", exact: true })
-        .click();
+      await page.goto(base + "/office/world-prototype");
       const root = page.getByTestId("world-prototype");
       const worldStart = Date.now();
       await page.locator("[data-ready=true]").waitFor({ timeout: 45000 });
@@ -307,15 +305,13 @@ test(
       );
       await page.keyboard.press("Escape");
       await page.getByRole("link", { name: "Exit 3D Office" }).click();
-      await page.waitForURL(base + "/office");
+      await page.waitForURL(base + "/office/classic");
       assert.equal(await page.locator("canvas").count(), 0);
       assert.equal(
         await page.evaluate(() => document.pointerLockElement === null),
         true,
       );
-      await page
-        .getByRole("link", { name: "3D Prototype", exact: true })
-        .click();
+      await page.goto(base + "/office/world-prototype");
       await page.locator("[data-ready=true]").waitFor();
       assert.equal(
         (await state()).demoTime,

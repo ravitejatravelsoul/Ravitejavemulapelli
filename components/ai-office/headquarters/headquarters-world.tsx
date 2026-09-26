@@ -34,7 +34,7 @@ export default function HeadquartersWorld() {
     history.replaceState(
       null,
       "",
-      "/office/headquarters?project=" + encodeURIComponent(id),
+      "/office?project=" + encodeURIComponent(id),
     );
   }, []);
   const animate =
@@ -70,7 +70,7 @@ export default function HeadquartersWorld() {
       <section role="status" style={{ padding: 40 }}>
         <h1>Connecting to the headquarters</h1>
         <p>{error || "Reading authoritative Office state…"}</p>
-        <a href="/office">Classic Office</a>
+        <a href="/office/classic">Classic Office</a>
       </section>
     );
   return (

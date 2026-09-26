@@ -19,7 +19,7 @@ const World = dynamic(() => import("./world-experience"), {
     >
       <p>TEJA’S / AI OFFICE</p>
       <p role="status">Preparing the headquarters…</p>
-      <a href="/office">Exit to Office</a>
+      <a href="/office/classic">Exit to Office</a>
     </div>
   ),
 });

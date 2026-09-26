@@ -158,15 +158,26 @@ test(
         }
         return route.continue();
       });
-      await page.goto(base + "/office/headquarters");
+      await page.goto(base + "/office");
       assert.match(page.url(), /office\/login/);
       await page.fill("[name=email]", env.OFFICE_OWNER_EMAIL);
       await page.fill("[name=password]", password);
       await page.click("button[type=submit]");
       await page.waitForURL(base + "/office");
+      // Cutover: Classic Office stays reachable at /office/classic and the
+      // legacy /office/headquarters URL lands on the primary Office.
+      await page.goto(base + "/office/classic");
+      await page
+        .getByRole("navigation", { name: "AI Office" })
+        .getByRole("link", { name: "Classic Office" })
+        .first()
+        .waitFor();
+      assert.equal(await page.locator("canvas").count(), 0);
+      await page.goto(base + "/office/headquarters?project=legacy-check");
+      await page.waitForURL(base + "/office?project=legacy-check");
 
       page.on("dialog", (d) => d.accept());
-      await page.goto(base + "/office/headquarters?project=" + project.id);
+      await page.goto(base + "/office?project=" + project.id);
       const root = page.getByTestId("world-prototype");
       await page.locator("[data-ready=true]").waitFor({ timeout: 45000 });
       await page.getByRole("button", { name: "ENTER OFFICE" }).click();
@@ -621,7 +632,7 @@ test(
         storageState: await page.context().storageState(),
       });
       const mp = await mobile.newPage();
-      await mp.goto(base + "/office/headquarters");
+      await mp.goto(base + "/office");
       await mp
         .getByRole("heading", { name: "A world best explored on desktop." })
         .waitFor();

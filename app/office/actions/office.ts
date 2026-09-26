@@ -31,7 +31,7 @@ export async function openOfficeAction(): Promise<OfficeControlActionState> {
       openOffice(db, REMOTE_SYNTHETIC_OWNER_ID);
       return { ok: true, value: undefined };
     });
-    revalidatePath("/office");
+    revalidatePath("/office", "layout");
     return result.ok ? {} : { error: result.error };
   }
 
@@ -42,7 +42,7 @@ export async function openOfficeAction(): Promise<OfficeControlActionState> {
   if (!owner) return { error: "Owner account not found." };
 
   openOffice(db, owner.id);
-  revalidatePath("/office");
+  revalidatePath("/office", "layout");
   return {};
 }
 
@@ -55,7 +55,7 @@ export async function closeOfficeAction(): Promise<OfficeControlActionState> {
       closeOffice(db, REMOTE_SYNTHETIC_OWNER_ID);
       return { ok: true, value: undefined };
     });
-    revalidatePath("/office");
+    revalidatePath("/office", "layout");
     return result.ok ? {} : { error: result.error };
   }
 
@@ -64,6 +64,6 @@ export async function closeOfficeAction(): Promise<OfficeControlActionState> {
   if (!owner) return { error: "Owner account not found." };
 
   closeOffice(db, owner.id);
-  revalidatePath("/office");
+  revalidatePath("/office", "layout");
   return {};
 }
