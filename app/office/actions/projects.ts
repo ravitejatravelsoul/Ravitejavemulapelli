@@ -45,6 +45,7 @@ const DEFAULT_LIVE_PROJECT_BUDGET_CAP_USD = 3.0;
 
 export interface CreateProjectState {
   error?: string;
+  projectId?: string;
 }
 
 /**
@@ -58,7 +59,7 @@ export interface CreateProjectState {
  * way. `provider` ("simulated" | "ollama") only decides which adapter
  * later *executes* the planned tasks; it never changes `aiMode`.
  */
-export async function createProjectAction(_prevState: CreateProjectState | undefined, formData: FormData): Promise<CreateProjectState> {
+export async function createProjectAction(_prevState: CreateProjectState | undefined, formData: FormData, stayInHeadquarters = false): Promise<CreateProjectState> {
   const session = await verifySession();
   if (!session) return { error: "You must be signed in." };
 
@@ -71,7 +72,10 @@ export async function createProjectAction(_prevState: CreateProjectState | undef
   if (isRemoteExecutionMode()) {
     const result = await createRemoteProjectAction(undefined, formData);
     if (result.error) return { error: result.error };
-    if (result.projectId) redirect(`/office/projects/${result.projectId}`);
+    if (result.projectId) {
+      if (stayInHeadquarters) return { projectId: result.projectId };
+      redirect(`/office/projects/${result.projectId}`);
+    }
     return { error: "Project creation did not return a project id." };
   }
 
@@ -110,6 +114,7 @@ export async function createProjectAction(_prevState: CreateProjectState | undef
   }
 
   revalidatePath("/office", "layout");
+  if (stayInHeadquarters) return { projectId: project.id };
   redirect(`/office/projects/${project.id}`);
 }
 

@@ -1,0 +1,9 @@
+.conversation {border:1px solid #447a8980;border-radius:14px;padding:16px;margin:16px 0;background:#081f2ce8;color:#e1f4ff;font:14px/1.5 system-ui;}
+.conversation header {display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;}
+.conversation button,.conversation a {border:1px solid #618999;border-radius:8px;padding:8px 12px;margin:5px 5px 5px 0;background:#15394a;color:#e8faff;cursor:pointer;}
+.conversation button:disabled {opacity:.5;cursor:default;}
+.conversation textarea {display:block;width:100%;min-height:78px;background:#061723;border:1px solid #64899a;border-radius:8px;color:white;padding:10px;}
+.conversation small {display:block;color:#aacbd8;}
+.turns {max-height:260px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;}
+.turns p {padding:10px;background:#17374770;border-radius:8px;}
+.confirm {border-left:3px solid #edc97b;padding:10px;background:#4c422950;}

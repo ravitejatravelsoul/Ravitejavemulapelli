@@ -157,7 +157,7 @@ function Player({
         keys.current.add(e.code);
       }
       if (
-        e.code === "KeyE" &&
+        (e.code === "KeyE" || (!!params.current.headquarters && e.code === "KeyC")) &&
         !e.repeat &&
         nearest.current &&
         document.pointerLockElement === gl.domElement
@@ -411,7 +411,7 @@ export default function WorldExperience({
       if (e.key === "Tab" && host.current) {
         const items = [
           ...host.current.querySelectorAll<HTMLElement>(
-            "button:not(:disabled),a,input,select",
+            "button:not(:disabled),a,input,select,textarea",
           ),
         ].filter((el) => el.getClientRects().length);
         const first = items[0],

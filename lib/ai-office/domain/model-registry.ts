@@ -145,6 +145,8 @@ export function recordModelHealthCheck(db: DatabaseSync, provider: string, model
 }
 
 export interface RecordModelOutcomeInput {
+  /** Conversation probes/answers share health, but are not completed project tasks. */
+  purpose?: "conversation";
   succeeded: boolean;
   latencyMs?: number;
   /** Set only when this specific failure was a rate-limit (HTTP 429) — marks the model UNAVAILABLE until `rateLimitedUntil` so the router stops repeatedly retrying it (per the brief's "if a configured free model disappears/becomes unavailable: mark unhealthy, do not repeatedly retry it"). */
@@ -158,8 +160,8 @@ export function recordModelOutcome(db: DatabaseSync, provider: string, modelId: 
   if (!row) return;
   const now = Date.now();
   const avgLatencyMs = input.latencyMs !== undefined ? ema(row.avgLatencyMs, input.latencyMs) : row.avgLatencyMs;
-  const tasksCompleted = row.tasksCompleted + (input.succeeded ? 1 : 0);
-  const tasksFailed = row.tasksFailed + (input.succeeded ? 0 : 1);
+  const tasksCompleted = row.tasksCompleted + (input.purpose !== "conversation" && input.succeeded ? 1 : 0);
+  const tasksFailed = row.tasksFailed + (input.purpose !== "conversation" && !input.succeeded ? 1 : 0);
   const recentFailureCount = input.succeeded ? 0 : row.recentFailureCount + 1;
   const rateLimitedUntil = input.rateLimitedForMs !== undefined ? now + input.rateLimitedForMs : input.succeeded ? null : row.rateLimitedUntil;
   // Three consecutive failures remain unavailable even after a prior cooldown expires.
