@@ -55,6 +55,7 @@ export const PROJECT_SCOPED_TABLES = [
   "workspace_files",
   "office_incidents",
   "semantic_repair_plans",
+  "model_routing_decisions",
 ] as const;
 
 export type ProjectScopedTable = (typeof PROJECT_SCOPED_TABLES)[number];

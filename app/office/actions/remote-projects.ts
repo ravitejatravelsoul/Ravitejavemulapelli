@@ -8,15 +8,15 @@ import { planProject } from "@/lib/ai-office/orchestrator/orchestrator";
 import {
   hydrateEphemeralDb,
   flushProjectBundle,
-  flushOfficeState,
   readOfficeState,
-  writeOfficeState,
   writeProjectBundle,
   remoteClientFromEnv,
   REMOTE_SYNTHETIC_OWNER_ID,
 } from "@/lib/ai-office/remote/remote-state-store";
-import { readProjectsIndex } from "@/lib/ai-office/remote/remote-dashboard-store";
 import { GitHubClient, GitHubContentConflictError } from "@/lib/ai-office/remote/github-client";
+import { readModelCatalog } from "@/lib/ai-office/remote/model-catalog";
+import { selectFreeModel } from "@/lib/ai-office/agents/free-model-router";
+import { requiredCapabilitiesForTask } from "@/lib/ai-office/agents/free-model-capabilities";
 
 /** Bounded — see remote-approvals.ts's identical constant/reasoning: `state/projects-index.json` and `state/office.json` are shared across every remote project, so two concurrent creations can genuinely race to update them. */
 const MAX_WRITE_ATTEMPTS = 3;
@@ -32,16 +32,14 @@ const MAX_WRITE_ATTEMPTS = 3;
  * work (a dispatched GitHub Actions run, not this request staying open)
  * differ.
  *
- * Deliberately SIMULATED-only, LOCAL_ONLY policy, no budget cap
- * configuration yet — matches the plan's explicit "first proof uses a
- * free/no-Claude deterministic test project; architecture validation
- * needs no paid call." A real Claude LIVE remote project is a real,
- * disclosed follow-up, not silently unsupported forever.
+ * Supports explicit FREE_MULTI_MODEL only after the existing task capability gates pass.
+ * STANDARD remains deterministic simulated execution; Claude is never selected.
  */
 
 const newRemoteProjectSchema = z.object({
   title: z.string().trim().min(1, "Enter a project name.").max(120, "Keep the project name under 120 characters."),
   ideaText: z.string().trim().min(10, "Describe the idea in at least a sentence.").max(4000, "Keep the idea under 4000 characters."),
+  routingMode:z.enum(["STANDARD","FREE_MULTI_MODEL"]).default("STANDARD"),
 });
 
 export interface CreateRemoteProjectState {
@@ -56,6 +54,7 @@ export async function createRemoteProjectAction(_prevState: CreateRemoteProjectS
   const parsed = newRemoteProjectSchema.safeParse({
     title: formData.get("title"),
     ideaText: formData.get("ideaText"),
+    routingMode:formData.get("routingMode")??"STANDARD",
   });
   if (!parsed.success) {
     return { error: parsed.error.issues[0]?.message ?? "Enter a project name and an idea." };
@@ -69,13 +68,16 @@ export async function createRemoteProjectAction(_prevState: CreateRemoteProjectS
   }
 
   const { state: office } = await readOfficeState(remoteConfig);
-  const db = hydrateEphemeralDb(office, null);
+  const {catalog}=await readModelCatalog(remoteConfig);
+  if(parsed.data.routingMode==="FREE_MULTI_MODEL"&&(!catalog||catalog.lease))return {error:"Remote routing evidence is unavailable or in use. Try again after the worker finishes."};
+  const db = hydrateEphemeralDb(office, null,catalog);
 
   const { project } = createProjectWithIdea(db, {
     title: parsed.data.title,
     rawIdeaText: parsed.data.ideaText,
     ownerId: REMOTE_SYNTHETIC_OWNER_ID,
     provider: "simulated",
+    routingMode:parsed.data.routingMode,
     aiPolicyMode: "LOCAL_ONLY",
     monthlyBudgetCapUsd: null,
   });
@@ -86,8 +88,15 @@ export async function createRemoteProjectAction(_prevState: CreateRemoteProjectS
     return { error: "The project was created, but automatic planning failed." };
   }
 
+  if(parsed.data.routingMode==="FREE_MULTI_MODEL") {
+    for(const task of db.prepare("SELECT roleId,title FROM tasks WHERE projectId=?").all(project.id) as Array<{roleId:string;title:string}>){
+      const required=requiredCapabilitiesForTask(task.roleId,task.title);
+      if(!selectFreeModel(db,{capability:required[0]!,requiredCapabilities:required}))return {error:`No eligible qualified free model for ${task.roleId}; no remote project was saved or dispatched.`};
+    }
+  }
+
   const bundle = flushProjectBundle(db, project.id);
-  const newOffice = flushOfficeState(db);
+
 
   await writeProjectBundle(remoteConfig, bundle, null);
 
@@ -99,8 +108,8 @@ export async function createRemoteProjectAction(_prevState: CreateRemoteProjectS
   // current index and re-append on conflict rather than silently
   // overwriting (or losing) a concurrently-created entry.
   for (let attempt = 1; attempt <= MAX_WRITE_ATTEMPTS; attempt++) {
-    const existingIndex = await readProjectsIndex(remoteConfig);
     const indexFile = await gh.getFile("state/projects-index.json");
+    const existingIndex = indexFile?JSON.parse(indexFile.content).projects:[];
     existingIndex.push({ id: project.id, title: project.title, status: project.status, updatedAt: new Date().toISOString() });
     try {
       await gh.putFile("state/projects-index.json", JSON.stringify({ projects: existingIndex, updatedAt: new Date().toISOString() }, null, 2) + "\n", {
@@ -119,19 +128,7 @@ export async function createRemoteProjectAction(_prevState: CreateRemoteProjectS
     }
   }
 
-  for (let attempt = 1; attempt <= MAX_WRITE_ATTEMPTS; attempt++) {
-    const officeRes = await readOfficeState(remoteConfig);
-    try {
-      await writeOfficeState(remoteConfig, newOffice, officeRes.sha);
-      break;
-    } catch (error) {
-      if (error instanceof GitHubContentConflictError && attempt < MAX_WRITE_ATTEMPTS) continue;
-      // office.json didn't actually change in a way that matters here
-      // (this action never modifies office-wide budget/status) unless a
-      // concurrent request did — safe to proceed without it.
-      break;
-    }
-  }
+  // Creation does not mutate office state; never overwrite a concurrent owner change.
 
   // Dispatch the first worker run — the project is now QUEUED to run in
   // the background; this request returns immediately after, per the

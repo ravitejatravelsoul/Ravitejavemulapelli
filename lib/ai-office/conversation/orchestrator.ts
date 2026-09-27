@@ -57,8 +57,7 @@ export async function converse(db:DatabaseSync, scope:ConversationScope, input:{
   if(intent==="CREATE_PROJECT") {
     const idea=text.replace(/^(?:please )?(?:create|build|start|make)\s+(?:a\s+)?(?:project\s*:?\s*)?/i,"");
     if(idea.length<10) reply.message="Describe the project goal and requirements in a sentence.";
-    else if(input.mode==="remote") reply.message="Remote project creation currently supports simulated execution only. A real free-model project requires local execution; no project was created.";
-    else pending({kind:"CREATE_PROJECT",title:idea.slice(0,80),idea,mode:input.mode},`Create “${idea.slice(0,80)}”. Goal and requirements: ${idea}. Execution: local background runner. Policy: FREE_MULTI_MODEL, LOCAL_ONLY, no paid fallback.`);
+    else pending({kind:"CREATE_PROJECT",title:idea.slice(0,80),idea,mode:input.mode},`Create “${idea.slice(0,80)}”. Goal and requirements: ${idea}. Execution: ${input.mode==="remote"?"remote GitHub Actions worker":"local background runner"}. Policy: FREE_MULTI_MODEL, LOCAL_ONLY, no paid fallback.`);
   } else if(intent==="PROJECT_CONTROL") {
     if(!project) reply.message="Select the project you want to control.";
     else if(/^cancel\b/.test(q)) reply.message="Cancellation is not supported here. No project state changed.";

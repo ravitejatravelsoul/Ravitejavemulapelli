@@ -8,6 +8,7 @@ import { getOrCreateOfficeBudgetRecord, updateOfficeBudgetCap, startOfCurrentMon
 import { restoreProjectBundle, type ProjectBundle } from "./project-bundle.ts";
 import { readOfficeState, readProjectBundle, remoteClientFromEnv, seedSyntheticOwner, type RemoteRuntimeConfig } from "./remote-state-store.ts";
 import { GitHubClient } from "./github-client.ts";
+import { readModelCatalog, hydrateModelCatalog } from "./model-catalog.ts";
 
 /**
  * Read-only multi-project hydration for the Remote Mode dashboard —
@@ -60,6 +61,8 @@ export async function hydrateAllRemoteProjects(config?: RemoteRuntimeConfig): Pr
   runMigrations(db);
   seedAgentRoles(db);
   seedSyntheticOwner(db);
+  const {catalog}=await readModelCatalog(remoteConfig);
+  if(catalog)hydrateModelCatalog(db,catalog);
 
   setOfficeStatus(db, { state: office.state, changedBy: office.changedBy, reason: office.reason });
   const periodStart = startOfCurrentMonthUtc();

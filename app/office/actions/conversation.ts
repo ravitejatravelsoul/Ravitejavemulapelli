@@ -13,6 +13,9 @@ import { approveApprovalAction, rejectApprovalAction } from "./approvals";
 import { sealMemory, restoreMemory } from "@/lib/ai-office/conversation/remote-memory";
 import { confirmedRemoteTransition } from "@/lib/ai-office/conversation/remote-actions";
 import { withRemoteProjectMutation } from "@/lib/ai-office/remote/remote-state-store";
+import { remoteClientFromEnv } from "@/lib/ai-office/remote/remote-state-store";
+import { acquireModelCatalog, commitModelCatalog, hydrateModelCatalog } from "@/lib/ai-office/remote/model-catalog";
+import { classifyConversation } from "@/lib/ai-office/conversation/intent";
 
 const requestSchema=z.object({text:z.string().trim().min(1).max(4000),roleId:z.string().max(80),projectId:z.string().uuid().nullable(),conversationId:z.string().uuid().optional(),memoryToken:z.string().max(40000).optional()});
 export async function conversationWorkspaceAction(projectId:unknown) {
@@ -59,7 +62,13 @@ export async function sendConversationAction(raw:unknown) {
       if(!parsed.data.memoryToken) return {error:"Start a new conversation."};
       await restoreMemory(ctx.db,ctx.scope,parsed.data.conversationId,parsed.data.memoryToken);
     }
-    const reply=await converse(ctx.db,ctx.scope,{...parsed.data,mode:ctx.mode});
+    const needsModel=["EXPLANATION","REASONING","CODING_QUESTION","QA_QUESTION","SECURITY_QUESTION","GENERAL_CONVERSATION"].includes(classifyConversation(parsed.data.text));
+    const config=ctx.mode==="remote"&&needsModel?remoteClientFromEnv():null;
+    const held=config?await acquireModelCatalog(config):null;
+    if(held)hydrateModelCatalog(ctx.db,held.catalog,true);
+    let reply;
+    try {reply=await converse(ctx.db,ctx.scope,{...parsed.data,mode:ctx.mode});}
+    finally {if(config&&held)await commitModelCatalog(config,held,ctx.db);}
     if(ctx.mode==="remote")reply.memoryToken=await sealMemory(ctx.db,ctx.scope,reply.conversationId);
     return {reply};
   } catch {return {error:"Conversation unavailable. Check your session and project selection, then try again."};}
@@ -90,7 +99,6 @@ export async function confirmConversationAction(raw:unknown):Promise<{error?:str
     const action=consume(db,row,parsed.data.token);
     if(!action) return {error:"Confirmation expired or already used. Ask again."};
     if(action.kind==="CREATE_PROJECT") {
-      if(mode!=="local")return {error:"Real free-model creation is local-only."};
       const form=new FormData();form.set("title",action.title);form.set("ideaText",action.idea);form.set("routingMode","FREE_MULTI_MODEL");form.set("aiPolicyMode","LOCAL_ONLY");form.set("provider","simulated");
       return await createProjectAction(undefined,form,true);
     }

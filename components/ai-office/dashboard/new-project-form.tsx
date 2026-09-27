@@ -93,10 +93,14 @@ export function NewProjectForm({ remoteMode = false }: { remoteMode?: boolean })
         </div>
 
         {remoteMode ? (
-          <p className="rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-            Remote projects always run SIMULATED (deterministic, $0 cost) and execute in the background via GitHub Actions — Ollama and Claude
-            require a local machine and are not available in Remote Mode.
-          </p>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="remote-routing">Remote execution</Label>
+            <select id="remote-routing" name="routingMode" defaultValue="STANDARD" className="rounded-lg border p-2">
+              <option value="STANDARD">Simulated — deterministic testing</option>
+              <option value="FREE_MULTI_MODEL">Real qualified free models</option>
+            </select>
+            <p className="text-xs text-muted-foreground">GitHub Actions continues after you close the browser. Real execution requires qualified, eligible free models. Claude and paid fallback are disabled.</p>
+          </div>
         ) : (
           <>
             <div className="flex flex-col gap-1.5">

@@ -18,6 +18,9 @@ import {
 } from "../lib/ai-office/remote/remote-state-store.ts";
 import { downloadWorkspace, uploadWorkspace } from "../lib/ai-office/remote/remote-workspace-sync.ts";
 import { GitHubClient } from "../lib/ai-office/remote/github-client.ts";
+import { acquireModelCatalog, commitModelCatalog } from "../lib/ai-office/remote/model-catalog.ts";
+import { restoreProviderTokenWindows } from "../lib/ai-office/agents/agent-runner.ts";
+import type { DatabaseSync } from "node:sqlite";
 
 /**
  * Teja's AI Office — Remote Mode's GitHub Actions worker entry point.
@@ -60,6 +63,7 @@ function log(message: string): void {
 }
 
 async function main(): Promise<void> {
+  process.env.AI_OFFICE_CLAUDE_ENABLED="false";
   const projectId = requireEnv("AI_OFFICE_REMOTE_PROJECT_ID");
   const remoteConfig = remoteClientFromEnv();
   const runnerId = process.env.AI_OFFICE_REMOTE_RUN_ID || `manual-${randomUUID()}`;
@@ -78,6 +82,12 @@ async function main(): Promise<void> {
     return;
   }
 
+  const project=bundle.tables.projects?.[0];
+  const free=project?.routingMode==="FREE_MULTI_MODEL";
+  if(!free&&(project?.provider!=="simulated"||project?.aiMode!=="SIMULATED"))throw new Error("Remote worker permits only simulated or FREE_MULTI_MODEL execution");
+  const held=free?await acquireModelCatalog(remoteConfig):null;
+  let db:DatabaseSync|undefined;
+
   const localWorkspaceRoot = mkdtempSync(join(tmpdir(), "ai-office-remote-workspace-"));
   process.env.AI_OFFICE_WORKSPACES_ROOT = localWorkspaceRoot;
 
@@ -86,7 +96,8 @@ async function main(): Promise<void> {
     await downloadWorkspace(remoteConfig, projectId);
 
     log("hydrating ephemeral database...");
-    const db = hydrateEphemeralDb(office, bundle);
+    db = hydrateEphemeralDb(office, bundle,held?.catalog);
+    if(held)restoreProviderTokenWindows(held.catalog.tokenWindows);
 
     log("running one bounded cycle...");
     const outcome = await runOneCycle(db, runnerId);
@@ -145,6 +156,10 @@ async function main(): Promise<void> {
     await gh.dispatchWorkflow(workflowFile, { projectId, taskId: "", runId: randomUUID(), action: "continue" });
     log("follow-up run dispatched.");
   } finally {
+    // Persist real outcomes even if workspace/project persistence failed. CAS conflicts
+    // deliberately leave the lease for inspection instead of discarding failures.
+    if(held&&db)await commitModelCatalog(remoteConfig,held,db);
+    db?.close();
     rmSync(localWorkspaceRoot, { recursive: true, force: true, maxRetries: 3 });
   }
 }

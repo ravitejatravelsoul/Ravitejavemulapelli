@@ -7,6 +7,7 @@ import { getOfficeStatus, setOfficeStatus, type OfficeState } from "../domain/of
 import { getOrCreateOfficeBudgetRecord, updateOfficeBudgetCap, startOfCurrentMonthUtc } from "../domain/budget.ts";
 import { dumpProjectBundle, restoreProjectBundle, type ProjectBundle } from "./project-bundle.ts";
 import { GitHubClient, GitHubContentConflictError } from "./github-client.ts";
+import { hydrateModelCatalog, type RemoteModelCatalog } from "./model-catalog.ts";
 
 /**
  * The hydrate/flush boundary described in teja-ai-office-runtime's
@@ -66,7 +67,7 @@ export function seedSyntheticOwner(db: DatabaseSync): void {
  * project's own bundle restored on top. `bundle` is `null` only when
  * hydrating for a brand-new project that doesn't exist yet.
  */
-export function hydrateEphemeralDb(office: OfficeRemoteState, bundle: ProjectBundle | null): DatabaseSync {
+export function hydrateEphemeralDb(office: OfficeRemoteState, bundle: ProjectBundle | null, catalog?: RemoteModelCatalog | null): DatabaseSync {
   const db = openDatabase(":memory:");
   runMigrations(db);
   seedAgentRoles(db);
@@ -79,6 +80,7 @@ export function hydrateEphemeralDb(office: OfficeRemoteState, bundle: ProjectBun
   updateOfficeBudgetCap(db, periodStart, { capUsd: office.officeBudget.capUsd, warnAtPercent: office.officeBudget.warnAtPercent });
 
   if (bundle) restoreProjectBundle(db, bundle);
+  if (catalog) hydrateModelCatalog(db, catalog);
 
   return db;
 }

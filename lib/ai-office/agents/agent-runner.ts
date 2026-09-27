@@ -259,6 +259,13 @@ const FREE_REQUEST_FIT_RATIO = 0.85;
 const MAX_TOKEN_WINDOW_WAIT_MS = 65_000;
 
 interface ProviderTokenBudget { limit?: number; remaining?: number; resetAt?: number }
+export function exportProviderTokenWindows():Array<{key:string;limit?:number;remaining?:number;resetAt?:number}> {
+  return [...providerTokenBudgets].map(([key,value])=>({key,...value}));
+}
+export function restoreProviderTokenWindows(rows:Array<{key:string;limit?:number;remaining?:number;resetAt?:number}>):void {
+  providerTokenBudgets.clear();
+  for(const {key,...value} of rows)providerTokenBudgets.set(key,value);
+}
 /** Last provider-reported token window per route (from `x-ratelimit-*` headers) — process-local and advisory only: it lets the runner avoid sending a request the provider has just said it cannot admit, and is never a substitute for handling a real 429/413. */
 const providerTokenBudgets = new Map<string, ProviderTokenBudget>();
 
