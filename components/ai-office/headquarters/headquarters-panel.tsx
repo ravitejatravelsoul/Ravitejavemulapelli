@@ -21,12 +21,15 @@ import {
   pauseProjectAction,
   resumeProjectAction,
 } from "@/app/office/actions/projects";
-import { NewProjectForm } from "../dashboard/new-project-form";
+import { ConversationPanel } from "../assistant/conversation-panel";
+import { logout } from "@/app/office/actions/auth";
+import { conversationWorkspaceAction } from "@/app/office/actions/conversation";
+import { FileBrowser, type WorkspaceFileEntry } from "../workspace/file-browser";
 import styles from "./headquarters-panel.module.css";
 const money = (n: number | null) =>
   n === null ? "Not recorded" : "$" + n.toFixed(4);
 export function HeadquartersPanel({
-  id,
+  id: initialId,
   state,
   close,
   refresh,
@@ -44,6 +47,8 @@ export function HeadquartersPanel({
   asOf: number;
   speech: ReturnType<typeof useOfficeSpeech>;
 }) {
+  const [id, setId] = useState(initialId);
+  const [workspaceFiles,setWorkspaceFiles]=useState<{projectId:string;files:WorkspaceFileEntry[]}|null>(null);
   const { focus } = speech;
   useEffect(() => {
     focus(id);
@@ -113,6 +118,18 @@ export function HeadquartersPanel({
         TEJA / OWNER · {stale ? "STALE SNAPSHOT" : "PERSISTED OFFICE STATE"}
       </p>
       <h2>{title}</h2>
+      <nav aria-label="Headquarters operations">
+        <button onClick={() => setId("terminal:owner")}>Owner Command</button>
+        <button onClick={() => setId("terminal:command")}>Active Projects</button>
+        <button onClick={() => setId("terminal:models")}>Models</button>
+        <button onClick={() => setId("terminal:delivery")}>Deliveries</button>
+        <button disabled={!pid} onClick={async()=>{if(pid){const result=await conversationWorkspaceAction(pid);setWorkspaceFiles({projectId:pid,files:result.files});}}}>Workspaces</button>
+        <label>Talk to agent <select aria-label="Conversation agent" value={agent?.roleId ?? "orchestrator"} onChange={e=>setId(e.target.value)}>{state.agents.map(a=><option key={a.roleId} value={a.roleId}>{a.name}</option>)}</select></label>
+      </nav>
+      {workspaceFiles && workspaceFiles.projectId === pid && <section><h3>Selected project workspace</h3><button onClick={()=>setWorkspaceFiles(null)}>Close files</button><FileBrowser files={workspaceFiles!.files}/></section>}
+      {(agent || id === "terminal:command" || id === "terminal:owner") && (
+        <ConversationPanel key={`${pid ?? "office"}:${id}`} roleId={agent?.roleId ?? "orchestrator"} projectId={pid ?? null} speech={speech} onNavigate={setId} onProject={(projectId) => { selectProject(projectId); refresh(); }} />
+      )}
       {agent && (
         <>
           <p
@@ -308,7 +325,7 @@ export function HeadquartersPanel({
             Start New Project
           </button>
           {newProject && (
-            <NewProjectForm remoteMode={state.mode === "remote"} />
+            <p>Type or speak “Create …” in the conversation above. Review the goal, execution mode and free-model policy, then confirm.</p>
           )}
           <h3>Company roster</h3>
           {state.agents.map((a) => (
@@ -335,6 +352,17 @@ export function HeadquartersPanel({
       )}
       {id === "terminal:owner" && (
         <>
+          <h3>Owner Command Center</h3>
+          <p>Create a new project by typing or speaking “Create …” above, then review and confirm its requirements.</p>
+          <nav aria-label="Owner operations">
+            <Link href="/office/local-models">Models</Link>{" · "}
+            <Link href={base + "?tab=workspace"}>Workspaces</Link>{" · "}
+            <Link href="/office/classic">Classic Office</Link>
+          </nav>
+          <p>Office Status: {state.office.state} · {state.office.runner}. Ask “Pause this project” or “Resume it” above.</p>
+          <h3>Deliveries</h3>
+          {state.deliveries.map(d => <p key={d.id}>{d.title}: {d.status}</p>)}
+          <form action={logout}><button>Sign Out</button></form>
           <p>
             {greeting(new Date(asOf).getHours())} Office is {state.office.state}
             . {state.office.activeProjects} projects are active.

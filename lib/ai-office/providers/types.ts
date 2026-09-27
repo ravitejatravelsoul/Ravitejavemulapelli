@@ -88,6 +88,8 @@ export interface RemediationContext {
 }
 
 export interface AgentTaskInput {
+  /** Read-only conversations reuse transports/schema but never task-execution instructions. */
+  purpose?: "conversation";
   role: AgentRoleId;
   task: TaskContext;
   instructions: string;

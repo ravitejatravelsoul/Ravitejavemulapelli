@@ -130,8 +130,7 @@ export class OfficeSpeechController {
     if (!this.enabled || !this.unlocked || !briefing.text.trim()) return false;
     if (
       this.view.briefing?.priority === 2 &&
-      briefing.priority === 1 &&
-      this.view.briefing.role === briefing.role
+      briefing.priority === 1
     )
       return false;
     this.stop();

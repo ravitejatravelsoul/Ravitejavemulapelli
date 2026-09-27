@@ -81,7 +81,7 @@ export function useOfficeSpeech() {
     }
   }, [enabled]);
   const speak = useCallback(
-    (briefing: SpeechBriefing) => controller.current?.speak(briefing),
+    (briefing: SpeechBriefing) => intentional.current && briefing.priority === 1 ? false : controller.current?.speak(briefing),
     [],
   );
   const stop = useCallback(() => controller.current?.stop(), []);
