@@ -71,7 +71,8 @@ export interface IntentConsistencyInput {
 const DEFAULT_BASE_URL = "http://127.0.0.1:11434";
 const DEFAULT_MODEL = "gemma4:latest";
 const DEFAULT_TIMEOUT_MS = 60_000;
-const MAX_CANDIDATE_CHARS = 32000;
+/** Exported so the free-router verifier path (agent-runner.ts) bounds its own context identically — one shared limit, not two independently-chosen ones. */
+export const MAX_CANDIDATE_CHARS = 32000;
 
 /**
  * Bounded, in-process immediate retries for a transient infrastructure
@@ -85,7 +86,8 @@ const MAX_CANDIDATE_CHARS = 32000;
  */
 const MAX_INTERNAL_RETRIES = 2;
 
-function buildCheckPrompt(authoritativeUserRequest: string, candidate: string): string {
+/** Exported so a non-Ollama verifier route (agent-runner.ts's remote-mode-aware QA intent-verification gate) can ask a free-router-selected model the exact same question, in the exact same words, as this Ollama-only path — one verification contract, two transports. */
+export function buildCheckPrompt(authoritativeUserRequest: string, candidate: string): string {
   return [
     "You are a strict but fair reviewer checking whether a project deliverable actually serves what its owner asked for.",
     "",

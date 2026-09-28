@@ -74,20 +74,27 @@ function validOutput(role: string, devFiles: Record<string, string>) {
   };
 }
 
+/** The remote-safe QA intent-verification gate (agent-runner.ts's `checkDeliverableIntentConsistency`) makes its own real free-model call, tagged with this task-title marker — see `structured-output-contract.ts`'s prompt builder, which always renders `task.taskTitle` into the prompt. Indistinguishable from a normal role call by `role` alone (it reuses the calling agent_run's own roleId, e.g. "qa-agent"), so it must be recognized by this marker instead. */
+const INTENT_VERIFICATION_MARKER = "Intent verification —";
+
 function makeFetch(ctx: Ctx): typeof fetch {
   const counts = new Map<string, number>();
   return (async (url: string, init: RequestInit) => {
     ctx.hosts.add(new URL(url).host);
     const body = JSON.parse(String(init.body));
     const prompt: string = body.messages[0].content;
-    const role = /You are the "([a-z-]+)" role/.exec(prompt)?.[1] ?? "unknown";
+    const isIntentVerification = prompt.includes(INTENT_VERIFICATION_MARKER);
+    const role = isIntentVerification ? "intent-verifier" : (/You are the "([a-z-]+)" role/.exec(prompt)?.[1] ?? "unknown");
     const key = `${body.model}|${role}`;
     const n = (counts.get(key) ?? 0) + 1;
     counts.set(key, n);
     const req = { model: body.model as string, role, prompt, corrective: prompt.includes("CORRECTIVE ATTEMPT"), status: 200, n };
     const scripted = ctx.script?.(req);
+    const output = isIntentVerification
+      ? { summary: JSON.stringify({ consistent: true, reason: "The built page matches the request." }), artifacts: [], decisions: [], testResults: [], events: [], fileOperations: [], recommendedNextActions: [] }
+      : validOutput(role, ctx.devFiles(req.corrective));
     const res = scripted ?? json(200, {
-      choices: [{ finish_reason: "stop", message: { content: JSON.stringify(validOutput(role, ctx.devFiles(req.corrective))) } }],
+      choices: [{ finish_reason: "stop", message: { content: JSON.stringify(output) } }],
       usage: { prompt_tokens: Math.ceil(prompt.length / 4), completion_tokens: 200 },
     });
     ctx.seen.push({ ...req, status: res.status });
