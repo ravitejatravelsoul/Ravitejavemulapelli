@@ -7,3 +7,6 @@
 .turns {max-height:260px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;}
 .turns p {padding:10px;background:#17374770;border-radius:8px;}
 .confirm {border-left:3px solid #edc97b;padding:10px;background:#4c422950;}
+.confirm ul {margin:6px 0;padding-left:20px;}
+.hint {border-left:3px solid #6ecbd8;padding:10px;background:#0e2b3550;border-radius:6px;}
+.created {border-left:3px solid #7bd88f;padding:10px;background:#1c3a2650;margin-top:8px;}

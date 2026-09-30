@@ -23,6 +23,7 @@ const eslintConfig = defineConfig([
     ".next-e2e-world/**",
     ".next-e2e-hq/**",
     ".next-e2e-conversation/**",
+    ".next-e2e-assign/**",
     ".data/**", // Local databases, generated workspaces and private pilot evidence.
   ]),
 ]);

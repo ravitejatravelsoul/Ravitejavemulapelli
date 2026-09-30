@@ -8,6 +8,7 @@ import { buildTaskContext } from "../agents/context-builder.ts";
 import { getAIHeadquartersWorldState, safeWorldText } from "../headquarters/world-state.ts";
 import { agentBriefing } from "../headquarters/presentation.ts";
 import { classifyConversation } from "./intent.ts";
+import { selectRoles } from "../orchestrator/role-selection.ts";
 import { conversation, saveTurn, propose, type ConversationScope } from "./memory.ts";
 import { answerWithFreeModel, conversationCapability, conversationInput } from "./model.ts";
 import type { ConversationReply, ConversationAction } from "./types.ts";
@@ -57,7 +58,23 @@ export async function converse(db:DatabaseSync, scope:ConversationScope, input:{
   if(intent==="CREATE_PROJECT") {
     const idea=text.replace(/^(?:please )?(?:create|build|start|make)\s+(?:a\s+)?(?:project\s*:?\s*)?/i,"");
     if(idea.length<10) reply.message="Describe the project goal and requirements in a sentence.";
-    else pending({kind:"CREATE_PROJECT",title:idea.slice(0,80),idea,mode:input.mode},`Create “${idea.slice(0,80)}”. Goal and requirements: ${idea}. Execution: ${input.mode==="remote"?"remote GitHub Actions worker":"local background runner"}. Policy: FREE_MULTI_MODEL, LOCAL_ONLY, no paid fallback.`);
+    else {
+      // Read-only, deterministic and zero-cost — the same classifier planProject()
+      // itself uses, so "expected workflow" in the confirmation is a real
+      // preview of what will actually be planned, never a guess.
+      const expectedRoles=selectRoles(idea).roles.map(roleId=>getAgentRole(db,roleId)?.name??roleId);
+      const summary=[
+        `Goal: ${idea}`,
+        `Execution mode: ${input.mode==="remote"?"Remote — GitHub Actions runs it in the background; you can close the browser.":"Local — the background runner on this machine executes it."}`,
+        `Routing mode: FREE_MULTI_MODEL — each task routes to a currently qualified, healthy free model.`,
+        expectedRoles.length?`Expected workflow: ${expectedRoles.join(" → ")}.`:"",
+        `Policy: free models only. Claude and paid fallback are disabled.`,
+      // " · ", never "\n" — safeWorldText() below strips control characters
+      // (including newlines) from every reply, so a literal newline
+      // separator would silently collapse into a single space anyway.
+      ].filter(Boolean).join(" · ");
+      pending({kind:"CREATE_PROJECT",title:idea.slice(0,80),idea,mode:input.mode},summary);
+    }
   } else if(intent==="PROJECT_CONTROL") {
     if(!project) reply.message="Select the project you want to control.";
     else if(/^cancel\b/.test(q)) reply.message="Cancellation is not supported here. No project state changed.";

@@ -196,3 +196,10 @@
 .voiceControls small {
   width: 100%;
 }
+.assignHint {
+  border-left: 3px solid #6ecbd8;
+  background: #0e2b3550;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 8px 0;
+}

@@ -40,3 +40,38 @@ test("429 records cooldown and bounded free fallback, never raw error text",asyn
 test("provider failure stops after two candidates; deterministic queries remain available",async()=>{const t=fixture();try{qualifiedGroq(t,["chat-a","chat-b","chat-c"]);let calls=0;const fetchImpl:typeof fetch=async()=>{calls++;throw Error("unsafe failure");};const r=await converse(t.db,t.scope,{text:"Explain the design",mode:"local"},{fetchImpl});assert.equal(calls,2);assert.equal(r.source,"unavailable");assert.ok(!r.message.includes("unsafe"));await converse(t.db,t.scope,{text:"Status",mode:"local"},{fetchImpl});assert.equal(calls,2);}finally{t.close();}});
 test("model generated actions are rejected and never applied",async()=>{const t=fixture();try{qualifiedGroq(t,["chat-a"]);const result=await answerWithFreeModel(t.db,conversationInput("orchestrator","Explain"),"REASONING",{fetchImpl:async()=>new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({summary:"Created a file",fileOperations:[{kind:"file-operation",action:"write",path:"index.html",content:"unsafe"}]})}}]}),{status:200})});assert.equal(result,null);assert.equal(t.db.prepare("SELECT COUNT(*) n FROM projects").get()!.n,1);}finally{t.close();}});
 test("unconfirmed account and oversized context make zero requests",async()=>{const t=fixture();try{qualifiedGroq(t);process.env.AI_OFFICE_GROQ_FREE_TIER_CONFIRMED="false";let calls=0;const fetchImpl:typeof fetch=async()=>{calls++;throw Error();};assert.equal(await answerWithFreeModel(t.db,conversationInput("orchestrator","hello"),"REASONING",{fetchImpl}),null);process.env.AI_OFFICE_GROQ_FREE_TIER_CONFIRMED="true";assert.equal(await answerWithFreeModel(t.db,conversationInput("orchestrator","x".repeat(40000)),"REASONING",{fetchImpl}),null);assert.equal(calls,0);}finally{t.close();}});
+
+// Headquarters "Assign New Project" phase — the confirmation summary the
+// Boss reviews before anything runs, for both execution modes, using the
+// EXISTING createProjectAction/createRemoteProjectAction path once
+// confirmed (never a second execution system).
+test("CREATE_PROJECT confirmation summary is offered in BOTH local and remote mode, names the real expected workflow, and creates nothing before confirmation", async () => {
+  const t = createTestDb();
+  try {
+    const ownerId = getOwner(t.db)!.id;
+    const idea = "Create a new project to build a Task Tracker with add, complete, delete and localStorage persistence.";
+    const before = t.db.prepare("SELECT COUNT(*) n FROM projects").get()!.n as number;
+    for (const mode of ["local", "remote"] as const) {
+      const scope = { ownerId, sessionId: `login-${mode}`, projectId: null, roleId: "orchestrator" };
+      const r = await converse(t.db, scope, { text: idea, mode });
+      assert.equal(r.pending?.action.kind, "CREATE_PROJECT", mode);
+      assert.equal((r.pending!.action as { mode: string }).mode, mode);
+      assert.match(r.message, /Goal:.*Task Tracker/i, mode);
+      assert.match(r.message, mode === "remote" ? /Execution mode: Remote/ : /Execution mode: Local/, mode);
+      assert.match(r.message, /Routing mode: FREE_MULTI_MODEL/, mode);
+      assert.match(r.message, /Expected workflow: .*Product Owner/, mode);
+      assert.match(r.message, /Claude and paid fallback are disabled/, mode);
+      assert.match(r.message, /Confirm to proceed\.$/, mode);
+    }
+    assert.equal(t.db.prepare("SELECT COUNT(*) n FROM projects").get()!.n, before, "no project exists until a confirmation is actually consumed");
+  } finally { t.close(); }
+});
+
+test("an ordinary status question is never misread as project creation", async () => {
+  const t = fixture();
+  try {
+    const r = await converse(t.db, t.scope, { text: "What is the office status right now?", mode: "local" });
+    assert.equal(r.pending, undefined);
+    assert.notEqual(r.intent, "CREATE_PROJECT");
+  } finally { t.close(); }
+});

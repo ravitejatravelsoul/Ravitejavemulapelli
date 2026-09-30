@@ -127,6 +127,11 @@ export function HeadquartersPanel({
         <label>Talk to agent <select aria-label="Conversation agent" value={agent?.roleId ?? "orchestrator"} onChange={e=>setId(e.target.value)}>{state.agents.map(a=><option key={a.roleId} value={a.roleId}>{a.name}</option>)}</select></label>
       </nav>
       {workspaceFiles && workspaceFiles.projectId === pid && <section><h3>Selected project workspace</h3><button onClick={()=>setWorkspaceFiles(null)}>Close files</button><FileBrowser files={workspaceFiles!.files}/></section>}
+      {agent?.roleId === "orchestrator" && (
+        <p className={styles.assignHint}>
+          This is where you assign work to your AI Office. Type or speak your idea below, review the confirmation, then confirm to start it.
+        </p>
+      )}
       {(agent || id === "terminal:command" || id === "terminal:owner") && (
         <ConversationPanel key={`${pid ?? "office"}:${id}`} roleId={agent?.roleId ?? "orchestrator"} projectId={pid ?? null} speech={speech} onNavigate={setId} onProject={(projectId) => { selectProject(projectId); refresh(); }} />
       )}
