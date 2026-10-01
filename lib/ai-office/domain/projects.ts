@@ -35,6 +35,20 @@ export type AiPolicyMode = "LOCAL_ONLY" | "HYBRID" | "CLAUDE_ONLY";
 
 export type RoutingMode = "STANDARD" | "FREE_MULTI_MODEL";
 
+/**
+ * The one place that decides whether a persisted project's routing mode
+ * actually matches what was explicitly requested — called immediately
+ * before any remote bundle write or workflow dispatch
+ * (app/office/actions/remote-projects.ts), reading back the value
+ * actually written to the database rather than trusting the request.
+ * Never widens what counts as a match, and a project that never asked
+ * for FREE_MULTI_MODEL always passes trivially — an intentional
+ * STANDARD/simulated project is completely unaffected.
+ */
+export function routingModeHonored(requested: RoutingMode, persisted: RoutingMode): boolean {
+  return requested !== "FREE_MULTI_MODEL" || persisted === "FREE_MULTI_MODEL";
+}
+
 /** Legacy inputs remain readable; an explicit routing mode takes precedence. */
 export function isFreeRouting(project: { routingMode?: RoutingMode; freeModelOrchestration?: number }): boolean {
   return project.routingMode ? project.routingMode === "FREE_MULTI_MODEL" : project.freeModelOrchestration === 1;

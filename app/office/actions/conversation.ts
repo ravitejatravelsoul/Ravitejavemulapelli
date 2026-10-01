@@ -86,7 +86,7 @@ export async function clearConversationAction(raw:unknown) {
     return {ok:true};
   } catch {return {error:"Conversation unavailable."};}
 }
-export async function confirmConversationAction(raw:unknown):Promise<{error?:string;projectId?:string}> {
+export async function confirmConversationAction(raw:unknown):Promise<{error?:string;projectId?:string;routingMode?:"STANDARD"|"FREE_MULTI_MODEL"}> {
   const parsed=requestSchema.omit({text:true}).extend({conversationId:z.string().uuid(),token:z.string().uuid()}).safeParse(raw);
   if(!parsed.success) return {error:"Invalid confirmation."};
   try {
@@ -100,7 +100,20 @@ export async function confirmConversationAction(raw:unknown):Promise<{error?:str
     if(!action) return {error:"Confirmation expired or already used. Ask again."};
     if(action.kind==="CREATE_PROJECT") {
       const form=new FormData();form.set("title",action.title);form.set("ideaText",action.idea);form.set("routingMode","FREE_MULTI_MODEL");form.set("aiPolicyMode","LOCAL_ONLY");form.set("provider","simulated");
-      return await createProjectAction(undefined,form,true);
+      const result=await createProjectAction(undefined,form,true);
+      // Belt-and-suspenders: the Headquarters "Assign New Project" flow
+      // always requests FREE_MULTI_MODEL for a remote project. Never
+      // report success on a routing mismatch — createRemoteProjectAction
+      // already fails closed before any bundle write/dispatch; this is a
+      // second, independent check against whatever it actually returned,
+      // so a confirmation can never be shown as "started" on anything
+      // other than the routing mode Boss explicitly reviewed and
+      // confirmed. Never fires for a local-mode confirmation (no
+      // routingMode is requested or returned there).
+      if(action.mode==="remote" && result.projectId && result.routingMode!=="FREE_MULTI_MODEL") {
+        return {error:`Routing mismatch: FREE_MULTI_MODEL was requested but the persisted project shows "${result.routingMode??"unknown"}". Not reporting this as started — contact the administrator.`};
+      }
+      return result;
     }
     if(action.projectId!==scope.projectId) return {error:"Project context changed. Ask again."};
     if(mode==="remote") {

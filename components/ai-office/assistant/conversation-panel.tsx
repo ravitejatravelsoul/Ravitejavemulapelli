@@ -12,7 +12,7 @@ const ASSIGN_PROJECT_PLACEHOLDER =
 
 export function ConversationPanel({roleId,projectId,speech,onProject,onNavigate}:{roleId:string;projectId:string|null;speech:ReturnType<typeof useOfficeSpeech>;onProject?:(id:string)=>void;onNavigate?:(role:string)=>void}) {
   const [text,setText]=useState(""),[turns,setTurns]=useState<Array<{role:string;text:string}>>([]),[reply,setReply]=useState<ConversationReply|null>(null),[error,setError]=useState("");
-  const [created,setCreated]=useState<{projectId:string;title:string;mode:"local"|"remote"}|null>(null);
+  const [created,setCreated]=useState<{projectId:string;title:string;mode:"local"|"remote";routingMode?:"STANDARD"|"FREE_MULTI_MODEL"}|null>(null);
   const [busy,startTransition]=useTransition();const id=useRef<string|undefined>(undefined),memory=useRef<string|undefined>(undefined),epoch=useRef(0),inFlight=useRef(false);
   const textareaRef=useRef<HTMLTextAreaElement>(null);
   const {speak,stop}=speech;
@@ -48,14 +48,14 @@ export function ConversationPanel({roleId,projectId,speech,onProject,onNavigate}
       <div className={styles.confirm} data-testid="confirm-summary">
         <p>{pendingAction?.kind==="CREATE_PROJECT"?"Review before starting this project:":"Confirm this action:"}</p>
         <ul>{reply.pending.label.split(" · ").map((line,i)=><li key={i}>{line}</li>)}</ul>
-        <button data-testid="confirm-action-button" disabled={busy} onClick={()=>{stop();const action=pendingAction;const token=reply.pending!.token;startTransition(async()=>{const result=await confirmConversationAction({roleId,projectId,conversationId:id.current,token,memoryToken:memory.current});setReply(r=>r?{...r,pending:undefined}:r);if(result.error)setError(result.error);else if(action?.kind==="CREATE_PROJECT" && "projectId" in result && result.projectId){setCreated({projectId:result.projectId,title:action.title,mode:action.mode});setTurns(t=>[...t,{role:roleId,text:`"${action.title}" is starting. Refreshing authoritative Office state.`}]);onProject?.(result.projectId);}else{setTurns(t=>[...t,{role:roleId,text:"Action completed. Refreshing authoritative Office state."}]);if("projectId" in result && result.projectId)onProject?.(result.projectId);}});}}>Confirm action</button>
+        <button data-testid="confirm-action-button" disabled={busy} onClick={()=>{stop();const action=pendingAction;const token=reply.pending!.token;startTransition(async()=>{const result=await confirmConversationAction({roleId,projectId,conversationId:id.current,token,memoryToken:memory.current});setReply(r=>r?{...r,pending:undefined}:r);if(result.error)setError(result.error);else if(action?.kind==="CREATE_PROJECT" && "projectId" in result && result.projectId){setCreated({projectId:result.projectId,title:action.title,mode:action.mode,routingMode:result.routingMode});setTurns(t=>[...t,{role:roleId,text:`"${action.title}" is starting. Refreshing authoritative Office state.`}]);onProject?.(result.projectId);}else{setTurns(t=>[...t,{role:roleId,text:"Action completed. Refreshing authoritative Office state."}]);if("projectId" in result && result.projectId)onProject?.(result.projectId);}});}}>Confirm action</button>
         <button data-testid="cancel-action-button" onClick={reset}>Cancel</button>
       </div>
     )}
     {created && (
       <div className={styles.created} data-testid="project-created-card">
         <p><b>{created.title}</b></p>
-        <p>Project accepted. {created.mode==="remote"?"Dispatching the remote workforce…":"Starting."} · Execution mode: {created.mode==="remote"?"Remote (GitHub Actions)":"Local (background runner)"}</p>
+        <p>Project accepted. {created.mode==="remote"?"Dispatching the remote workforce…":"Starting."} · Execution mode: {created.mode==="remote"?"Remote (GitHub Actions)":"Local (background runner)"}{created.routingMode?` · Routing: ${created.routingMode}`:""}</p>
         <a data-testid="view-project-link" href={`/office/projects/${created.projectId}`}>View Project</a>
       </div>
     )}

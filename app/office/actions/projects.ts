@@ -46,6 +46,8 @@ const DEFAULT_LIVE_PROJECT_BUDGET_CAP_USD = 3.0;
 export interface CreateProjectState {
   error?: string;
   projectId?: string;
+  /** Remote Mode only — the routing mode actually persisted on the created project, read back from the database by createRemoteProjectAction. Absent for a local-mode creation (routing there is decided by the existing local provider/freeModelOrchestration fields, not this). */
+  routingMode?: "STANDARD" | "FREE_MULTI_MODEL";
 }
 
 /**
@@ -64,16 +66,17 @@ export async function createProjectAction(_prevState: CreateProjectState | undef
   if (!session) return { error: "You must be signed in." };
 
   // Remote Mode has no local operational-mode flag, no Ollama/Claude
-  // provider choice (createRemoteProjectAction is deliberately
-  // SIMULATED-only, LOCAL_ONLY policy — see that file's docblock), and
-  // persists to GitHub instead of getAppDatabase(); reusing it here keeps
-  // this the SAME "Start New Project" form/route for both modes rather
-  // than a second remote-only page.
+  // provider choice (createRemoteProjectAction fails closed on its own
+  // FREE_MULTI_MODEL eligibility/invariant checks rather than silently
+  // falling back — see that file), and persists to GitHub instead of
+  // getAppDatabase(); reusing it here keeps this the SAME "Start New
+  // Project" form/route for both modes rather than a second remote-only
+  // page.
   if (isRemoteExecutionMode()) {
     const result = await createRemoteProjectAction(undefined, formData);
     if (result.error) return { error: result.error };
     if (result.projectId) {
-      if (stayInHeadquarters) return { projectId: result.projectId };
+      if (stayInHeadquarters) return { projectId: result.projectId, routingMode: result.routingMode };
       redirect(`/office/projects/${result.projectId}`);
     }
     return { error: "Project creation did not return a project id." };

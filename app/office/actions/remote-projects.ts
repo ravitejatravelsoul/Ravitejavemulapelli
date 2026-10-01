@@ -3,7 +3,7 @@
 import { z } from "zod";
 import { revalidatePath } from "next/cache";
 import { verifySession } from "@/lib/ai-office/auth/dal";
-import { createProjectWithIdea } from "@/lib/ai-office/domain/projects";
+import { createProjectWithIdea, routingModeHonored } from "@/lib/ai-office/domain/projects";
 import { planProject } from "@/lib/ai-office/orchestrator/orchestrator";
 import {
   hydrateEphemeralDb,
@@ -45,6 +45,8 @@ const newRemoteProjectSchema = z.object({
 export interface CreateRemoteProjectState {
   error?: string;
   projectId?: string;
+  /** The routing mode actually persisted on the created project row — read back from the database, never merely echoed from the request. The caller must compare this against what it asked for; never assume the request was honored. */
+  routingMode?: "STANDARD" | "FREE_MULTI_MODEL";
 }
 
 export async function createRemoteProjectAction(_prevState: CreateRemoteProjectState | undefined, formData: FormData): Promise<CreateRemoteProjectState> {
@@ -86,6 +88,17 @@ export async function createRemoteProjectAction(_prevState: CreateRemoteProjectS
     planProject(db, project.id);
   } catch {
     return { error: "The project was created, but automatic planning failed." };
+  }
+
+  // Fail-closed invariant: a project that was explicitly requested as
+  // FREE_MULTI_MODEL must never be persisted, dispatched or reported as
+  // success under any other routing mode — this is checked by reading
+  // the value actually written to `db`, not by trusting the request,
+  // and sits before the bundle is ever written to GitHub or a workflow
+  // is ever dispatched. Never fires for a project that genuinely asked
+  // for STANDARD/simulated execution (that remains fully supported).
+  if (!routingModeHonored(parsed.data.routingMode, project.routingMode)) {
+    return { error: "Internal routing error: FREE_MULTI_MODEL was requested but could not be persisted. No remote project was saved or dispatched." };
   }
 
   if(parsed.data.routingMode==="FREE_MULTI_MODEL") {
@@ -142,5 +155,5 @@ export async function createRemoteProjectAction(_prevState: CreateRemoteProjectS
   });
 
   revalidatePath("/office", "layout");
-  return { projectId: project.id };
+  return { projectId: project.id, routingMode: project.routingMode };
 }
