@@ -131,7 +131,7 @@ async function workflow<T>(opts: { devFiles?: (corrective: boolean) => Record<st
     const execution = () => ({
       freeProviderFetchImpl: fetchImpl,
       // The local deliverable-intent check (a free local model call) is stubbed as "consistent".
-      intentCheckFetch: (async () => ({ ok: true, status: 200, json: async () => ({ response: JSON.stringify({ consistent: true, reason: "ok" }) }) }) as unknown as Response) as unknown as typeof fetch,
+      intentCheckFetch: (async (url: string) => { ctx.hosts.add(new URL(String(url)).host); return { ok: true, status: 200, json: async () => ({ response: JSON.stringify({ consistent: true, reason: "ok" }) }) } as unknown as Response; }) as unknown as typeof fetch,
       retryDriftCheckOverride: async () => ({ consistent: true as const }),
       freeProviderSleepImpl: async () => {},
       claudeClientOverride: { messages: { create: async () => { ctx.paidCalls += 1; throw new Error("paid call forbidden"); } } } as never,
@@ -406,5 +406,12 @@ describe("8. no workflow path can silently enable Claude, use paid fallback, byp
       const dev = requiredCapabilitiesForTask("frontend-developer", "Implement frontend");
       assert.deepEqual(selectFreeModel(h.t.db, { capability: dev[0]!, requiredCapabilities: dev })!.candidates.map((c) => c.modelId), [M20]);
     });
+  });
+});
+
+test("FREE_MULTI_MODEL development intent never reaches localhost", async () => {
+  await workflow({}, async h => {
+    await h.drive();
+    assert.equal([...h.ctx.hosts].some(host => /localhost|127\.0\.0\.1/.test(host)), false, "all intent checkpoints must use qualified free routing");
   });
 });

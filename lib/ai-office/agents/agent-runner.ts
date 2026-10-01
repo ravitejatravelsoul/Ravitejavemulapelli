@@ -671,10 +671,12 @@ async function checkPlanConsistencyBeforeDevelopment(
   authoritativeUserRequest: string,
   planningArtifacts: Array<{ type: string; content: string }>,
   fetchImpl?: typeof fetch,
+  verify?: (input: { authoritativeUserRequest: string; candidate: string; checkpointLabel: string }) => Promise<IntentConsistencyResult>,
 ): Promise<{ consistent: true } | { consistent: false; reason: string }> {
   if (planningArtifacts.length === 0) return { consistent: true };
   const candidate = planningArtifacts.map((a) => `[${a.type}]\n${a.content}`).join("\n\n");
-  const check = await checkIntentConsistency({ authoritativeUserRequest, candidate, checkpointLabel: "planned architecture/UX", fetchImpl });
+  const input = { authoritativeUserRequest, candidate, checkpointLabel: "planned architecture/UX" };
+  const check = verify ? await verify(input) : await checkIntentConsistency({ ...input, fetchImpl });
   return check.outcome === "inconsistent" ? { consistent: false, reason: check.reason } : { consistent: true };
 }
 
@@ -691,6 +693,7 @@ async function checkRetryDriftBeforeMaterialization(
   currentFiles: Array<{ path: string; content: string }>,
   proposedOperations: import("../providers/types.ts").FileOperationPayload[],
   fetchImpl?: typeof fetch,
+  verify?: (input: { authoritativeUserRequest: string; candidate: string; checkpointLabel: string }) => Promise<IntentConsistencyResult>,
 ): Promise<{ consistent: true } | { consistent: false; reason: string }> {
   // Nothing "previous" to drift away from yet — a first real attempt at
   // this task, not a correction of one, so there's no drift risk to
@@ -707,12 +710,12 @@ async function checkRetryDriftBeforeMaterialization(
   ].join("\n");
   const candidate = writeOps.map((op) => `--- ${op.path} ---\n${op.content ?? ""}`).join("\n\n");
 
-  const check = await checkIntentConsistency({
+  const input = {
     authoritativeUserRequest: standard,
     candidate,
     checkpointLabel: "corrective attempt output",
-    fetchImpl,
-  });
+  };
+  const check = verify ? await verify(input) : await checkIntentConsistency({ ...input, fetchImpl });
   return check.outcome === "inconsistent" ? { consistent: false, reason: check.reason } : { consistent: true };
 }
 
@@ -1338,7 +1341,8 @@ export async function executeTask(
     !modelSelectionFailureReason && role.id === "release-agent" ? checkReleaseReadiness(db, project.id) : { ready: true as const };
   const planConsistency =
     !modelSelectionFailureReason && releaseReadiness.ready && isDevelopmentRole(role) && usedRealProvider
-      ? await checkPlanConsistencyBeforeDevelopment(context.authoritativeUserRequest, context.relevantArtifacts, options.intentCheckFetch)
+      ? await checkPlanConsistencyBeforeDevelopment(context.authoritativeUserRequest, context.relevantArtifacts, options.intentCheckFetch,
+          input => checkDeliverableIntentConsistency(db, project, agentRun, input, { fetchImpl: options.intentCheckFetch, freeProviderFetchImpl: options.freeProviderFetchImpl }))
       : { consistent: true as const };
 
   let result: import("../providers/types.ts").AgentTaskResult;
@@ -1575,6 +1579,7 @@ export async function executeTask(
           context.remediationContext?.currentFiles ?? [],
           result.output.fileOperations,
           options.intentCheckFetch,
+          input => checkDeliverableIntentConsistency(db, project, agentRun, input, { fetchImpl: options.intentCheckFetch, freeProviderFetchImpl: options.freeProviderFetchImpl }),
         )
       : { consistent: true as const };
 
