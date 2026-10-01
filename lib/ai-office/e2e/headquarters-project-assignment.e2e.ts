@@ -172,7 +172,7 @@ test(
       const viewLink = page.getByTestId("view-project-link");
       await viewLink.waitFor({ timeout: 5000 });
       assert.match(await viewLink.getAttribute("href") ?? "", new RegExp(`/office/projects/${created!.id}`));
-      await page.getByText("State: Starting", { exact: false }).waitFor({ timeout: 5000 });
+      await page.getByText("Project accepted.", { exact: false }).waitFor({ timeout: 5000 });
 
       // --- 11: an ordinary question does NOT create a project ---
       await page.getByTestId("assign-new-project-button").click().catch(() => {});

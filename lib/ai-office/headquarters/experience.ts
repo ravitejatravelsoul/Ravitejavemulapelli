@@ -197,7 +197,12 @@ export function proximityBriefing(
       .filter((x) => ACTIVE_STATES.has(x.status))
       .map((x) => x.name)
       .slice(0, 3);
-    return `${first} ${p.title}: ${p.completed} of ${p.total} tasks complete. ${active.length ? active.join(", ") + " active." : "No active roles recorded."} ${s.approvals.filter((x) => x.projectId === p.id).length} owner approvals. Recorded cost $${p.costUsd.toFixed(2)}.`;
+    const activity = p.dispatching
+      ? "Project accepted. Dispatching the remote workforce…"
+      : active.length
+        ? active.join(", ") + " active."
+        : "No active roles recorded.";
+    return `${first} ${p.title}: ${p.completed} of ${p.total} tasks complete. ${activity} ${s.approvals.filter((x) => x.projectId === p.id).length} owner approvals. Recorded cost $${p.costUsd.toFixed(2)}.`;
   }
   const kind = briefingKind(a);
   if (kind === "COMPLETED" && a.completedWork) {

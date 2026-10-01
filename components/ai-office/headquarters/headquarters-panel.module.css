@@ -203,3 +203,10 @@
   padding: 10px 12px;
   margin: 8px 0;
 }
+.dispatching {
+  border-left: 3px solid #f0c674;
+  background: #3a2f0e50;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-weight: 600;
+}

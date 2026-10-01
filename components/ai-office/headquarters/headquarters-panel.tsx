@@ -265,6 +265,11 @@ export function HeadquartersPanel({
           </label>
           {project && (
             <>
+              {project.dispatching && (
+                <p className={styles.dispatching} data-testid="project-dispatching-badge" role="status">
+                  DISPATCHING — remote workforce is starting; this updates automatically.
+                </p>
+              )}
               <p>
                 {project.label} · {project.completed}/{project.total} tasks
                 complete

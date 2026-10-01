@@ -119,7 +119,7 @@ export function getAIHeadquartersWorldState(
     }));
   const projectArtifacts = project ? listArtifactsForProject(db, project.id) : [],
     projectFiles = project ? listWorkspaceFileRecords(db, project.id) : [];
-  const agents = floor.agents.map((a) => {
+  const rawAgents = floor.agents.map((a) => {
     const task = tasks.find((t) => t.id === a.taskId),
       failure = task
         ? listFailuresForTask(db, task.id)
@@ -184,6 +184,31 @@ export function getAIHeadquartersWorldState(
         : null,
     };
   });
+  // A real, grounded "just accepted, GitHub Actions hasn't picked it up
+  // yet" window — never inferred for local mode, where execution starts
+  // near-instantly and this class of multi-minute cold start does not
+  // exist. Every input is already-persisted authoritative state (no
+  // task done yet, no role actually active, the project genuinely
+  // IN_PROGRESS); nothing here is invented. The Orchestrator's own
+  // status is the one synthetic value in this whole DTO — reusing the
+  // exact same ACTIVE_STATUSES the rest of the UI already renders as
+  // "active" (proximity/detail briefings, glow/animation) is a truthful
+  // description of the office actively coordinating a real dispatch in
+  // flight, never a fabricated agent run.
+  const DISPATCH_ACTIVE_STATUSES = new Set(["WORKING", "THINKING", "TESTING", "REVIEWING", "RETRYING"]);
+  const dispatching =
+    mode === "remote" &&
+    !!project &&
+    project.status === "IN_PROGRESS" &&
+    project.progress.completed === 0 &&
+    !rawAgents.some((a) => DISPATCH_ACTIVE_STATUSES.has(a.status));
+  const agents = dispatching
+    ? rawAgents.map((a) =>
+        a.roleId === "orchestrator"
+          ? { ...a, status: "WORKING", task: "Dispatching the remote workforce" }
+          : a,
+      )
+    : rawAgents;
   const projects = listProjects(db)
     .slice(0, 100)
     .map((p) => ({
@@ -355,6 +380,7 @@ export function getAIHeadquartersWorldState(
           total: project.progress.total,
           deliveryState: interaction?.deliveryState ?? "NOT_STARTED",
           costUsd: usage.reduce((n, u) => n + u.costUsd, 0),
+          dispatching,
         }
       : null,
     projects,

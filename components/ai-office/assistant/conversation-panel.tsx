@@ -55,7 +55,7 @@ export function ConversationPanel({roleId,projectId,speech,onProject,onNavigate}
     {created && (
       <div className={styles.created} data-testid="project-created-card">
         <p><b>{created.title}</b></p>
-        <p>State: Starting · Execution mode: {created.mode==="remote"?"Remote (GitHub Actions)":"Local (background runner)"}</p>
+        <p>Project accepted. {created.mode==="remote"?"Dispatching the remote workforce…":"Starting."} · Execution mode: {created.mode==="remote"?"Remote (GitHub Actions)":"Local (background runner)"}</p>
         <a data-testid="view-project-link" href={`/office/projects/${created.projectId}`}>View Project</a>
       </div>
     )}

@@ -271,7 +271,8 @@ export function agentBriefing(
   parts.push(title + ": " + a.status.toLowerCase() + ".");
   if (a.roleId === "orchestrator")
     parts.push(
-      state.project.completed +
+      (state.project.dispatching ? "Project accepted. Dispatching the remote workforce. " : "") +
+        state.project.completed +
         " of " +
         state.project.total +
         " tasks complete; " +
