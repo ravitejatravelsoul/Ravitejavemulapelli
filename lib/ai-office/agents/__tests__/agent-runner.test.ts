@@ -54,6 +54,47 @@ async function withWorkspace<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 describe("successful execution", () => {
+  test("failed run-start persistence prevents provider execution", async () => {
+    const t = createTestDb();
+    try {
+      const { project } = setupProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "Write requirements" });
+      const { SimulatedAdapter } = await import("../../providers/simulated/simulated-adapter.ts");
+      const adapter = new SimulatedAdapter();
+      let calls = 0;
+      adapter.runAgentTask = async () => { calls++; throw new Error("Unexpected provider call"); };
+      await assert.rejects(executeTask(t.db, task.id, {
+        provider: adapter,
+        onRunStarted: async () => { throw new Error("Snapshot conflict"); },
+      }), /Snapshot conflict/);
+      assert.equal(calls, 0);
+    } finally { t.close(); }
+  });
+
+  test("run-start persistence observes real activity and completes before the provider", async () => {
+    const t = createTestDb();
+    try {
+      const { project } = setupProject(t);
+      const task = createTask(t.db, { projectId: project.id, roleId: "product-owner", title: "Write requirements" });
+      let published = false;
+      const { SimulatedAdapter } = await import("../../providers/simulated/simulated-adapter.ts");
+      const adapter = new SimulatedAdapter();
+      const original = adapter.runAgentTask.bind(adapter);
+      adapter.runAgentTask = async (...args) => {
+        assert.equal(published, true);
+        return original(...args);
+      };
+      await executeTask(t.db, task.id, { provider: adapter, onRunStarted: async () => {
+        assert.equal(getTask(t.db, task.id)?.status, "IN_PROGRESS");
+        const attempt = listTaskAttempts(t.db, task.id)[0];
+        assert.equal(getAgentRun(t.db, attempt.agentRunId!)?.status, "RUNNING");
+        await Promise.resolve();
+        published = true;
+      } });
+      assert.equal(published, true);
+    } finally { t.close(); }
+  });
+
   test("executeTask persists TaskAttempt, AgentRun, artifact, event, and $0 AI usage, and marks the task DONE", async () => {
     const t = createTestDb();
     const { project } = setupProject(t);

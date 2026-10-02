@@ -100,7 +100,17 @@ async function main(): Promise<void> {
     if(held)restoreProviderTokenWindows(held.catalog.tokenWindows);
 
     log("running one bounded cycle...");
-    const outcome = await runOneCycle(db, runnerId);
+    let currentBundleSha = bundleSha;
+    const activeDb = db;
+    const outcome = await runOneCycle(db, runnerId, {
+      execution: {
+        onRunStarted: async () => {
+          // Publish real activity before provider work; retain CAS protection
+          // against concurrent owner mutations for both this and the final write.
+          currentBundleSha = await writeProjectBundle(remoteConfig, flushProjectBundle(activeDb, projectId), currentBundleSha);
+        },
+      },
+    });
     log(`cycle outcome: ${outcome.kind}${outcome.detail ? " " + JSON.stringify(outcome.detail) : ""}`);
 
     log("uploading changed workspace files to runtime repo...");
@@ -111,7 +121,7 @@ async function main(): Promise<void> {
     const newOffice = flushOfficeState(db);
 
     try {
-      await writeProjectBundle(remoteConfig, newBundle, bundleSha);
+      await writeProjectBundle(remoteConfig, newBundle, currentBundleSha);
     } catch (error) {
       if (error instanceof GitHubContentConflictError) {
         // Real conflict backstop — the primary defense is the GitHub

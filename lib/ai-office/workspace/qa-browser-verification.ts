@@ -168,7 +168,7 @@ export async function runQABrowserVerification(
       return finish("FAIL", "The page's heading is empty.", { consoleErrors, pageErrors });
     }
 
-    const bodyTextBefore = ((await page.locator("body").textContent()) ?? "").trim();
+    let bodyTextBefore = ((await page.locator("body").textContent()) ?? "").trim();
     const descriptionLength = bodyTextBefore.replace(headingText, "").trim().length;
     if (descriptionLength < 5) {
       return finish("FAIL", "No description-like text found alongside the heading.", { consoleErrors, pageErrors, bodyTextBefore });
@@ -177,6 +177,19 @@ export async function runQABrowserVerification(
     const button = page.locator("button").first();
     if ((await button.count()) === 0) {
       return finish("FAIL", "No button found on the page.", { consoleErrors, pageErrors });
+    }
+
+    // Exercise input-driven controls from a non-empty state. In particular,
+    // Reset on an already-empty counter is legitimately a no-op. Capture the
+    // baseline after typing so typing alone cannot make a broken button pass.
+    const textInputs = page.locator('input:not([type]), input[type="text"], input[type="search"], textarea');
+    for (const input of await textInputs.all()) {
+      if (await input.isVisible() && await input.isEditable()) {
+        await input.fill("Browser verification");
+        await page.waitForTimeout(200);
+        bodyTextBefore = ((await page.locator("body").textContent()) ?? "").trim();
+        break;
+      }
     }
 
     await button.click();

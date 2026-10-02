@@ -798,6 +798,8 @@ function callAdapterWithTimeout(
 }
 
 export interface ExecuteTaskOptions {
+  /** Persist authoritative RUNNING state before execution, for remote observers. */
+  onRunStarted?: () => Promise<void>;
   /** Explicit, deterministic scenario selector — "success" (default), "failure", "retry-success". Never random. */
   scenario?: string;
   /** Defaults to the project's own `provider` column (SimulatedAdapter or OllamaAdapter) — this parameter exists for test injection (including a deliberately slow/hanging test double, to prove timeout behavior), not for overriding a real project's configured provider. */
@@ -1322,6 +1324,7 @@ export async function executeTask(
     model: modelForRun,
   });
   agentRun = updateAgentRunStatus(db, agentRun.id, "RUNNING");
+  await options.onRunStarted?.();
 
   // Every provider-independent gate below (Part 16) must treat a real
   // Claude call exactly like a real Ollama call — neither gets a weaker

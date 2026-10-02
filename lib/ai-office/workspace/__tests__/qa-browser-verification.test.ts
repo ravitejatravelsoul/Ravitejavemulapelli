@@ -52,6 +52,25 @@ afterEach(() => {
 });
 
 describe("runQABrowserVerification", () => {
+  for (const resetWorks of [true, false]) {
+    test(`input-driven counter ${resetWorks ? "passes with working" : "fails with broken"} Reset`, async () => {
+      const id = `counter-${resetWorks}`;
+      await writeFile(id, "index.html", '<h1>Character counter</h1><p>Count characters as you type.</p><input id="text"><p id="count">0</p><button>Reset</button><script src="script.js"></script>');
+      await writeFile(id, "script.js", `
+        const input = document.querySelector('input');
+        const count = document.querySelector('#count');
+        input.addEventListener('input', () => count.textContent = String(input.value.length));
+        document.querySelector('button').addEventListener('click', () => {
+          ${resetWorks ? "input.value = ''; count.textContent = '0';" : "/* broken reset */"}
+        });
+      `);
+      const result = await runQABrowserVerification(id);
+      assert.equal(result.status, resetWorks ? "PASS" : "FAIL", result.summary);
+      assert.match(String(result.details.bodyTextBefore), /20/);
+      if (!resetWorks) assert.match(result.summary, /did not change/i);
+    });
+  }
+
   test("returns FAIL immediately when no workspace exists — never starts a server or browser", async () => {
     const result = await runQABrowserVerification("no-such-project");
     assert.equal(result.status, "FAIL");
