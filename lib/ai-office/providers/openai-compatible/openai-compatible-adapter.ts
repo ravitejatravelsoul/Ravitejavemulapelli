@@ -194,7 +194,13 @@ export class OpenAICompatibleAdapter implements AIProviderAdapter {
             : { reasoning_effort: process.env[`AI_OFFICE_${this.name.toUpperCase()}_REASONING_EFFORT`] }) : {}),
           ...(this.name === "openrouter" ? { provider: { max_price: { prompt: 0, completion: 0 } } } : {}),
           messages: [{ role: "user", content: prompt }],
-          response_format: (process.env[`AI_OFFICE_${this.name.toUpperCase()}_JSON_SCHEMA_MODELS`] ?? "").split(",").includes(this.model)
+          // Verdict calls never use strict json_schema mode, regardless of
+          // this model's allowlist entry — see AgentTaskInput's
+          // `responseMode` docblock for the real HTTP 400
+          // `json_validate_failed` failure this avoids.
+          response_format: input.responseMode === "verdict"
+            ? { type: "json_object" }
+            : (process.env[`AI_OFFICE_${this.name.toUpperCase()}_JSON_SCHEMA_MODELS`] ?? "").split(",").includes(this.model)
             ? { type: "json_schema", json_schema: { name: "agent_output", strict: false, schema: z.toJSONSchema(structuredOutputSchema) } }
             : { type: "json_object" },
           ...(input.maxOutputTokens ? { max_tokens: input.maxOutputTokens } : {}),
@@ -296,6 +302,21 @@ export class OpenAICompatibleAdapter implements AIProviderAdapter {
     if (choice?.message?.refusal) return fail("response refused the requested output.");
     const content = finalText(choice?.message?.content);
     if (!content?.trim()) return fail("response included no message.");
+    // Verdict calls never carried the heavyweight envelope to begin with
+    // (see buildPrompt's "verdict" branch), so the full StructuredAgentOutput
+    // schema's required fields (summary, artifacts, ...) would never match a
+    // bare verdict object — the raw text passes through unparsed here, and
+    // the caller (checkDeliverableIntentConsistency) validates it against
+    // its own strict {consistent, reason} contract. Malformed/empty text
+    // was already rejected above; this never widens what counts as valid.
+    if (input.responseMode === "verdict") {
+      return {
+        status: "SUCCEEDED",
+        output: { summary: unfence(content).trim(), artifacts: [], decisions: [], testResults: [], events: [], fileOperations: [], recommendedNextActions: [] },
+        usage,
+        raw: { model: this.model, provider: this.name, responseDiagnostics },
+      };
+    }
     const parsed = parseStructuredOutput(content);
     if (!parsed.ok) return fail(`model output ${parsed.reason}`);
 

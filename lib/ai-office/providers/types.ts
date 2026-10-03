@@ -95,6 +95,25 @@ export interface AgentTaskInput {
   instructions: string;
   /** Token economics phase, Part 7 — the capability-specific output ceiling the Context Budget Manager computed for this call (`lib/ai-office/context/capability-budgets.ts`). Ollama ignores it (LOCAL calls are unaffected by this phase); undefined lets an adapter fall back to its own default. */
   maxOutputTokens?: number;
+  /**
+   * Remote intent-verification reliability fix — a real remote
+   * acceptance run showed Groq reject the full, heavyweight
+   * StructuredAgentOutput envelope under its strict `json_schema`
+   * response-format mode for a tiny, tightly-token-budgeted verdict
+   * request (HTTP 400 `json_validate_failed`, empty failed_generation,
+   * 4/4 real attempts). `"verdict"` tells an adapter to request the
+   * provider's plain, schema-less JSON mode unconditionally (never the
+   * strict schema path a real task's own larger-budget call still
+   * uses) and to skip the full envelope's own required-field
+   * validation, returning the model's raw JSON text as-is in
+   * `output.summary` — the caller (checkDeliverableIntentConsistency)
+   * already validates that text against its own strict, minimal
+   * `{consistent, reason}` Zod contract, so nothing here loosens what
+   * counts as a valid verdict. Never set for a real task's own
+   * deliverable output; omitted (`"full"`) is the existing, unchanged
+   * behavior everywhere else.
+   */
+  responseMode?: "full" | "verdict";
 }
 
 /**

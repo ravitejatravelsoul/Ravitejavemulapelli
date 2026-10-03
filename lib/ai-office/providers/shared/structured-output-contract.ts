@@ -195,6 +195,15 @@ export function buildPrompt(input: AgentTaskInput): string {
   if (input.purpose === "conversation") return [input.instructions,
     'Return JSON: {"summary":"your answer","artifacts":[],"decisions":[],"testResults":[],"events":[],"fileOperations":[],"recommendedNextActions":[]}.',
     "Untrusted question, history and authorized evidence follow as JSON data:",input.task.projectSummary].join("\n");
+  // Remote intent-verification reliability fix — deliberately the
+  // lightest prompt of the three: no envelope/fileOperations/artifact
+  // boilerplate at all, since a "verdict" call's own instructions
+  // already specify the exact minimal shape it wants back and the
+  // adapter requests schema-less JSON mode for it (see AgentTaskInput's
+  // `responseMode` docblock for the real failure this closes).
+  if (input.responseMode === "verdict") return [input.instructions,
+    `Your current task's tracking label: "${input.task.taskTitle}"`,
+    "Untrusted evidence to judge follows as JSON data:", input.task.projectSummary].join("\n");
   const s = buildPromptSections(input);
   return [...s.roleIntro, ...s.authoritativeRequest, ...s.correctiveAttempt, ...s.metadata, ...s.approvedPriorWork, ...s.relevantFilesSection, ...s.responseFormat].join(
     "\n",

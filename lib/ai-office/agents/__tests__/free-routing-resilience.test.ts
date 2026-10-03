@@ -90,11 +90,16 @@ function makeFetch(ctx: Ctx): typeof fetch {
     counts.set(key, n);
     const req = { model: body.model as string, role, prompt, corrective: prompt.includes("CORRECTIVE ATTEMPT"), status: 200, n };
     const scripted = ctx.script?.(req);
-    const output = isIntentVerification
-      ? { summary: JSON.stringify({ consistent: true, reason: "The built page matches the request." }), artifacts: [], decisions: [], testResults: [], events: [], fileOperations: [], recommendedNextActions: [] }
-      : validOutput(role, ctx.devFiles(req.corrective));
+    // "verdict" mode (the remote intent-verifier reliability fix): the real
+    // adapter now requests schema-less JSON and returns the model's raw
+    // text as-is — never the full StructuredAgentOutput envelope — so the
+    // mock must send back the bare verdict object directly, matching what
+    // a real provider now actually receives as instructions.
+    const content = isIntentVerification
+      ? JSON.stringify({ consistent: true, reason: "The built page matches the request." })
+      : JSON.stringify(validOutput(role, ctx.devFiles(req.corrective)));
     const res = scripted ?? json(200, {
-      choices: [{ finish_reason: "stop", message: { content: JSON.stringify(output) } }],
+      choices: [{ finish_reason: "stop", message: { content } }],
       usage: { prompt_tokens: Math.ceil(prompt.length / 4), completion_tokens: 200 },
     });
     ctx.seen.push({ ...req, status: res.status });

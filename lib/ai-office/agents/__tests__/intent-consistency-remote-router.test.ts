@@ -37,19 +37,20 @@ function jsonResponse(body: unknown, init: { ok?: boolean; status?: number; head
   } as unknown as Response;
 }
 
-function envelope(verdict: unknown) {
-  return { summary: JSON.stringify(verdict), artifacts: [], decisions: [], testResults: [], events: [], fileOperations: [], recommendedNextActions: [] };
-}
+// "verdict" mode (the real fix): the adapter returns the model's raw JSON
+// text directly in `summary`, never wrapped in the full StructuredAgentOutput
+// envelope — these mocks simulate exactly what a real provider now receives
+// as instructions and sends back for a verdict call.
 const groqChat = (verdict: unknown, usage = { prompt_tokens: 200, completion_tokens: 40 }) =>
-  jsonResponse({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify(envelope(verdict)) } }], usage });
+  jsonResponse({ choices: [{ finish_reason: "stop", message: { content: JSON.stringify(verdict) } }], usage });
 
 /** Fails loudly for any host other than Groq — the whole point of these tests: verification must never call Ollama/localhost. */
-function guardedFetch(handler: (url: string) => Response | Promise<Response>): typeof fetch {
-  return (async (url: string) => {
+function guardedFetch(handler: (url: string, init?: RequestInit) => Response | Promise<Response>): typeof fetch {
+  return (async (url: string, init?: RequestInit) => {
     if (typeof url === "string" && /127\.0\.0\.1:11434|localhost:11434/.test(url)) {
       throw new Error("FORBIDDEN: intent verification called Ollama/localhost for a FREE_MULTI_MODEL project");
     }
-    return handler(String(url));
+    return handler(String(url), init);
   }) as unknown as typeof fetch;
 }
 
@@ -178,7 +179,7 @@ describe("checkDeliverableIntentConsistency — REMOTE-SAFE (FREE_MULTI_MODEL pr
     let groqCalls = 0;
     const fetchImpl = guardedFetch((url) => {
       if (url.includes("api.groq.com")) { groqCalls += 1; return jsonResponse({ error: "rate limited" }, { ok: false, status: 429, headers: { "retry-after": "1" } }); }
-      if (url.includes("generativelanguage.googleapis.com")) return jsonResponse({ candidates: [{ content: { parts: [{ text: JSON.stringify(envelope({ consistent: true, reason: "Matches." })) }] } }], usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 10 } });
+      if (url.includes("generativelanguage.googleapis.com")) return jsonResponse({ candidates: [{ content: { parts: [{ text: JSON.stringify({ consistent: true, reason: "Matches." }) }] } }], usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 10 } });
       return jsonResponse({}, { ok: false, status: 404 });
     });
     const result = await checkDeliverableIntentConsistency(
@@ -262,7 +263,7 @@ describe("checkDeliverableIntentConsistency — REMOTE-SAFE (FREE_MULTI_MODEL pr
     const fetchImpl = guardedFetch((url) => {
       if (url.includes("api.groq.com")) { usedProvider = "groq"; return groqChat({ consistent: true, reason: "Matches (producer)." }); }
       usedProvider = "gemini";
-      return jsonResponse({ candidates: [{ content: { parts: [{ text: JSON.stringify(envelope({ consistent: true, reason: "Matches (independent)." })) }] } }], usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 10 } });
+      return jsonResponse({ candidates: [{ content: { parts: [{ text: JSON.stringify({ consistent: true, reason: "Matches (independent)." }) }] } }], usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 10 } });
     });
     await checkDeliverableIntentConsistency(
       t.db, project, agentRun,
@@ -357,5 +358,170 @@ describe("checkDeliverableIntentConsistency — REMOTE-SAFE (FREE_MULTI_MODEL pr
       else process.env.AI_OFFICE_WORKSPACES_ROOT = prior;
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  // Remote intent-verifier reliability fix (real acceptance evidence,
+  // project 43d6b776): 4/4 real verifier calls to Groq openai/gpt-oss-120b
+  // returned HTTP 400 json_validate_failed with an empty failed_generation
+  // field, blocking the project at 4/8. Root cause: the verifier reused the
+  // full, heavyweight StructuredAgentOutput envelope under Groq's strict
+  // json_schema response-format mode at a 300-token budget — too tight for
+  // the model to reliably satisfy that whole schema, so Groq's own
+  // validator rejected the generation outright. The fix requests
+  // schema-less JSON mode unconditionally for a verdict call.
+  test("verdict calls request schema-less JSON mode, never strict json_schema, even when the model is in the schema allowlist", async () => {
+    const { t, project, agentRun } = setup("FREE_MULTI_MODEL");
+    upsertReviewModel(t.db, "groq", "openai/gpt-oss-120b");
+    process.env.AI_OFFICE_GROQ_JSON_SCHEMA_MODELS = "openai/gpt-oss-120b";
+    let sentBody: Record<string, unknown> | null = null;
+    const fetchImpl = guardedFetch((url, init) => {
+      sentBody = JSON.parse(String((init as RequestInit | undefined)?.body ?? "{}"));
+      return groqChat({ consistent: true, reason: "Matches." });
+    });
+    const result = await checkDeliverableIntentConsistency(
+      t.db, project, agentRun,
+      { authoritativeUserRequest: REQUEST, candidate: MATCHING_CANDIDATE, checkpointLabel: "built deliverable" },
+      { freeProviderFetchImpl: fetchImpl },
+    );
+    assert.equal(result.outcome, "consistent");
+    assert.ok(sentBody, "the real request body must have been captured");
+    const format = (sentBody as unknown as { response_format: { type: string; json_schema?: unknown } }).response_format;
+    assert.equal(format.type, "json_object", "a verdict call must never request strict json_schema mode, regardless of the model's allowlist entry");
+    assert.equal(format.json_schema, undefined);
+    delete process.env.AI_OFFICE_GROQ_JSON_SCHEMA_MODELS;
+    t.close();
+  });
+
+  test("reproduces the real failure — Groq HTTP 400 json_validate_failed with an empty failed_generation — and the verdict is reported unavailable, never a crash, never a silent PASS", async () => {
+    const { t, project, agentRun } = setup("FREE_MULTI_MODEL");
+    upsertReviewModel(t.db, "groq", "openai/gpt-oss-120b");
+    const fetchImpl = guardedFetch(() =>
+      jsonResponse({ error: { message: "'messages' failed to be validated against the given JSON schema.", code: "json_validate_failed", failed_generation: "" } }, { ok: false, status: 400 }),
+    );
+    const result = await checkDeliverableIntentConsistency(
+      t.db, project, agentRun,
+      { authoritativeUserRequest: REQUEST, candidate: MATCHING_CANDIDATE, checkpointLabel: "built deliverable" },
+      { freeProviderFetchImpl: fetchImpl },
+    );
+    assert.equal(result.outcome, "unavailable", "the exact real failure must never be reported as consistent or inconsistent — only unavailable");
+    assert.notEqual(result.outcome, "consistent");
+    t.close();
+  });
+
+  test("an empty failed_generation on json_validate_failed cannot be recovered — deterministic recovery only accepts strict JSON matching the real contract", async () => {
+    const { t, project, agentRun } = setup("FREE_MULTI_MODEL");
+    upsertReviewModel(t.db, "groq", "openai/gpt-oss-120b");
+    // Even if a provider ever did send a non-empty failed_generation for a
+    // verdict call, it must still pass through the exact same strict,
+    // minimal {consistent, reason} Zod contract — a recovered blob that
+    // merely looks like the old heavyweight envelope must not pass.
+    const fetchImpl = guardedFetch(() =>
+      jsonResponse({ error: { code: "json_validate_failed", failed_generation: JSON.stringify({ summary: "not a verdict", artifacts: [] }) } }, { ok: false, status: 400 }),
+    );
+    const result = await checkDeliverableIntentConsistency(
+      t.db, project, agentRun,
+      { authoritativeUserRequest: REQUEST, candidate: MATCHING_CANDIDATE, checkpointLabel: "built deliverable" },
+      { freeProviderFetchImpl: fetchImpl },
+    );
+    assert.equal(result.outcome, "unavailable");
+    t.close();
+  });
+
+  test("120B → 20B fallback still works for the verifier when 120B hits this exact real failure and 20B is eligible", async () => {
+    const { t, project, agentRun } = setup("FREE_MULTI_MODEL");
+    upsertReviewModel(t.db, "groq", "openai/gpt-oss-120b", 95);
+    upsertReviewModel(t.db, "groq", "openai/gpt-oss-20b", 50);
+    const modelsTried: string[] = [];
+    const fetchImpl = guardedFetch((_url, init) => {
+      const body = JSON.parse(String((init as RequestInit | undefined)?.body ?? "{}")) as { model: string };
+      modelsTried.push(body.model);
+      if (body.model === "openai/gpt-oss-120b") {
+        return jsonResponse({ error: { code: "json_validate_failed", failed_generation: "" } }, { ok: false, status: 400 });
+      }
+      return groqChat({ consistent: true, reason: "20B recovered the verdict." });
+    });
+    const result = await checkDeliverableIntentConsistency(
+      t.db, project, agentRun,
+      { authoritativeUserRequest: REQUEST, candidate: MATCHING_CANDIDATE, checkpointLabel: "built deliverable" },
+      { freeProviderFetchImpl: fetchImpl },
+    );
+    assert.deepEqual(modelsTried, ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]);
+    assert.equal(result.outcome, "consistent");
+  t.close();
+  });
+
+  test("bounded fallback only — no infinite retries when every qualified candidate fails the same way", async () => {
+    const { t, project, agentRun } = setup("FREE_MULTI_MODEL");
+    upsertReviewModel(t.db, "groq", "openai/gpt-oss-120b", 95);
+    upsertReviewModel(t.db, "groq", "openai/gpt-oss-20b", 50);
+    upsertReviewModel(t.db, "gemini", "gemini-fixture", 10);
+    let calls = 0;
+    const fetchImpl = guardedFetch(() => { calls += 1; return jsonResponse({ error: { code: "json_validate_failed", failed_generation: "" } }, { ok: false, status: 400 }); });
+    const result = await checkDeliverableIntentConsistency(
+      t.db, project, agentRun,
+      { authoritativeUserRequest: REQUEST, candidate: MATCHING_CANDIDATE, checkpointLabel: "built deliverable" },
+      { freeProviderFetchImpl: fetchImpl },
+    );
+    assert.equal(result.outcome, "unavailable");
+    assert.ok(calls <= 3, `fallback must stay bounded (MAX_FREE_MODEL_FALLBACK_CANDIDATES), got ${calls} calls`);
+    assert.ok(calls >= 1);
+    t.close();
+  });
+
+  test("a genuine malformed verdict (wrong shape, valid JSON) still counts against the model's health, per existing policy", async () => {
+    const { t, project, agentRun } = setup("FREE_MULTI_MODEL");
+    upsertReviewModel(t.db, "groq", "openai/gpt-oss-120b");
+    const fetchImpl = guardedFetch(() => groqChat({ not_a_verdict_at_all: true } as unknown));
+    const result = await checkDeliverableIntentConsistency(
+      t.db, project, agentRun,
+      { authoritativeUserRequest: REQUEST, candidate: MATCHING_CANDIDATE, checkpointLabel: "built deliverable" },
+      { freeProviderFetchImpl: fetchImpl },
+    );
+    assert.equal(result.outcome, "unavailable");
+    // The adapter's own 200-path accepted the response (status SUCCEEDED,
+    // real HTTP round-trip, real text) — the model genuinely answered but
+    // did not satisfy the required {consistent, reason} contract. This is
+    // the "genuine malformed model output" the health rule says must
+    // still be accounted for — distinct from the now-eliminated
+    // provider/API json_schema-incompatibility failure class (proven
+    // never to poison health below).
+    const registryRow = t.db.prepare("SELECT recentFailureCount FROM model_registry WHERE provider='groq' AND modelId='openai/gpt-oss-120b'").get() as { recentFailureCount: number };
+    assert.equal(registryRow.recentFailureCount, 1, "a genuinely wrong-shape verdict must count toward health, per existing policy");
+    t.close();
+  });
+
+  test("not valid JSON at all also counts against the model's health, per existing policy", async () => {
+    const { t, project, agentRun } = setup("FREE_MULTI_MODEL");
+    upsertReviewModel(t.db, "groq", "openai/gpt-oss-120b");
+    const fetchImpl = guardedFetch(() => jsonResponse({ choices: [{ finish_reason: "stop", message: { content: "not json at all" } }], usage: { prompt_tokens: 50, completion_tokens: 5 } }));
+    const result = await checkDeliverableIntentConsistency(
+      t.db, project, agentRun,
+      { authoritativeUserRequest: REQUEST, candidate: MATCHING_CANDIDATE, checkpointLabel: "built deliverable" },
+      { freeProviderFetchImpl: fetchImpl },
+    );
+    assert.equal(result.outcome, "unavailable");
+    const registryRow = t.db.prepare("SELECT recentFailureCount FROM model_registry WHERE provider='groq' AND modelId='openai/gpt-oss-120b'").get() as { recentFailureCount: number };
+    assert.equal(registryRow.recentFailureCount, 1);
+    t.close();
+  });
+
+  test("the json_validate_failed provider-rejection class, by contrast, never poisons health beyond this gate's own account of the real operational failure", async () => {
+    const { t, project, agentRun } = setup("FREE_MULTI_MODEL");
+    upsertReviewModel(t.db, "groq", "openai/gpt-oss-120b");
+    const fetchImpl = guardedFetch(() => jsonResponse({ error: { code: "json_validate_failed", failed_generation: "" } }, { ok: false, status: 400 }));
+    await checkDeliverableIntentConsistency(
+      t.db, project, agentRun,
+      { authoritativeUserRequest: REQUEST, candidate: MATCHING_CANDIDATE, checkpointLabel: "built deliverable" },
+      { freeProviderFetchImpl: fetchImpl },
+    );
+    // This DOES still count once per real HTTP rejection — a real
+    // provider-level failure, exactly like any other HTTP error this
+    // adapter already accounts for (429/5xx/timeout). What the fix
+    // removes is the false-positive TRIGGER (sending a schema that
+    // genuinely could not fit the token budget) — not the accounting of
+    // a real rejection if one still occurs.
+    const registryRow = t.db.prepare("SELECT recentFailureCount FROM model_registry WHERE provider='groq' AND modelId='openai/gpt-oss-120b'").get() as { recentFailureCount: number };
+    assert.equal(registryRow.recentFailureCount, 1);
+    t.close();
   });
 });

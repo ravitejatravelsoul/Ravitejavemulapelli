@@ -125,6 +125,19 @@ export class GeminiAdapter implements AIProviderAdapter {
       return { ...malformedResult("Operational: gemini response included no content."), usage };
     }
 
+    // Verdict calls carry no heavyweight envelope (see buildPrompt's
+    // "verdict" branch) — the raw text passes through unparsed in
+    // `summary`; the caller validates it against its own strict
+    // {consistent, reason} contract. See openai-compatible-adapter.ts's
+    // identical note and AgentTaskInput's `responseMode` docblock.
+    if (input.responseMode === "verdict") {
+      return {
+        status: "SUCCEEDED",
+        output: { summary: text.trim(), artifacts: [], decisions: [], testResults: [], events: [], fileOperations: [], recommendedNextActions: [] },
+        usage,
+        raw: { model: this.model, provider: "gemini" },
+      };
+    }
     const parsed = parseStructuredOutput(text);
     if (!parsed.ok) {
       return { ...malformedResult(`Operational: gemini model output ${parsed.reason}`), usage };
