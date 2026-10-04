@@ -114,6 +114,23 @@ describe("checkDeliverableIntentConsistency — LOCAL (Ollama-provider project)"
 });
 
 describe("checkDeliverableIntentConsistency — REMOTE-SAFE (FREE_MULTI_MODEL project)", () => {
+  for (const verdict of [
+    { consistent: true, reason: "" },
+    { consistent: true, reason: "   " },
+    { consistent: true, reason: "Matches.", unexpected: "extra field" },
+  ]) {
+    test(`strict verdict contract rejects ${JSON.stringify(verdict)}`, async () => {
+      const { t, project, agentRun } = setup("FREE_MULTI_MODEL");
+      try {
+        upsertReviewModel(t.db, "groq", "review-model");
+        const result = await checkDeliverableIntentConsistency(t.db, project, agentRun,
+          { authoritativeUserRequest: REQUEST, candidate: MATCHING_CANDIDATE, checkpointLabel: "built deliverable" },
+          { freeProviderFetchImpl: guardedFetch(() => groqChat(verdict)) });
+        assert.equal(result.outcome, "unavailable", "An empty reason or wrong shape must never authorize VERIFIED");
+      } finally { t.close(); }
+    });
+  }
+
   test("localhost/Ollama is never called; a qualified free verifier is selected and structured PASS is honored", async () => {
     const { t, project, agentRun } = setup("FREE_MULTI_MODEL");
     upsertReviewModel(t.db, "groq", "review-model");

@@ -497,7 +497,7 @@ function checkReleaseReadiness(db: DatabaseSync, projectId: string): { ready: tr
 const INTENT_VERIFIER_CAPABILITY: TaskCapability = "REVIEW";
 const INTENT_VERIFIER_REQUIRED_CAPABILITIES: readonly TaskCapability[] = ["REVIEW", "STRUCTURED_OUTPUT"];
 /** Strict, minimal structured-verdict contract — a malformed or empty verifier response never parses into this and must never become a PASS. */
-const intentVerdictSchema = z.object({ consistent: z.boolean(), reason: z.string() });
+const intentVerdictSchema = z.object({ consistent: z.boolean(), reason: z.string().trim().min(1) }).strict();
 
 /** The provider/model that most recently produced this project's real deliverable (a development role's SUCCEEDED run) — used only to softly prefer an independent verifier below; never a hard requirement, and never removes the only qualified candidate. */
 function latestDeliverableProducer(db: DatabaseSync, projectId: string): { provider: string; modelId: string } | null {
