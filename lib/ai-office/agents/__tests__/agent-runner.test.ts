@@ -1489,6 +1489,49 @@ describe("Release Agent's real deliverable readiness gate (Phase 8 Part K)", () 
 
     t.close();
   });
+
+  // Real incident, project 43d6b776: release-agent is not a review
+  // role, so a rejection here is recorded against release-agent's OWN
+  // task (finishFailure()'s `remediationTargets = isReview ?
+  // findRemediationTargets(...) : [task]`). Once the REAL blocker
+  // (another task's genuine unresolved failure) is fixed, that
+  // self-recorded failure must not go on blocking every future
+  // attempt forever — release-agent can never pass while its own past
+  // rejections keep counting as currently-unresolved, a lockout no
+  // later real success could ever escape without this exclusion.
+  test("release-agent's own previously-recorded rejection does not permanently block it once the real blocker is resolved", async () => {
+    const t = createTestDb();
+    const { project } = setupProject(t);
+    setDeliveryState(t.db, project.id, "VERIFIED");
+    t.db
+      .prepare("INSERT INTO workspace_files (id, projectId, path, sizeBytes, createdAt, updatedAt) VALUES ('f1', ?, 'index.html', 10, ?, ?)")
+      .run(project.id, Date.now(), Date.now());
+    const otherTask = createTask(t.db, { projectId: project.id, roleId: "backend-developer", title: "Some other task" });
+    const { recordFailure, resolveFailure, listUnresolvedFailures } = await import("../../domain/project-outputs.ts");
+    const realBlocker = recordFailure(t.db, { projectId: project.id, taskId: otherTask.id, reason: "a real, genuine defect" });
+
+    const releaseTask = createTask(t.db, { projectId: project.id, roleId: "release-agent", title: "Prepare release" });
+    const spy = releaseSpy();
+    const first = await executeTask(t.db, releaseTask.id, { scenario: "success", provider: spy.adapter });
+    assert.equal(spy.called(), false, "the real blocker must still prevent release on this attempt");
+    assert.equal(first.outcome, "retried");
+
+    // Release-agent's own rejection just recorded a failure against
+    // itself (confirmed, not assumed) — now the real blocker is fixed,
+    // but release-agent's own self-recorded failure is still there.
+    assert.ok(
+      listUnresolvedFailures(t.db, project.id).some((f) => f.taskId === releaseTask.id),
+      "release-agent's own rejection must have recorded a failure against its own task",
+    );
+    resolveFailure(t.db, realBlocker.id);
+
+    const spy2 = releaseSpy();
+    const second = await executeTask(t.db, releaseTask.id, { scenario: "success", provider: spy2.adapter });
+    assert.equal(spy2.called(), true, "release must proceed once the real blocker is gone, despite release-agent's own earlier rejection still being on file");
+    assert.equal(second.outcome, "succeeded");
+
+    t.close();
+  });
 });
 
 describe("scoped real-file context for code-consuming roles (Phase 8 Part J)", () => {

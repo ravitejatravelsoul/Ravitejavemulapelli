@@ -474,22 +474,42 @@ async function runFreeModelWithFallback(
  * before. A project *with* a workspace must have at least one real
  * file, a `VERIFIED` delivery state, and no unresolved failure.
  */
-function checkReleaseReadiness(db: DatabaseSync, projectId: string): { ready: true } | { ready: false; reason: string } {
+function checkReleaseReadiness(db: DatabaseSync, projectId: string, releaseTaskId: string): { ready: true } | { ready: false; reason: string } {
   const workspace = getWorkspace(db, projectId);
   if (!workspace) return { ready: true };
 
+  // Every reason below is a project-/workspace-state precondition about
+  // release-agent's OWN readiness to run — never evidence that any
+  // development role's code is defective. The "Operational:" prefix
+  // (isOperationalFailureReason) keeps finishFailure() from routing it
+  // through findRemediationTargets() to blame/reopen an upstream
+  // developer task for it, and from penalizing a model's health or
+  // forcing a model escalation for a failure that has nothing to do
+  // with model output quality.
   const fileCount = listWorkspaceFileRecords(db, projectId).length;
   if (fileCount === 0) {
-    return { ready: false, reason: "Release blocked: this project has a workspace but no real deliverable files exist yet." };
+    return { ready: false, reason: "Operational: Release blocked: this project has a workspace but no real deliverable files exist yet." };
   }
   if (workspace.deliveryState !== "VERIFIED") {
     return {
       ready: false,
-      reason: `Release blocked: the real deliverable's verification state is "${workspace.deliveryState}", not VERIFIED.`,
+      reason: `Operational: Release blocked: the real deliverable's verification state is "${workspace.deliveryState}", not VERIFIED.`,
     };
   }
-  if (listUnresolvedFailures(db, projectId).length > 0) {
-    return { ready: false, reason: "Release blocked: unresolved failure(s) remain for this project." };
+  // Excludes failures already tied to release-agent's OWN task — its
+  // own past rejections from this exact check, never a real product
+  // defect elsewhere. Real incident, project 43d6b776: every one of
+  // this check's own past rejections is recorded against
+  // release-agent's own task (by design — see finishFailure(),
+  // `remediationTargets = isReview ? ... : [task]`), and without this
+  // exclusion each one permanently satisfies "unresolved failure(s)
+  // remain" for every future check, forever — a lockout no later real
+  // success could ever escape, since release-agent can't pass while
+  // its own prior rejections keep counting as currently-unresolved.
+  // Any OTHER task's real unresolved failure still correctly blocks
+  // release.
+  if (listUnresolvedFailures(db, projectId).some((f) => f.taskId !== releaseTaskId)) {
+    return { ready: false, reason: "Operational: Release blocked: unresolved failure(s) remain for this project." };
   }
   return { ready: true };
 }
@@ -1379,7 +1399,7 @@ export async function executeTask(
   const usedRealProvider = isFreeRouting(project) || project.provider === "ollama" || claudeCall !== null;
 
   const releaseReadiness =
-    !modelSelectionFailureReason && role.id === "release-agent" ? checkReleaseReadiness(db, project.id) : { ready: true as const };
+    !modelSelectionFailureReason && role.id === "release-agent" ? checkReleaseReadiness(db, project.id, task.id) : { ready: true as const };
   const planConsistency =
     !modelSelectionFailureReason && releaseReadiness.ready && isDevelopmentRole(role) && usedRealProvider
       ? await checkPlanConsistencyBeforeDevelopment(context.authoritativeUserRequest, context.relevantArtifacts, options.intentCheckFetch,
