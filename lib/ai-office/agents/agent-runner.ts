@@ -1964,8 +1964,32 @@ function finishSuccess(
     // A success closes out whatever earlier failure(s) sent this task
     // back for a retry — e.g. the developer task's unresolved failure
     // from a prior QA rejection is resolved once the fix succeeds.
+    //
+    // A review role (QA, Security, Code Review) that now passes must
+    // ALSO resolve any unresolved failure it (or an earlier attempt of
+    // it) previously recorded against its own remediation targets — the
+    // development-role tasks `findRemediationTargets` would blame for a
+    // failure. Without this, a defect a review role found and later
+    // stopped reproducing (its own later real pass is already trusted
+    // to advance the project) can leave an orphaned unresolved failure
+    // forever: the target task only gets re-resolved by ITS OWN next
+    // success, but a bounded retry ceiling can mean the target is never
+    // reopened again even though the review that blamed it now passes.
+    // Real incident: project 43d6b776's frontend-developer task was
+    // blamed by a QA rejection recorded after frontend-developer's own
+    // final successful attempt (so frontend-developer was never
+    // reopened to resolve it), yet every later QA attempt — including
+    // the real one that finally passed — found no such defect. The
+    // stale failure blocked isReleaseReady indefinitely. A review PASS
+    // already means "no known defect from this review," which the rest
+    // of this codebase already trusts to advance the project — this
+    // closes the one place that trust wasn't applied.
+    const targetTaskIds = new Set(
+      isReviewRole(role) ? findRemediationTargets(db, task.id).map((t) => t.id) : [],
+    );
+    targetTaskIds.add(task.id);
     for (const failure of listUnresolvedFailures(db, project.id)) {
-      if (failure.taskId === task.id) resolveFailure(db, failure.id);
+      if (targetTaskIds.has(failure.taskId)) resolveFailure(db, failure.id);
     }
 
     // Advance project status first so the memory summary reflects the

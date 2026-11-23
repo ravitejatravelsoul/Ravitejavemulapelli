@@ -298,6 +298,49 @@ describe("review-role failure reopens the dependency, not itself (QA -> Develope
 
     t.close();
   });
+
+  // Real incident, project 43d6b776: a QA rejection recorded a failure
+  // against the developer task, but that failure was created AFTER the
+  // developer task's own last successful attempt — so the developer
+  // task was never reopened again to re-resolve it (a bounded retry
+  // ceiling can mean it's never retried a further time). Every later
+  // QA attempt, including the real one that finally passed, found no
+  // such defect — but because resolution only ever fired on the SAME
+  // task's own next success, this exact failure stayed unresolved
+  // forever and silently blocked isReleaseReady indefinitely, even
+  // though QA (the review that raised it) had since passed for real.
+  test("a review role's later real success resolves a lingering failure it recorded against its remediation target, even if that target never ran again", async () => {
+    const t = createTestDb();
+    const { project } = setupProject(t);
+    const { task: devTask } = createTaskWithDependencies(t.db, {
+      projectId: project.id,
+      roleId: "backend-developer",
+      title: "Implement tool",
+    });
+    await executeTask(t.db, devTask.id, { scenario: "success" });
+
+    const { task: qaTask } = createTaskWithDependencies(t.db, {
+      projectId: project.id,
+      roleId: "qa-agent",
+      title: "Run tests",
+      dependsOnTaskIds: [devTask.id],
+    });
+    await executeTask(t.db, qaTask.id, { scenario: "failure" });
+    assert.equal(listUnresolvedFailures(t.db, project.id).length, 1, "the QA rejection recorded a failure against the developer task");
+
+    // The developer task is never re-run again (its own next-success
+    // hook never fires) — only QA itself retries, and this time passes.
+    const result = await executeTask(t.db, qaTask.id, { scenario: "success" });
+    assert.equal(result.outcome, "succeeded");
+
+    assert.equal(
+      listUnresolvedFailures(t.db, project.id).length,
+      0,
+      "QA's own real pass must resolve the failure it previously recorded against its remediation target, not just a failure recorded against QA's own task",
+    );
+
+    t.close();
+  });
 });
 
 describe("budget gate (SIMULATED always authorized, LIVE refused — no adapter exists yet)", () => {
