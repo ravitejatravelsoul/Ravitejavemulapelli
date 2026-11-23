@@ -496,6 +496,21 @@ function checkReleaseReadiness(db: DatabaseSync, projectId: string): { ready: tr
 
 const INTENT_VERIFIER_CAPABILITY: TaskCapability = "REVIEW";
 const INTENT_VERIFIER_REQUIRED_CAPABILITIES: readonly TaskCapability[] = ["REVIEW", "STRUCTURED_OUTPUT"];
+/**
+ * A real 2026-10-04 acceptance run proved 300 is not enough, even in
+ * schema-less "verdict" mode: Groq's openai/gpt-oss-120b/20b are
+ * reasoning models, and `AI_OFFICE_GROQ_REASONING_EFFORT=low` still
+ * spends part of the output budget on hidden reasoning before the
+ * final-channel answer — at 300 tokens the generation was cut off
+ * before ever reaching a complete JSON object (two of four recovered
+ * `json_validate_failed` attempts had an empty `failed_generation`;
+ * the others didn't end in a closing brace). Groq's own docs give
+ * 1024 as the default `max_completion_tokens` for these models and
+ * note lower values "may be too low for complex reasoning" — this
+ * verdict call only ever needs to emit one tiny JSON object, so 1024
+ * leaves ample room for low-effort reasoning and the final answer.
+ */
+const VERDICT_MAX_OUTPUT_TOKENS = 1024;
 /** Strict, minimal structured-verdict contract — a malformed or empty verifier response never parses into this and must never become a PASS. */
 const intentVerdictSchema = z.object({ consistent: z.boolean(), reason: z.string().trim().min(1) }).strict();
 
@@ -574,7 +589,7 @@ export async function checkDeliverableIntentConsistency(
     capability: INTENT_VERIFIER_CAPABILITY,
     requiredCapabilities: INTENT_VERIFIER_REQUIRED_CAPABILITIES,
     estimatedInputTokens,
-    estimatedOutputTokens: 300,
+    estimatedOutputTokens: VERDICT_MAX_OUTPUT_TOKENS,
   });
   if (!selection) {
     return {
@@ -599,7 +614,7 @@ export async function checkDeliverableIntentConsistency(
   const shadowRunId = createShadowAgentRun(db, agentRun.taskAttemptId, agentRun.roleId);
   const buildInput = (): AgentTaskInput => ({
     role: agentRun.roleId,
-    maxOutputTokens: 300,
+    maxOutputTokens: VERDICT_MAX_OUTPUT_TOKENS,
     // "verdict" mode: a schema-less JSON request, never the strict
     // json_schema path a real task's own larger-budget call still uses —
     // see AgentTaskInput's `responseMode` docblock for the real Groq

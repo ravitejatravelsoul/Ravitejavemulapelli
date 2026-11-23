@@ -405,6 +405,13 @@ describe("checkDeliverableIntentConsistency — REMOTE-SAFE (FREE_MULTI_MODEL pr
     const format = (sentBody as unknown as { response_format: { type: string; json_schema?: unknown } }).response_format;
     assert.equal(format.type, "json_object", "a verdict call must never request strict json_schema mode, regardless of the model's allowlist entry");
     assert.equal(format.json_schema, undefined);
+    // 2026-10-04 real acceptance evidence: even schema-less json_object mode
+    // still hit json_validate_failed at a 300-token budget, because
+    // openai/gpt-oss-120b/20b spend part of it on hidden reasoning before
+    // the final answer. Groq's own docs give 1024 as these models' default
+    // max_completion_tokens — this asserts the call actually requests that
+    // much room, not just the schema-less format.
+    assert.equal((sentBody as unknown as { max_tokens: number }).max_tokens, 1024, "a verdict call must request enough budget for a reasoning model's hidden reasoning plus its final answer");
     delete process.env.AI_OFFICE_GROQ_JSON_SCHEMA_MODELS;
     t.close();
   });
