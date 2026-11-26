@@ -60,6 +60,31 @@ describe("buildPrompt (OllamaAdapter's exact, unaffected contract)", () => {
   });
 });
 
+describe("backend-developer contract (Priority 0 #8 real backend verification)", () => {
+  function backendInput(): AgentTaskInput {
+    const base = input();
+    return { ...base, role: "backend-developer", task: { ...base.task, roleId: "backend-developer" } };
+  }
+
+  test("a backend-developer prompt requires the real startup contract: PORT, DB_PATH, and the /__office_health endpoint", () => {
+    const prompt = buildPrompt(backendInput());
+    assert.match(prompt, /GET \/__office_health/);
+    assert.match(prompt, /PORT environment variable/);
+    assert.match(prompt, /DB_PATH/);
+    assert.match(prompt, /"ok": true/);
+  });
+
+  test("a frontend-developer prompt never receives the backend-only startup contract", () => {
+    const prompt = buildPrompt(input());
+    assert.ok(!prompt.includes("/__office_health"));
+  });
+
+  test("the backend contract lands in buildPromptSegments' stable systemText, same as the rest of the response-format contract", () => {
+    const segments = buildPromptSegments(backendInput());
+    assert.match(segments.systemText, /GET \/__office_health/);
+  });
+});
+
 describe("buildPromptSegments (Claude-only system/user split for prompt caching)", () => {
   // Cost-audit fix — a real Claude LIVE pilot recorded zero cache-creation/
   // cache-read tokens across 14 calls, including several retries of the

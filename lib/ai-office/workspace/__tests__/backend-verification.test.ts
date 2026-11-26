@@ -124,4 +124,66 @@ describe("runBackendVerification", () => {
     assert.equal(result.status, "FAIL");
     assert.match(result.summary, /never responded/i);
   });
+
+  test("defaults to GET /__office_health (the real required contract) and PASSes when the backend implements it, surfacing a real dbConnected signal", async () => {
+    const id = "office-health-project";
+    await writeFile(id, "package.json", JSON.stringify({ name: id, version: "1.0.0", scripts: { start: "node server.js" } }));
+    await writeFile(
+      id,
+      "server.js",
+      `const http = require('http');
+       http.createServer((req, res) => {
+         if (req.url === '/__office_health') {
+           res.writeHead(200, { 'Content-Type': 'application/json' });
+           res.end(JSON.stringify({ ok: true, dbConnected: true }));
+           return;
+         }
+         res.writeHead(404); res.end();
+       }).listen(Number(process.env.PORT), '127.0.0.1');`,
+    );
+
+    const result = await runBackendVerification(id); // no healthPath override — exercises the real default
+
+    assert.equal(result.status, "PASS", JSON.stringify(result));
+    assert.match(result.summary, /database connected/i);
+  });
+
+  test("FAILs when the backend's own health check reports dbConnected: false — real, explicit evidence, not an inferred guess", async () => {
+    const id = "db-disconnected-project";
+    await writeFile(id, "package.json", JSON.stringify({ name: id, version: "1.0.0", scripts: { start: "node server.js" } }));
+    await writeFile(
+      id,
+      "server.js",
+      `const http = require('http');
+       http.createServer((req, res) => {
+         res.writeHead(200, { 'Content-Type': 'application/json' });
+         res.end(JSON.stringify({ ok: true, dbConnected: false }));
+       }).listen(Number(process.env.PORT), '127.0.0.1');`,
+    );
+
+    const result = await runBackendVerification(id);
+
+    assert.equal(result.status, "FAIL");
+    assert.match(result.summary, /not connected to its database/i);
+  });
+
+  test("retries past an initial non-2xx response from the health endpoint instead of failing immediately", async () => {
+    const id = "slow-ready-project";
+    await writeFile(id, "package.json", JSON.stringify({ name: id, version: "1.0.0", scripts: { start: "node server.js" } }));
+    await writeFile(
+      id,
+      "server.js",
+      `const http = require('http');
+       const readyAt = Date.now() + 600;
+       http.createServer((req, res) => {
+         if (Date.now() < readyAt) { res.writeHead(503); res.end(); return; }
+         res.writeHead(200, { 'Content-Type': 'application/json' });
+         res.end(JSON.stringify({ ok: true }));
+       }).listen(Number(process.env.PORT), '127.0.0.1');`,
+    );
+
+    const result = await runBackendVerification(id, { startTimeoutMs: 5000 });
+
+    assert.equal(result.status, "PASS", JSON.stringify(result));
+  });
 });

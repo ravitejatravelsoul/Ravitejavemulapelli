@@ -27,6 +27,15 @@ import { runCommand, startManagedProcess, type ManagedProcess } from "./command-
  * a fresh scratch directory for this run's own SQLite file (never a
  * real persisted DB), and the process is always stopped before this
  * function returns, success or failure.
+ *
+ * The health path defaults to GET /__office_health — a real, required
+ * contract (see structured-output-contract.ts's backend-developer
+ * instructions) rather than the deliverable's own root route, which may
+ * not exist at all for a pure API backend. A plain 200 from a
+ * deliverable's own real route would only prove the HTTP server is
+ * alive, not that it's wired to its own data store; this convention
+ * additionally gets a real {"dbConnected": true|false} signal when the
+ * product reports one.
  */
 
 export interface BackendVerificationResult {
@@ -77,21 +86,30 @@ async function waitForHealth(
   proc: ManagedProcess,
 ): Promise<{ reachable: boolean; status?: number; body?: string; exitedEarly?: boolean }> {
   const deadline = Date.now() + timeoutMs;
+  let lastStatus: number | undefined;
+  let lastBody: string | undefined;
   while (Date.now() < deadline) {
     if (proc.hasExited()) return { reachable: false, exitedEarly: true };
     try {
       const res = await fetch(`http://127.0.0.1:${port}${path}`, { signal: AbortSignal.timeout(2000) });
-      const body = await res.text().catch(() => "");
-      return { reachable: true, status: res.status, body };
+      lastStatus = res.status;
+      lastBody = await res.text().catch(() => "");
+      // A non-2xx counts as "not ready yet," not a final answer — a
+      // backend whose HTTP listener accepts connections before all its
+      // routes (or an async DB connection its health check depends on)
+      // are ready gets the same fair chance to become healthy within
+      // the bound as one that's merely slow to start listening at all.
+      if (res.ok) return { reachable: true, status: lastStatus, body: lastBody };
     } catch {
-      await new Promise((r) => setTimeout(r, 250));
+      // not up yet
     }
+    await new Promise((r) => setTimeout(r, 250));
   }
-  return { reachable: false };
+  return { reachable: false, status: lastStatus, body: lastBody };
 }
 
 export interface RunBackendVerificationOptions {
-  /** Checked once the process is believed to be up — defaults to "/", since a generated backend's own routes are not known ahead of time at this step. */
+  /** Checked once the process is believed to be up — defaults to "/__office_health", the required contract (see this module's docblock). */
   healthPath?: string;
   /** Bounds the install step — real npm installs over a real network can be slow; a hung/never-resolving install must not block the runner forever. */
   installTimeoutMs?: number;
@@ -176,7 +194,8 @@ export async function runBackendVerification(
       env: { PORT: String(port), DB_PATH: dbPath, NODE_ENV: "test" },
     });
 
-    const health = await waitForHealth(port, options.healthPath ?? "/", options.startTimeoutMs ?? 20_000, proc);
+    const healthPath = options.healthPath ?? "/__office_health";
+    const health = await waitForHealth(port, healthPath, options.startTimeoutMs ?? 20_000, proc);
 
     if (health.exitedEarly) {
       const exit = proc.exitInfo();
@@ -188,13 +207,35 @@ export async function runBackendVerification(
     }
     if (!health.reachable) {
       const out = proc.getOutput();
-      return finish("FAIL", `The backend never responded on port ${port} within the startup timeout.`, {
+      const sawSomething = health.status !== undefined ? ` (last saw HTTP ${health.status} from ${healthPath}, never 2xx)` : "";
+      return finish("FAIL", `The backend never responded successfully on ${healthPath} (port ${port}) within the startup timeout${sawSomething}.`, {
         stdout: out.stdout.slice(-4000),
         stderr: out.stderr.slice(-4000),
       });
     }
 
-    return finish("PASS", `The backend started as a real process (npm start), bound to a real port, and responded to a real HTTP request (status ${health.status}).`, {
+    // Real, explicit evidence the deliverable's own health check reports
+    // its data store as disconnected — never inferred from absence, only
+    // from an actual `"dbConnected": false` the deliverable chose to
+    // report (see structured-output-contract.ts's backend-developer
+    // instructions: the field is only ever included when the product
+    // genuinely has a database to check).
+    let dbConnected: boolean | undefined;
+    try {
+      const parsed = JSON.parse(health.body ?? "{}") as { dbConnected?: unknown };
+      if (typeof parsed.dbConnected === "boolean") dbConnected = parsed.dbConnected;
+    } catch {
+      // Not JSON, or not an object — no dbConnected signal either way.
+    }
+    if (dbConnected === false) {
+      return finish("FAIL", `The backend responded on ${healthPath}, but its own health check reports it is not connected to its database ("dbConnected": false).`, {
+        port,
+        healthStatus: health.status,
+        healthBody: health.body,
+      });
+    }
+
+    return finish("PASS", `The backend started as a real process (npm start), bound to a real port, and responded to a real HTTP request on ${healthPath} (status ${health.status}${dbConnected ? ", database connected" : ""}).`, {
       port,
       healthStatus: health.status,
       healthBody: health.body,
