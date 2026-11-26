@@ -59,6 +59,27 @@ function stopServer(server: http.Server): Promise<void> {
 }
 
 /**
+ * Hostnames the verification browser must never reach — every loopback,
+ * RFC1918 private range, and link-local address (169.254.0.0/16 also
+ * covers the cloud-metadata endpoint IP used by several cloud providers)
+ * OTHER than this call's own ephemeral static server, which is allowed
+ * through by its exact origin, checked separately. Generated code is
+ * untrusted (Priority 0 security hardening): nothing it runs in this
+ * headless browser may probe the host's internal network or any other
+ * local service. Deliberately does NOT restrict public internet hosts —
+ * workspace-integrity.ts's own design already permits a deliverable to
+ * reference a real CDN script/stylesheet, and this check must not
+ * regress that.
+ */
+function isBlockedNetworkTarget(hostname: string): boolean {
+  const h = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (h === "localhost" || h === "::1" || h === "0.0.0.0") return true;
+  if (/^127\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h) || /^172\.(1[6-9]|2\d|3[0-1])\./.test(h) || /^169\.254\./.test(h)) return true;
+  if (/^fe80:|^fc[0-9a-f]{2}:|^fd[0-9a-f]{2}:/.test(h)) return true;
+  return false;
+}
+
+/**
  * Generic diagnosis for "<element> intercepts pointer events": finds
  * elements that are marked hidden (hidden class/attribute/aria-hidden)
  * yet are still rendered and cover a large part of the viewport, so a
@@ -151,6 +172,13 @@ export async function runQABrowserVerification(
     browser = await chromium.launch({ headless: true });
     const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
     activePage = page;
+    const serverOrigin = started.baseUrl;
+    await page.route("**/*", (route) => {
+      const url = new URL(route.request().url());
+      if (url.origin === serverOrigin) return route.continue();
+      if ((url.protocol === "http:" || url.protocol === "https:") && isBlockedNetworkTarget(url.hostname)) return route.abort();
+      return route.continue();
+    });
     page.on("console", (msg) => {
       if (msg.type() === "error") consoleErrors.push(msg.text());
     });

@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import { writeFile, createWorkspace } from "../workspace-service.ts";
 import { runQABrowserVerification } from "../qa-browser-verification.ts";
 
@@ -105,6 +107,49 @@ describe("runQABrowserVerification", () => {
 
     assert.equal(result.status, "FAIL");
     assert.match(result.summary, /did not change/i);
+  });
+
+  /**
+   * Priority 0 security hardening: generated code is untrusted. A
+   * malicious or buggy deliverable's script could try to reach another
+   * local service on the host (an internal API, another port on
+   * 127.0.0.1, a cloud metadata endpoint at a link-local address) from
+   * inside the verification browser. Proves the network-isolation route
+   * handler actually blocks this in a real browser, against a real
+   * second local server — not just that the matcher function returns
+   * true in isolation.
+   */
+  test("a generated page's script cannot reach another local service on 127.0.0.1 from inside the verification browser", async () => {
+    const internalServer = http.createServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("REACHED-INTERNAL-SERVICE");
+    });
+    await new Promise<void>((resolve) => internalServer.listen(0, "127.0.0.1", resolve));
+    const internalPort = (internalServer.address() as AddressInfo).port;
+
+    try {
+      await writeFile("ssrf-project", "index.html", GOOD_HTML);
+      await writeFile(
+        "ssrf-project",
+        "script.js",
+        `document.getElementById("greet-button").addEventListener("click", function () {
+           fetch("http://127.0.0.1:${internalPort}/").then((r) => r.text()).catch(() => "blocked").then((t) => {
+             document.getElementById("message").textContent = t;
+           });
+         });`,
+      );
+
+      const result = await runQABrowserVerification("ssrf-project");
+
+      // Whatever verdict QA reaches (PASS, or FAIL for an unrelated structural
+      // reason), the one thing that must never happen anywhere in the result
+      // is the internal service's response text leaking through — that is
+      // the actual security property under test, independent of exactly
+      // which QA check branch it happened to hit.
+      assert.doesNotMatch(JSON.stringify(result), /REACHED-INTERNAL-SERVICE/, "the generated page's script must never be able to read another local service's response");
+    } finally {
+      await new Promise<void>((resolve) => internalServer.close(() => resolve()));
+    }
   });
 
   test("two consecutive verification runs against different projects each start and cleanly stop their own ephemeral server (no orphaned listener)", async () => {
