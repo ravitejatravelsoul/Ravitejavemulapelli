@@ -2050,6 +2050,48 @@ describe("retry drift prevention (Phase 8 second follow-up)", () => {
       });
     });
 
+    // Real incident, Scenario A (Pomodoro) acceptance run: a corrective
+    // attempt that only fixed a broken /src/index.tsx file reference —
+    // exactly the reported failure — was rejected three times in a row
+    // as "changing the product's identity" and exhausted the retry
+    // ceiling, BLOCKING a genuinely fixable project. Root cause: the
+    // drift verifier was never told what failure the correction was
+    // supposed to fix, so a necessary change was indistinguishable from
+    // gratuitous drift. This asserts the real reported failure reason
+    // now reaches the verifier's prompt for real.
+    test("the drift check tells the verifier what reported failure the correction is meant to fix", async () => {
+      await withWorkspace(async () => {
+        const t = createTestDb();
+        const project = setupOllamaProject(t, "Create a Hello World webpage with a button.");
+        const devTask = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+        await executeTask(t.db, devTask.id, {
+          provider: writingAdapter({ "index.html": "<h1>Hello, World!</h1><button>Say hello</button>" }),
+          intentCheckFetch: fetchReturning(true, "ok"),
+        });
+        const { recordFailure } = await import("../../domain/project-outputs.ts");
+        const exactFailureReason = "index.html references /src/index.tsx, but /src/index.tsx does not exist.";
+        recordFailure(t.db, { projectId: project.id, taskId: devTask.id, reason: exactFailureReason });
+        updateTaskStatus(t.db, devTask.id, "PENDING");
+
+        let capturedPrompt = "";
+        const capturingFetch = (async (_url: string, init: RequestInit) => {
+          capturedPrompt = (JSON.parse(init.body as string) as { prompt: string }).prompt;
+          return { ok: true, status: 200, json: async () => ({ response: JSON.stringify({ consistent: true, reason: "ok" }) }) } as unknown as Response;
+        }) as unknown as typeof fetch;
+
+        await executeTask(t.db, devTask.id, {
+          provider: writingAdapter({ "index.html": "<h1>Hello, World!</h1><button>Say hello</button>" }),
+          intentCheckFetch: capturingFetch,
+        });
+
+        assert.ok(capturedPrompt.includes(exactFailureReason), "the drift verifier's prompt must include the exact reported failure the correction is meant to fix");
+        assert.match(capturedPrompt, /REPORTED FAILURE THIS CORRECTION IS MEANT TO FIX/);
+
+        t.close();
+      });
+    });
+
     test("Gate 3 does not apply to a first attempt — nothing 'previous' to drift away from yet", async () => {
       await withWorkspace(async () => {
         const t = createTestDb();

@@ -752,6 +752,7 @@ async function checkRetryDriftBeforeMaterialization(
   proposedOperations: import("../providers/types.ts").FileOperationPayload[],
   fetchImpl?: typeof fetch,
   verify?: (input: { authoritativeUserRequest: string; candidate: string; checkpointLabel: string }) => Promise<IntentConsistencyResult>,
+  failureReason?: string,
 ): Promise<{ consistent: true } | { consistent: false; reason: string }> {
   // Nothing "previous" to drift away from yet — a first real attempt at
   // this task, not a correction of one, so there's no drift risk to
@@ -760,11 +761,31 @@ async function checkRetryDriftBeforeMaterialization(
   const writeOps = proposedOperations.filter((op) => op.action === "write");
   if (writeOps.length === 0) return { consistent: true };
 
+  // Real incident, Scenario A (Pomodoro) acceptance run: a corrective
+  // attempt that only fixed a broken /src/index.tsx file reference (the
+  // exact thing the prior QA/workspace-integrity failure reported) was
+  // rejected three times in a row as "changing the product's identity",
+  // exhausting the retry ceiling and leaving a genuinely fixable project
+  // BLOCKED. Root cause: this checker never told the verifier WHAT
+  // problem the correction was supposed to solve — asking "does this
+  // still preserve the previous deliverable" with no stated reason to
+  // deviate from it makes any necessary fix indistinguishable from
+  // gratuitous drift. Including the actual reported failure here lets
+  // the verifier judge what this instruction already asked for all
+  // along ("except where fixing the reported failure genuinely requires
+  // a change") against a real, concrete reason instead of guessing.
   const standard = [
     authoritativeUserRequest,
     "",
     "This must also still be served by the previously-working deliverable below — a corrective attempt must preserve it except where fixing the reported failure genuinely requires a change:",
     ...currentFiles.map((f) => `--- ${f.path} ---\n${f.content}`),
+    ...(failureReason
+      ? [
+          "",
+          "THE REPORTED FAILURE THIS CORRECTION IS MEANT TO FIX (a change that directly and only addresses this is expected, not drift):",
+          failureReason,
+        ]
+      : []),
   ].join("\n");
   const candidate = writeOps.map((op) => `--- ${op.path} ---\n${op.content ?? ""}`).join("\n\n");
 
@@ -1641,6 +1662,7 @@ export async function executeTask(
           result.output.fileOperations,
           options.intentCheckFetch,
           input => checkDeliverableIntentConsistency(db, project, agentRun, input, { fetchImpl: options.intentCheckFetch, freeProviderFetchImpl: options.freeProviderFetchImpl }),
+          context.remediationContext?.failureReason ?? undefined,
         )
       : { consistent: true as const };
 
