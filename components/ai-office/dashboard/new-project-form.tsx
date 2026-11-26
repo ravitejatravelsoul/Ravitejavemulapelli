@@ -77,17 +77,27 @@ export function NewProjectForm({ remoteMode = false }: { remoteMode?: boolean })
       <form action={formAction} className="mt-5 flex flex-col gap-4">
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="title">Project name</Label>
-          <Input id="title" name="title" placeholder="Screenshot Test Report Tool" maxLength={120} required />
+          <Input
+            key={state?.title ?? ""}
+            id="title"
+            name="title"
+            placeholder="Screenshot Test Report Tool"
+            maxLength={120}
+            defaultValue={state?.title ?? ""}
+            required
+          />
         </div>
 
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="ideaText">Idea</Label>
           <Textarea
+            key={state?.ideaText ?? ""}
             id="ideaText"
             name="ideaText"
             rows={5}
             placeholder="Build a small web tool where manual testers capture screenshots and generate a test report."
             maxLength={4000}
+            defaultValue={state?.ideaText ?? ""}
             required
           />
         </div>
@@ -95,7 +105,13 @@ export function NewProjectForm({ remoteMode = false }: { remoteMode?: boolean })
         {remoteMode ? (
           <div className="flex flex-col gap-2">
             <Label htmlFor="remote-routing">Remote execution</Label>
-            <select id="remote-routing" name="routingMode" defaultValue="STANDARD" className="rounded-lg border p-2">
+            <select
+              key={state?.routingMode ?? "STANDARD"}
+              id="remote-routing"
+              name="routingMode"
+              defaultValue={state?.routingMode ?? "STANDARD"}
+              className="rounded-lg border p-2"
+            >
               <option value="STANDARD">Simulated — deterministic testing</option>
               <option value="FREE_MULTI_MODEL">Real qualified free models</option>
             </select>

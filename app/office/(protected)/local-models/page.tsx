@@ -11,10 +11,11 @@ import { GlassCard } from "@/components/common/glass-card";
 import { Badge } from "@/components/ui/badge";
 import { BenchmarkControls } from "@/components/ai-office/benchmark/benchmark-controls";
 import { isRemoteExecutionMode } from "@/lib/ai-office/remote/execution-mode";
-import { LocalOnlyNotice } from "@/components/ai-office/shell/local-only-notice";
 import { isClaudeEnabledByConfig } from "@/lib/ai-office/providers/claude/claude-adapter";
 import { listAllFreeProviderConfigs, getFreeEligibility } from "@/lib/ai-office/providers/free/free-provider-config";
 import { listModelRegistryEntries, isProviderEnabled, isCurrentlyRateLimited, listRoutingDecisions } from "@/lib/ai-office/domain/model-registry";
+import { remoteClientFromEnv, readOfficeState, hydrateEphemeralDb } from "@/lib/ai-office/remote/remote-state-store";
+import { readModelCatalog } from "@/lib/ai-office/remote/model-catalog";
 import {
   ProviderStatusRow,
   RefreshCatalogButton,
@@ -34,13 +35,18 @@ function formatDate(ms: number): string {
 const STATUS_BADGE: Record<string, "default" | "secondary" | "destructive"> = { PASS: "secondary", PARTIAL: "default", FAIL: "destructive" };
 
 export default async function LocalModelsPage() {
+  // Remote Mode (production) has no local Ollama to benchmark, but it
+  // DOES support real FREE_MULTI_MODEL execution via a GitHub-hosted
+  // model catalog — this used to unconditionally claim "there is nothing
+  // to benchmark or route here", which stopped being true the moment
+  // real free-model execution started working in Remote Mode. An owner
+  // with no code access had no way to tell whether real execution was
+  // configured, whether the catalog was stale, or which provider env
+  // var was missing — exactly the gap that made the earlier
+  // "No eligible qualified free model" / "Remote routing evidence is
+  // unavailable" errors undiagnosable from the UI alone.
   if (isRemoteExecutionMode()) {
-    return (
-      <LocalOnlyNotice
-        title="AI Models & Routing"
-        reason="Ollama benchmarking and model routing require a locally-installed Ollama server — Remote Mode's projects always run SIMULATED, so there is nothing to benchmark or route here."
-      />
-    );
+    return <RemoteModelDiagnostics />;
   }
 
   const db = getAppDatabase();
@@ -286,6 +292,156 @@ export default async function LocalModelsPage() {
             ))}
           </ul>
         </GlassCard>
+      )}
+    </div>
+  );
+}
+
+function ageLabel(ms: number): string {
+  const minutes = Math.round((Date.now() - ms) / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+/**
+ * Remote Mode's real-execution health view — reads the SAME GitHub-hosted
+ * model catalog `app/office/actions/remote-projects.ts` reads before
+ * creating a FREE_MULTI_MODEL project, and reuses the exact same
+ * `hydrateEphemeralDb`/`listModelRegistryEntries`/`isProviderEnabled`
+ * domain functions and `ModelRegistryTable`/`ProviderStatusRow`
+ * components the local page already uses — this is the same data, just
+ * sourced from the runtime repo's catalog file instead of a local
+ * `office.db`. Never shows a credential value, only presence/absence
+ * (matching the existing Claude section's privacy pattern below).
+ */
+async function RemoteModelDiagnostics() {
+  let configError: string | null = null;
+  let catalog: Awaited<ReturnType<typeof readModelCatalog>>["catalog"] = null;
+  let catalogSha: string | null = null;
+  try {
+    const remoteConfig = remoteClientFromEnv();
+    const [{ state: office }, catalogResult] = await Promise.all([readOfficeState(remoteConfig), readModelCatalog(remoteConfig)]);
+    catalog = catalogResult.catalog;
+    catalogSha = catalogResult.sha;
+    void office;
+  } catch (error) {
+    configError = error instanceof Error ? error.message : "Remote Mode is not configured.";
+  }
+
+  const freeProviderConfigs = listAllFreeProviderConfigs();
+  const freeTierConfirmed = (provider: "groq" | "gemini") =>
+    process.env[`AI_OFFICE_${provider.toUpperCase()}_FREE_TIER_CONFIRMED`] === "true" && !!process.env[`AI_OFFICE_${provider.toUpperCase()}_FREE_MODELS`];
+
+  let registryRows: ModelRegistryRowView[] = [];
+  let providerStatuses: ProviderStatusView[] = [];
+  if (catalog) {
+    const ephemeralDb = hydrateEphemeralDb({ state: "OPEN", changedAt: null, changedBy: null, reason: null, officeBudget: { capUsd: 30, warnAtPercent: 80 }, updatedAt: new Date(0).toISOString() }, null, catalog);
+    registryRows = listModelRegistryEntries(ephemeralDb).map((r) => ({
+      provider: r.provider,
+      modelId: r.modelId,
+      displayName: r.displayName,
+      freeEligibility: r.freeTier ? getFreeEligibility(r.provider, r.modelId) : null,
+      enabled: r.enabled === 1,
+      capabilities: JSON.parse(r.capabilities) as string[],
+      health: r.health,
+      rateLimited: isCurrentlyRateLimited(r.rateLimitedUntil),
+      benchmarkScore: r.benchmarkScore,
+      qualified: r.qualified === 1,
+      avgLatencyMs: r.avgLatencyMs,
+      tasksCompleted: r.tasksCompleted,
+      tasksFailed: r.tasksFailed,
+      lastUsedAt: r.lastUsedAt,
+    }));
+    providerStatuses = freeProviderConfigs.map((p) => ({
+      provider: p.name,
+      configured: p.configured,
+      enabled: isProviderEnabled(ephemeralDb, p.name),
+    }));
+  }
+
+  const qualifiedEnabledCount = registryRows.filter((r) => r.qualified && r.enabled).length;
+  const ready = !configError && !!catalog && !catalog.lease && qualifiedEnabledCount > 0;
+
+  return (
+    <div className="flex flex-col gap-6">
+      <GlassCard>
+        <h1 className="text-lg font-semibold tracking-tight">AI Models &amp; Routing — Remote Mode</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Whether a real FREE_MULTI_MODEL project can actually run right now — the exact same checks a new project&apos;s creation makes, so a
+          failure there can be diagnosed here first.
+        </p>
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <Badge variant={ready ? "secondary" : "destructive"}>{ready ? "REAL EXECUTION READY" : "REAL EXECUTION NOT READY"}</Badge>
+          {configError && <Badge variant="destructive">GITHUB CONNECTION: {configError}</Badge>}
+          {!configError && !catalog && <Badge variant="destructive">CATALOG NOT SYNCHRONIZED</Badge>}
+          {!configError && catalog?.lease && <Badge variant="default">CATALOG LEASED — WORKER ACTIVE</Badge>}
+          {!configError && catalog && !catalog.lease && (
+            <Badge variant="outline" className="font-mono text-[0.65rem]">
+              revision {catalog.revision} · synced {ageLabel(catalog.updatedAt)}
+            </Badge>
+          )}
+          {!configError && catalog && (
+            <Badge variant={qualifiedEnabledCount > 0 ? "secondary" : "destructive"}>{qualifiedEnabledCount} qualified &amp; enabled model(s)</Badge>
+          )}
+        </div>
+        {!ready && (
+          <p className="mt-3 text-xs text-muted-foreground">
+            {configError
+              ? "AI_OFFICE_REMOTE_GITHUB_TOKEN / AI_OFFICE_REMOTE_REPO_OWNER / AI_OFFICE_REMOTE_REPO_NAME must all be set for this deployment to reach the runtime repo at all — this affects every remote project, not just FREE_MULTI_MODEL ones."
+              : !catalog
+                ? "No model catalog has ever been synchronized to this runtime's default branch. Run scripts/ai-office-remote-sync-models.ts against a database with real, owner-reviewed qualified-model evidence, including the exact AI_OFFICE_<PROVIDER>_FREE_TIER_CONFIRMED / AI_OFFICE_<PROVIDER>_FREE_MODELS values this deployment uses — otherwise the synced catalog's eligibility data won't match what this process checks, and every model will come back disabled."
+                : catalog.lease
+                  ? "A worker currently holds the catalog lease (reading or writing real routing evidence). This clears on its own once that worker's cycle finishes."
+                  : "The catalog exists but no model is both qualified and enabled — check each provider's row below for why (not free-tier-confirmed here, unhealthy, or rate-limited)."}
+          </p>
+        )}
+      </GlassCard>
+
+      <GlassCard>
+        <h2 className="text-sm font-semibold tracking-tight">Free Multi-Model Providers</h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          &ldquo;Configured&rdquo; means this deployment has the provider&apos;s API key set; &ldquo;enabled&rdquo; reflects the synced catalog&apos;s
+          own provider_configs row. No credential value is ever shown here, and viewing this page never makes a billable request.
+        </p>
+        <div className="mt-4 flex flex-col gap-2">
+          {providerStatuses.length === 0 && catalog === null && !configError && (
+            <p className="text-xs text-muted-foreground">Provider status is read from the synced catalog — nothing to show until one exists.</p>
+          )}
+          {providerStatuses.map((status) => (
+            <ProviderStatusRow key={status.provider} status={status} />
+          ))}
+        </div>
+        <ul className="mt-3 flex flex-col gap-1 text-xs text-muted-foreground">
+          {(["groq", "gemini"] as const).map((p) => (
+            <li key={p}>
+              <span className="font-mono uppercase">{p}</span>: free-tier confirmation env vars{" "}
+              {freeTierConfirmed(p) ? <span className="text-accent-2">present</span> : <span className="text-destructive">missing</span>} on this
+              deployment.
+            </li>
+          ))}
+        </ul>
+        {registryRows.length > 0 && <ModelRegistryTable rows={registryRows} />}
+      </GlassCard>
+
+      <GlassCard>
+        <h2 className="text-sm font-semibold tracking-tight">Claude</h2>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Badge variant={isClaudeEnabledByConfig() ? "outline" : "destructive"} className="font-mono text-[0.65rem] uppercase">
+            Claude: {isClaudeEnabledByConfig() ? "Enabled" : "Disabled"}
+          </Badge>
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          Remote Mode forces the Claude kill switch regardless of this flag — Claude is never selected or called for any remote project.
+        </p>
+      </GlassCard>
+
+      {catalogSha && (
+        <p className="text-[0.65rem] text-muted-foreground">
+          Catalog blob sha <span className="font-mono">{catalogSha.slice(0, 12)}</span>
+        </p>
       )}
     </div>
   );

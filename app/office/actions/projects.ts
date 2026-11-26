@@ -48,6 +48,9 @@ export interface CreateProjectState {
   projectId?: string;
   /** Remote Mode only — the routing mode actually persisted on the created project, read back from the database by createRemoteProjectAction. Absent for a local-mode creation (routing there is decided by the existing local provider/freeModelOrchestration fields, not this). */
   routingMode?: "STANDARD" | "FREE_MULTI_MODEL";
+  /** Echoed back on failure so the form can refill itself — see CreateRemoteProjectState's identical field for the real incident this closes. Never populated on success. */
+  title?: string;
+  ideaText?: string;
 }
 
 /**
@@ -72,17 +75,20 @@ export async function createProjectAction(_prevState: CreateProjectState | undef
   // getAppDatabase(); reusing it here keeps this the SAME "Start New
   // Project" form/route for both modes rather than a second remote-only
   // page.
+  const rawTitle = typeof formData.get("title") === "string" ? (formData.get("title") as string) : undefined;
+  const rawIdeaText = typeof formData.get("ideaText") === "string" ? (formData.get("ideaText") as string) : undefined;
+
   if (isRemoteExecutionMode()) {
     const result = await createRemoteProjectAction(undefined, formData);
-    if (result.error) return { error: result.error };
+    if (result.error) return { error: result.error, title: result.title, ideaText: result.ideaText };
     if (result.projectId) {
       if (stayInHeadquarters) return { projectId: result.projectId, routingMode: result.routingMode };
       redirect(`/office/projects/${result.projectId}`);
     }
-    return { error: "Project creation did not return a project id." };
+    return { error: "Project creation did not return a project id.", title: rawTitle, ideaText: rawIdeaText };
   }
 
-  if (!isAiOfficeOperationalModeEnabled()) return { error: OPERATIONAL_MODE_DISABLED_MESSAGE };
+  if (!isAiOfficeOperationalModeEnabled()) return { error: OPERATIONAL_MODE_DISABLED_MESSAGE, title: rawTitle, ideaText: rawIdeaText };
 
   const parsed = newProjectSchema.safeParse({
     title: formData.get("title"),
@@ -93,7 +99,7 @@ export async function createProjectAction(_prevState: CreateProjectState | undef
     freeModelOrchestration: formData.get("freeModelOrchestration") || undefined,
   });
   if (!parsed.success) {
-    return { error: parsed.error.issues[0]?.message ?? "Enter a project name and an idea." };
+    return { error: parsed.error.issues[0]?.message ?? "Enter a project name and an idea.", title: rawTitle, ideaText: rawIdeaText };
   }
 
   const db = getAppDatabase();

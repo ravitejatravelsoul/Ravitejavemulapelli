@@ -288,4 +288,38 @@ describe("Office navigation — real clicks, real browser, isolated database", (
     assert.deepEqual(errors, [], "no console/page errors while clicking through every tab");
     await page.close();
   });
+
+  // Real incident, production "Start New Project" form: any server-side
+  // error (a too-short idea, a misconfigured remote provider, a stale
+  // catalog) used to silently discard the title/idea the owner had just
+  // typed and reset the remote-execution dropdown back to "Simulated" —
+  // forcing a full retype even though the mistake was never theirs. This
+  // drives the REAL form through a real, deterministic, zero-AI
+  // validation error (an idea under the 10-character minimum) and asserts
+  // both fields still show exactly what was typed afterward.
+  test('a failed submission (idea too short) preserves the typed title and idea instead of resetting the form', async () => {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const errors: string[] = [];
+    page.on("pageerror", (err) => errors.push(String(err)));
+
+    await page.goto(`${BASE}/office/login`);
+    await page.fill('input[name="email"]', TEST_EMAIL);
+    await page.fill('input[name="password"]', TEST_PASSWORD);
+    await page.click('button[type="submit"]');
+    await page.waitForURL(`${BASE}/office`, { timeout: 15_000 });
+
+    await page.goto(`${BASE}/office/projects/new`);
+    const title = "Preserve Me On Error";
+    const shortIdea = "too short";
+    await page.fill("#title", title);
+    await page.fill("#ideaText", shortIdea);
+    await page.getByRole("button", { name: "Create Project" }).click();
+
+    await page.getByText("Describe the idea in at least a sentence.").waitFor({ timeout: 10_000 });
+    assert.equal(await page.locator("#title").inputValue(), title, "the typed title must survive a failed submission");
+    assert.equal(await page.locator("#ideaText").inputValue(), shortIdea, "the typed idea must survive a failed submission");
+
+    assert.deepEqual(errors, [], "no console/page errors while retrying a failed submission");
+    await page.close();
+  });
 });
