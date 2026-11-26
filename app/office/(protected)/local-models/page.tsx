@@ -13,7 +13,7 @@ import { BenchmarkControls } from "@/components/ai-office/benchmark/benchmark-co
 import { isRemoteExecutionMode } from "@/lib/ai-office/remote/execution-mode";
 import { isClaudeEnabledByConfig } from "@/lib/ai-office/providers/claude/claude-adapter";
 import { listAllFreeProviderConfigs, getFreeEligibility } from "@/lib/ai-office/providers/free/free-provider-config";
-import { listModelRegistryEntries, isProviderEnabled, isCurrentlyRateLimited, listRoutingDecisions } from "@/lib/ai-office/domain/model-registry";
+import { listModelRegistryEntries, isProviderEnabled, isCurrentlyRateLimited, getUnavailableExplanation, listRoutingDecisions } from "@/lib/ai-office/domain/model-registry";
 import { remoteClientFromEnv, readOfficeState, hydrateEphemeralDb } from "@/lib/ai-office/remote/remote-state-store";
 import { readModelCatalog } from "@/lib/ai-office/remote/model-catalog";
 import {
@@ -80,6 +80,7 @@ export default async function LocalModelsPage() {
     capabilities: JSON.parse(r.capabilities) as string[],
     health: r.health,
     rateLimited: isCurrentlyRateLimited(r.rateLimitedUntil),
+    unavailableExplanation: getUnavailableExplanation(r),
     benchmarkScore: r.benchmarkScore,
     qualified: r.qualified === 1,
     avgLatencyMs: r.avgLatencyMs,
@@ -348,6 +349,7 @@ async function RemoteModelDiagnostics() {
       capabilities: JSON.parse(r.capabilities) as string[],
       health: r.health,
       rateLimited: isCurrentlyRateLimited(r.rateLimitedUntil),
+      unavailableExplanation: getUnavailableExplanation(r),
       benchmarkScore: r.benchmarkScore,
       qualified: r.qualified === 1,
       avgLatencyMs: r.avgLatencyMs,

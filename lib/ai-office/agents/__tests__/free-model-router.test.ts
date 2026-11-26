@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { createTestDb } from "../../db/test-helpers.ts";
-import { upsertModelRegistryEntry as rawUpsert, recordModelHealthCheck, setModelEnabled, recordModelOutcome, setModelBenchmarkScore, setProviderEnabled } from "../../domain/model-registry.ts";
+import { upsertModelRegistryEntry as rawUpsert, getModelRegistryEntry, recordModelHealthCheck, setModelEnabled, recordModelOutcome, setModelBenchmarkScore, setProviderEnabled } from "../../domain/model-registry.ts";
 import { selectFreeModel } from "../free-model-router.ts";
 
 describe("selectFreeModel", () => {
@@ -117,4 +117,29 @@ function upsertModelRegistryEntry(...args: Parameters<typeof rawUpsert>) {
    recordModelOutcome(t.db,"groq","alternate",{succeeded:false,rateLimitedForMs:60000});
    assert.equal(selectFreeModel(t.db,{capability:"CODING"}),null);
   } finally {t.close();}
+ });
+
+ // Real incident, production (2026-11-26): the three-failure gate itself
+ // never set a real cooldown, only a rate-limit did — the owner has
+ // explicitly authorized bounded automatic recovery for this case too.
+ test("once the circuit-breaker's own cooldown passes, the model is eligible for a recovery probe again — end to end through the real router", () => {
+  const t = createTestDb();
+  try {
+   upsertModelRegistryEntry(t.db, { provider: "groq", modelId: "tripped", displayName: "tripped", capabilities: ["CODING"] });
+   recordModelOutcome(t.db, "groq", "tripped", { succeeded: false });
+   recordModelOutcome(t.db, "groq", "tripped", { succeeded: false });
+   recordModelOutcome(t.db, "groq", "tripped", { succeeded: false });
+   assert.equal(selectFreeModel(t.db, { capability: "CODING" }), null, "excluded while the circuit-breaker cooldown is still in the future");
+
+   t.db.prepare("UPDATE model_registry SET rateLimitedUntil = ? WHERE modelId = ?").run(Date.now() - 1, "tripped");
+   assert.ok(selectFreeModel(t.db, { capability: "CODING" })?.candidates.some((c) => c.modelId === "tripped"), "a single recovery probe is allowed once the real cooldown this time passes");
+
+   recordModelOutcome(t.db, "groq", "tripped", { succeeded: true });
+   const reg = getModelRegistryEntry(t.db, "groq", "tripped")!;
+   assert.equal(reg.health, "HEALTHY");
+   assert.equal(reg.recentFailureCount, 0);
+   assert.ok(selectFreeModel(t.db, { capability: "CODING" })?.candidates.some((c) => c.modelId === "tripped"), "fully recovered and eligible with no cooldown pending");
+  } finally {
+   t.close();
+  }
  });

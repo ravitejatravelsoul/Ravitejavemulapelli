@@ -32,6 +32,17 @@ export interface ModelRegistryRowView {
   capabilities: string[];
   health: "HEALTHY" | "DEGRADED" | "UNAVAILABLE" | "UNKNOWN";
   rateLimited: boolean;
+  /**
+   * Precomputed server-side (never `Date.now()` in this client
+   * component's render — see getUnavailableExplanation's caller) —
+   * human-readable explanation shown only when `health === "UNAVAILABLE"`.
+   * Circuit-breaker cooldown follow-up — see model-registry.ts's
+   * recordModelOutcome: distinguishes "cooldown pending, will retry
+   * automatically" from "bounded auto-recovery exhausted" from "no
+   * automatic recovery possible (credential/configuration problem)" —
+   * all three need an owner to know which one they're looking at.
+   */
+  unavailableExplanation: string | null;
   benchmarkScore: number | null;
   qualified: boolean;
   avgLatencyMs: number | null;
@@ -146,6 +157,9 @@ export function ModelRegistryTable({ rows }: { rows: ModelRegistryRowView[] }) {
                   <Badge variant={HEALTH_TONE[row.health]} className="font-mono text-[0.6rem] uppercase">
                     {row.rateLimited ? "RATE LIMITED" : row.health}
                   </Badge>
+                  {row.health === "UNAVAILABLE" && row.unavailableExplanation && (
+                    <p className="mt-1 text-[0.65rem] text-muted-foreground">{row.unavailableExplanation}</p>
+                  )}
                 </td>
                 <td className="py-2 px-3">
                   {row.benchmarkScore !== null ? (

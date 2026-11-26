@@ -68,6 +68,93 @@ describe("model_registry persistence", () => {
     t.close();
   });
 
+  // Real incident, production (2026-11-26): three genuine, organic
+  // operational failures left both qualified Groq models permanently
+  // UNAVAILABLE with no path back, blocking every unrelated project's
+  // ability to even create a new FREE_MULTI_MODEL task. The owner has
+  // explicitly authorized controlled, bounded automatic recovery.
+  describe("circuit-breaker cooldown (bounded automatic recovery, owner-authorized)", () => {
+    test("three consecutive genuine operational failures set a real, bounded cooldown — not a permanent lock", () => {
+      const t = createTestDb();
+      upsertModelRegistryEntry(t.db, { provider: "groq", modelId: "m1", displayName: "m1", capabilities: ["CODING"] });
+      recordModelOutcome(t.db, "groq", "m1", { succeeded: false });
+      recordModelOutcome(t.db, "groq", "m1", { succeeded: false });
+      recordModelOutcome(t.db, "groq", "m1", { succeeded: false });
+      const row = getModelRegistryEntry(t.db, "groq", "m1")!;
+      assert.equal(row.health, "UNAVAILABLE");
+      assert.equal(row.recentFailureCount, 3);
+      assert.ok(row.rateLimitedUntil !== null, "a real cooldown must be set — not a permanent, unrecoverable lock");
+      const minutesUntil = (row.rateLimitedUntil! - Date.now()) / 60_000;
+      assert.ok(minutesUntil > 10 && minutesUntil <= 16, `expected roughly a 15-minute first cooldown, got ${minutesUntil.toFixed(1)}m`);
+      t.close();
+    });
+
+    test("each further failed recovery probe doubles the cooldown, capped at 4 hours", () => {
+      const t = createTestDb();
+      upsertModelRegistryEntry(t.db, { provider: "groq", modelId: "m1", displayName: "m1", capabilities: ["CODING"] });
+      const cooldowns: number[] = [];
+      for (let i = 0; i < 6; i++) {
+        recordModelOutcome(t.db, "groq", "m1", { succeeded: false });
+        const row = getModelRegistryEntry(t.db, "groq", "m1")!;
+        if (row.rateLimitedUntil) cooldowns.push(row.rateLimitedUntil - Date.now());
+      }
+      assert.equal(cooldowns.length, 4, "a cooldown is only set once the gate first trips (attempt 3), then on every further failure");
+      for (let i = 1; i < cooldowns.length; i++) {
+        assert.ok(cooldowns[i]! > cooldowns[i - 1]! * 1.8, `cooldown ${i} (${cooldowns[i]}ms) must be roughly double cooldown ${i - 1} (${cooldowns[i - 1]}ms)`);
+      }
+      assert.ok(cooldowns[cooldowns.length - 1]! <= 4 * 60 * 60_000 + 1000, "the cooldown is capped at 4 hours");
+      t.close();
+    });
+
+    test("after the bounded auto-recovery attempt ceiling, no further cooldown is set — stays UNAVAILABLE until an owner acts", () => {
+      const t = createTestDb();
+      upsertModelRegistryEntry(t.db, { provider: "groq", modelId: "m1", displayName: "m1", capabilities: ["CODING"] });
+      for (let i = 0; i < 7; i++) recordModelOutcome(t.db, "groq", "m1", { succeeded: false });
+      const beforeLastCooldown = getModelRegistryEntry(t.db, "groq", "m1")!.rateLimitedUntil;
+      recordModelOutcome(t.db, "groq", "m1", { succeeded: false }); // 8th consecutive failure — past the ceiling
+      const row = getModelRegistryEntry(t.db, "groq", "m1")!;
+      assert.equal(row.health, "UNAVAILABLE");
+      assert.equal(row.rateLimitedUntil, beforeLastCooldown, "no new cooldown is granted past the bounded attempt ceiling — never unlimited retries");
+      t.close();
+    });
+
+    test("a recovery probe that succeeds once the cooldown passes fully closes the circuit", () => {
+      const t = createTestDb();
+      upsertModelRegistryEntry(t.db, { provider: "groq", modelId: "m1", displayName: "m1", capabilities: ["CODING"] });
+      recordModelOutcome(t.db, "groq", "m1", { succeeded: false });
+      recordModelOutcome(t.db, "groq", "m1", { succeeded: false });
+      recordModelOutcome(t.db, "groq", "m1", { succeeded: false });
+      recordModelOutcome(t.db, "groq", "m1", { succeeded: true });
+      const row = getModelRegistryEntry(t.db, "groq", "m1")!;
+      assert.equal(row.health, "HEALTHY");
+      assert.equal(row.recentFailureCount, 0);
+      assert.equal(row.rateLimitedUntil, null, "a real success fully closes the circuit, clearing any pending cooldown");
+      t.close();
+    });
+
+    test("an authentication/configuration failure (HTTP 401/403/404/410) never gets a cooldown — stays blocked until an owner corrects it, regardless of count", () => {
+      const t = createTestDb();
+      upsertModelRegistryEntry(t.db, { provider: "groq", modelId: "m1", displayName: "m1", capabilities: ["CODING"] });
+      recordModelOutcome(t.db, "groq", "m1", { succeeded: false, unavailable: true });
+      const row = getModelRegistryEntry(t.db, "groq", "m1")!;
+      assert.equal(row.health, "UNAVAILABLE");
+      assert.equal(row.recentFailureCount, 1, "a single auth/config failure is already enough to mark unavailable — it never waits for three");
+      assert.equal(row.rateLimitedUntil, null, "no time-based recovery is ever offered for a credential/configuration problem");
+      t.close();
+    });
+
+    test("a genuine rate-limit (HTTP 429) still uses the provider's own reported duration, never the circuit-breaker formula", () => {
+      const t = createTestDb();
+      upsertModelRegistryEntry(t.db, { provider: "groq", modelId: "m1", displayName: "m1", capabilities: ["CODING"] });
+      recordModelOutcome(t.db, "groq", "m1", { succeeded: false, rateLimitedForMs: 5000 });
+      const row = getModelRegistryEntry(t.db, "groq", "m1")!;
+      assert.equal(row.health, "UNAVAILABLE");
+      const seconds = (row.rateLimitedUntil! - Date.now()) / 1000;
+      assert.ok(seconds > 3 && seconds <= 6, `expected the provider's own ~5s Retry-After, got ${seconds.toFixed(1)}s`);
+      t.close();
+    });
+  });
+
   test("a rate-limited outcome marks the model UNAVAILABLE with a future rateLimitedUntil", () => {
     const t = createTestDb();
     upsertModelRegistryEntry(t.db, { provider: "groq", modelId: "m1", displayName: "m1", capabilities: ["CODING"] });

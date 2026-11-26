@@ -66,7 +66,15 @@ function scoreModel(row: ModelRegistryRow, input: SelectFreeModelInput, now: num
   if (!parseCapabilities(row.capabilities).includes(input.capability)) return null;
   if (input.requiredCapabilities?.some((c) => !parseCapabilities(row.capabilities).includes(c))) return null;
   if (input.requiredCapabilities?.includes("STRUCTURED_OUTPUT") && !row.structuredOutput) return null;
-  if (row.recentFailureCount >= 3) return null;
+  // Three consecutive genuine operational failures trip the circuit
+  // breaker — but, unlike before, recordModelOutcome now sets a real,
+  // bounded, exponentially-backing-off `rateLimitedUntil` for this exact
+  // case (never for an auth/config failure, which keeps no cooldown at
+  // all and so stays excluded here forever, same as always). Once that
+  // cooldown passes, a single recovery probe is allowed through — not an
+  // unconditional reopen, since a genuine real success is still required
+  // to actually reset `recentFailureCount`/health back to normal.
+  if (row.recentFailureCount >= 3 && (!row.rateLimitedUntil || row.rateLimitedUntil > now)) return null;
   if (row.health === "UNAVAILABLE" && (!row.rateLimitedUntil || row.rateLimitedUntil > now)) return null;
   if (row.rateLimitedUntil && row.rateLimitedUntil > now) return null;
   if (row.contextWindow && input.estimatedInputTokens && input.estimatedInputTokens + (input.estimatedOutputTokens ?? 0) > row.contextWindow) return null;
