@@ -4,7 +4,7 @@ import { createTestDb } from "../../db/test-helpers.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listFiles, readFile } from "../../workspace/workspace-service.ts";
+import { listFiles, readFile, writeFile } from "../../workspace/workspace-service.ts";
 import { listWorkspaceFileRecords, getWorkspace, setDeliveryState } from "../../domain/workspace.ts";
 import { getOwner } from "../../domain/users.ts";
 import { createProjectWithIdea, getProject } from "../../domain/projects.ts";
@@ -773,6 +773,75 @@ describe("real file materialization (Phase 8)", () => {
 
       const failures = listUnresolvedFailures(t.db, project.id);
       assert.match(failures[0]!.reason, /File operation rejected/);
+
+      t.close();
+    });
+  });
+
+  test("qa-agent for a backend-only (no browser deliverable) plan really starts the backend via runBackendVerification and marks it VERIFIED", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const { project } = setupProject(t);
+      // No frontend-developer task at all — a real, legitimate backend-only
+      // plan (role-selection.ts's own CLI/terminal-deliverable case).
+      const backendTask = createTask(t.db, { projectId: project.id, roleId: "backend-developer", title: "Implement backend" });
+      await writeFile(
+        project.id,
+        "package.json",
+        JSON.stringify({ name: "backend-only-project", version: "1.0.0", scripts: { start: "node server.js" } }),
+      );
+      await writeFile(
+        project.id,
+        "server.js",
+        "require('http').createServer((req,res)=>{res.end('ok')}).listen(Number(process.env.PORT),'127.0.0.1');",
+      );
+
+      const { task: qaTask } = createTaskWithDependencies(t.db, {
+        projectId: project.id,
+        roleId: "qa-agent",
+        title: "Test",
+        dependsOnTaskIds: [backendTask.id],
+      });
+      const result = await executeTask(t.db, qaTask.id, { scenario: "success" });
+
+      assert.equal(result.outcome, "succeeded");
+      const testResults = listTestResultsForTask(t.db, qaTask.id);
+      assert.equal(testResults.length, 1);
+      assert.equal(testResults[0]!.status, "PASS");
+      assert.match(testResults[0]!.summary, /real process/i, "the backend-only QA verdict must come from the real runBackendVerification check, not an unexamined fixture");
+      assert.ok(testResults[0]!.durationMs !== null && testResults[0]!.durationMs > 0, "a real npm install + npm start cycle takes real, non-zero time");
+      assert.equal(getWorkspace(t.db, project.id)?.deliveryState, "VERIFIED");
+
+      t.close();
+    });
+  });
+
+  test("qa-agent for a backend-only plan FAILs when the real backend never responds, and does not mark the workspace VERIFIED", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const { project } = setupProject(t);
+      const backendTask = createTask(t.db, { projectId: project.id, roleId: "backend-developer", title: "Implement backend" });
+      await writeFile(
+        project.id,
+        "package.json",
+        JSON.stringify({ name: "broken-backend-project", version: "1.0.0", scripts: { start: "node server.js" } }),
+      );
+      // Deliberately never binds a port — a real bug a real generated backend could have.
+      await writeFile(project.id, "server.js", "setInterval(() => {}, 1000);");
+
+      const { task: qaTask } = createTaskWithDependencies(t.db, {
+        projectId: project.id,
+        roleId: "qa-agent",
+        title: "Test",
+        dependsOnTaskIds: [backendTask.id],
+      });
+      const result = await executeTask(t.db, qaTask.id, { scenario: "success" });
+
+      assert.equal(result.outcome, "retried");
+      const testResults = listTestResultsForTask(t.db, qaTask.id);
+      assert.equal(testResults[0]!.status, "FAIL");
+      assert.match(testResults[0]!.summary, /backend verification failed/i);
+      assert.notEqual(getWorkspace(t.db, project.id)?.deliveryState, "VERIFIED");
 
       t.close();
     });

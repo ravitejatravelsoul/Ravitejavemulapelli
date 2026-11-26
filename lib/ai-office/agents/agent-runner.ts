@@ -1922,7 +1922,16 @@ export async function executeTask(
   // a role that produces a browser entry point, never to a plan that
   // structurally has no such role.
   const projectPlannedBrowserDeliverable = listTasksForProject(db, project.id).some((t) => t.roleId === "frontend-developer");
-  if (role.id === "qa-agent" && workspaceExists(project.id) && projectPlannedBrowserDeliverable) {
+  // Real full-stack execution, step 1 (Priority 0 #8) — a backend-only
+  // (CLI/no-browser) plan previously fell through this entire gate and
+  // got NO real verification at all: QA's own fixture/AI-reported
+  // testResults stood unexamined, and even a full-stack plan's backend
+  // half was written to the workspace and never actually run. Checked
+  // independently of `projectPlannedBrowserDeliverable` for exactly that
+  // reason — the two deliverables are verified separately below and
+  // combined, never silently skipped just because the other one exists.
+  const projectPlannedBackendDeliverable = listTasksForProject(db, project.id).some((t) => t.roleId === "backend-developer");
+  if (role.id === "qa-agent" && workspaceExists(project.id) && (projectPlannedBrowserDeliverable || projectPlannedBackendDeliverable)) {
     // Dynamic import, not a top-level one — see qa-browser-verification.ts's
     // real `import { chromium } from "playwright"`. agent-runner.ts is
     // statically reachable from app/office/(protected)/page.tsx (via
@@ -1936,10 +1945,31 @@ export async function executeTask(
     // ever resolved when a qa-agent task with a real browser deliverable
     // is actually executed — which never happens when operational mode
     // is disabled.
-    const { runQABrowserVerification } = await import("../workspace/qa-browser-verification.ts");
-    const verification = await runQABrowserVerification(project.id);
+    const verification = projectPlannedBrowserDeliverable
+      ? await (await import("../workspace/qa-browser-verification.ts")).runQABrowserVerification(project.id)
+      : { status: "PASS" as const, summary: "No browser deliverable planned for this project — skipping browser verification.", details: {} as Record<string, unknown>, durationMs: 0, targetUrl: "" };
     let finalStatus = verification.status;
     let finalSummary = verification.summary;
+    let finalDetails: Record<string, unknown> = verification.details;
+    let finalDurationMs = verification.durationMs;
+
+    // Backend verification runs whenever the plan includes it, but only
+    // AFTER a browser check that was also planned has already passed —
+    // no point starting a real npm install/server for a frontend that's
+    // already known broken, and the failure the developer needs to see
+    // first is whichever one actually happened first in the pipeline.
+    if (projectPlannedBackendDeliverable && finalStatus === "PASS") {
+      const { runBackendVerification } = await import("../workspace/backend-verification.ts");
+      const backendVerification = await runBackendVerification(project.id);
+      finalDetails = { ...finalDetails, backend: backendVerification.details };
+      finalDurationMs += backendVerification.durationMs;
+      if (backendVerification.status === "FAIL") {
+        finalStatus = "FAIL";
+        finalSummary = `Backend verification failed: ${backendVerification.summary}`;
+      } else if (!projectPlannedBrowserDeliverable) {
+        finalSummary = backendVerification.summary;
+      }
+    }
 
     // Intent-consistency gate, checkpoint 2 of 3 — the FINAL gate before
     // a deliverable is ever called VERIFIED, so unlike checkpoints 1 and
@@ -1952,7 +1982,15 @@ export async function executeTask(
     // let a real outage rubber-stamp an unverified deliverable as
     // VERIFIED. Real providers only, same reasoning as checkpoint 1.
     let deliverableCheckUnavailable = false;
-    if (verification.status === "PASS" && usedRealProvider) {
+    // Scoped to a planned browser deliverable that's still PASSing after
+    // the backend check above (if any) — this check is built entirely
+    // around browser evidence (button/visible-text fields below), so it
+    // has nothing meaningful to judge for a backend-only project, and
+    // re-litigating intent against a deliverable already known broken
+    // (a backend FAIL) would waste a real AI call and risk its own
+    // verdict overwriting — and so hiding — the actual backend failure
+    // reason already captured in finalSummary above.
+    if (projectPlannedBrowserDeliverable && finalStatus === "PASS" && usedRealProvider) {
       const builtDescription = [
         `Observed browser test: ${verification.summary}`,
         `Actual workspace files: ${(await listFiles(project.id)).join(", ")}`,
@@ -1989,8 +2027,8 @@ export async function executeTask(
       kind: "test-result",
       status: finalStatus,
       summary: finalSummary,
-      details: verification.details,
-      durationMs: verification.durationMs,
+      details: finalDetails,
+      durationMs: finalDurationMs,
       targetUrl: verification.targetUrl,
     };
     result = {
