@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createWorkspace } from "../workspace-service.ts";
-import { runCommand, CommandNotAllowedError, WorkspaceNotFoundError } from "../command-execution-service.ts";
+import { runCommand, startManagedProcess, CommandNotAllowedError, WorkspaceNotFoundError } from "../command-execution-service.ts";
 
 let root: string;
 const PROJECT = "33333333-3333-3333-3333-333333333333";
@@ -128,6 +128,118 @@ describe("runCommand — no shell, real process behavior", () => {
         purpose: "test",
       });
       assert.ok(!result.stdout.includes("leak-me-not"), "an arbitrary env var from the host process must never reach the child");
+    } finally {
+      delete process.env.AI_OFFICE_TEST_SECRET_SENTINEL;
+    }
+  });
+});
+
+async function getFreePort(): Promise<number> {
+  const { createServer } = await import("node:net");
+  return new Promise((resolve, reject) => {
+    const srv = createServer();
+    srv.on("error", reject);
+    srv.listen(0, "127.0.0.1", () => {
+      const { port } = srv.address() as { port: number };
+      srv.close(() => resolve(port));
+    });
+  });
+}
+
+describe("startManagedProcess — real full-stack execution support (Priority 0 #8)", () => {
+  test("rejects an executable not in the caller-supplied allowlist, without ever spawning it", async () => {
+    await createWorkspace(PROJECT);
+    assert.throws(
+      () => startManagedProcess({ projectId: PROJECT, executable: "rm", args: ["-rf", "/"], allowedExecutables: ["node"], purpose: "test" }),
+      CommandNotAllowedError,
+    );
+  });
+
+  test("refuses to start against a project with no workspace yet", async () => {
+    assert.throws(
+      () => startManagedProcess({ projectId: "55555555-5555-5555-5555-555555555555", executable: "node", args: ["-e", "1"], allowedExecutables: ["node"], purpose: "test" }),
+      WorkspaceNotFoundError,
+    );
+  });
+
+  test("starts a real long-running server, a caller can really connect to it, then stop() cleanly terminates it", async () => {
+    await createWorkspace(PROJECT);
+    const port = await getFreePort();
+    const proc = startManagedProcess({
+      projectId: PROJECT,
+      executable: process.execPath,
+      args: ["-e", "require('http').createServer((req,res)=>{res.end('alive')}).listen(Number(process.env.VERIFY_PORT),'127.0.0.1')"],
+      allowedExecutables: [process.execPath],
+      purpose: "test",
+      env: { VERIFY_PORT: String(port) },
+    });
+
+    try {
+      // Poll — a real spawned process needs a moment to actually bind its listener.
+      let body: string | null = null;
+      for (let i = 0; i < 50 && body === null; i++) {
+        try {
+          const res = await fetch(`http://127.0.0.1:${port}/`);
+          body = await res.text();
+        } catch {
+          await new Promise((r) => setTimeout(r, 100));
+        }
+      }
+      assert.equal(body, "alive", "the real spawned process must really be reachable on the port its env var named");
+      assert.equal(proc.hasExited(), false);
+      assert.equal(typeof proc.pid, "number");
+
+      await proc.stop();
+      assert.equal(proc.hasExited(), true);
+      await assert.rejects(() => fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(500) }), "the port must actually be free again after stop() resolves");
+    } finally {
+      await proc.stop(); // safe even if already stopped — idempotency guard below also covers this
+    }
+  });
+
+  test("a process that exits on its own is observable via hasExited()/exitInfo() without stop() ever being called", async () => {
+    await createWorkspace(PROJECT);
+    const proc = startManagedProcess({
+      projectId: PROJECT,
+      executable: process.execPath,
+      args: ["-e", "process.exit(7)"],
+      allowedExecutables: [process.execPath],
+      purpose: "test",
+    });
+    for (let i = 0; i < 50 && !proc.hasExited(); i++) await new Promise((r) => setTimeout(r, 50));
+    assert.equal(proc.hasExited(), true);
+    assert.equal(proc.exitInfo()?.exitCode, 7);
+  });
+
+  test("stop() is safe to call more than once, and on an already-exited process", async () => {
+    await createWorkspace(PROJECT);
+    const proc = startManagedProcess({
+      projectId: PROJECT,
+      executable: process.execPath,
+      args: ["-e", "process.exit(0)"],
+      allowedExecutables: [process.execPath],
+      purpose: "test",
+    });
+    for (let i = 0; i < 50 && !proc.hasExited(); i++) await new Promise((r) => setTimeout(r, 50));
+    await proc.stop();
+    await proc.stop();
+  });
+
+  test("custom env merges on top of the same sanitized allowlist runCommand uses — an arbitrary host secret still never reaches the child", async () => {
+    process.env.AI_OFFICE_TEST_SECRET_SENTINEL = "leak-me-not";
+    try {
+      await createWorkspace(PROJECT);
+      const proc = startManagedProcess({
+        projectId: PROJECT,
+        executable: process.execPath,
+        args: ["-e", "console.log('MARKER:' + process.env.MY_CUSTOM_VAR + ':' + ('AI_OFFICE_TEST_SECRET_SENTINEL' in process.env)); setTimeout(() => {}, 5000)"],
+        allowedExecutables: [process.execPath],
+        purpose: "test",
+        env: { MY_CUSTOM_VAR: "visible" },
+      });
+      for (let i = 0; i < 50 && !proc.getOutput().stdout.includes("MARKER:"); i++) await new Promise((r) => setTimeout(r, 50));
+      assert.match(proc.getOutput().stdout, /MARKER:visible:false/);
+      await proc.stop();
     } finally {
       delete process.env.AI_OFFICE_TEST_SECRET_SENTINEL;
     }
