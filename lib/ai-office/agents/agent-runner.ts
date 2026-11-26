@@ -126,6 +126,36 @@ function buildModelFailureContext(db: DatabaseSync, task: TaskRow, attemptNumber
 }
 
 /**
+ * Every `result.raw` flag an office-level validation layer sets when it
+ * rejects a response the provider itself answered correctly and
+ * completely — a real, successfully-generated reply that OUR OWN
+ * downstream judgment (not the provider's reliability) decided didn't
+ * qualify. `realQaVerification` was the first and only case this was
+ * handled for; `recordModelOutcome`'s caller now treats all of these the
+ * same way for the identical reason: a model that answered correctly and
+ * got rejected by a check it has no control over is not evidence the
+ * MODEL is unreliable, so it must never count toward the three-
+ * consecutive-failure health gate that can take a model offline for
+ * every unrelated project. The task-level consequence (this specific
+ * task still retries/escalates normally) is completely unaffected —
+ * only the signal walked toward provider-wide health is corrected. See
+ * recordFailure's own `isReviewRole`-based remediation-target routing
+ * for the equivalent "this isn't the model's fault" judgment made at the
+ * task-blame layer; this is its counterpart at the model-health layer.
+ */
+function isOfficeLevelRejection(raw: unknown): boolean {
+  if (!raw || typeof raw !== "object") return false;
+  const flags = [
+    "realQaVerification",
+    "retryDriftBlocked",
+    "workspaceIntegrityFailed",
+    "zeroFileOperationsBlocked",
+    "intentConsistencyBlocked",
+  ] as const;
+  return flags.some((flag) => (raw as Record<string, unknown>)[flag] === true);
+}
+
+/**
  * Development deliverable contract, part 1 (local multi-model routing
  * follow-up) — whether this task's PURPOSE is to implement/change real
  * files, derived from the task's own intent (its title), not bare
@@ -1792,7 +1822,12 @@ export async function executeTask(
           failure: { reason: describeIntegrityFailure(integrity) },
         },
         usage: result.usage,
-        raw: { workspaceIntegrityFailed: true, missingReferences: integrity.missingReferences, hiddenStateConflicts: integrity.hiddenStateConflicts },
+        raw: {
+          workspaceIntegrityFailed: true,
+          missingReferences: integrity.missingReferences,
+          hiddenStateConflicts: integrity.hiddenStateConflicts,
+          unsupportedScriptReferences: integrity.unsupportedScriptReferences,
+        },
       };
     }
   }
@@ -1913,14 +1948,28 @@ export async function executeTask(
     setDeliveryState(db, project.id, finalStatus === "PASS" ? "VERIFIED" : deliverableCheckUnavailable ? "VERIFYING" : "FAILED");
   }
 
-  // Model health tracks the MODEL's own output. Real browser QA replaces a
-  // reviewer's verdict with an independent, deterministic one: a QA FAIL (or
-  // an unavailable deliverable check) is a verdict about the built product,
-  // not evidence that the QA model misbehaved — its output was valid, so
-  // repeated legitimate QA failures must never walk it toward the
-  // three-failure gate that also guards unrelated reasoning tasks.
+  // Model health tracks the MODEL's own reliability as a provider — never
+  // a verdict about the PRODUCT it built. Real browser QA replacing a
+  // reviewer's verdict with an independent, deterministic one was already
+  // handled here (a QA FAIL is a verdict about the built product, not
+  // evidence the QA model misbehaved) — but every OTHER office-level
+  // validation layer that can reject a real, successfully-generated
+  // response for reasons that have nothing to do with the provider's own
+  // reliability was not. Real incident, Scenario A (Pomodoro) acceptable
+  // run: a genuine multi-file workspace-integrity defect and several
+  // genuine drift-check rejections — both real, deterministic judgments
+  // about the GENERATED CODE, not about whether Groq was reachable or
+  // returned a well-formed response — drove `recentFailureCount` to the
+  // three-failure gate and left both qualified Groq models UNAVAILABLE
+  // office-wide, blocking every unrelated project's ability to even start.
+  // `isOfficeLevelRejection` generalizes the same already-correct
+  // principle to every validation layer capable of this: a model that
+  // answered correctly and got rejected by OUR OWN downstream checks is
+  // not a model health problem — the task-level consequence (retry/
+  // escalate this specific task) is completely unchanged; only the
+  // signal walked toward provider-wide health is corrected.
   if (freeSuccessfulModel) recordModelOutcome(db, freeSuccessfulModel.provider, freeSuccessfulModel.modelId, {
-    succeeded: result.status === "SUCCEEDED" || (result.raw as { realQaVerification?: boolean } | undefined)?.realQaVerification === true,
+    succeeded: result.status === "SUCCEEDED" || isOfficeLevelRejection(result.raw),
     latencyMs: freeSuccessfulModel.latencyMs,
   });
   if (freeRoutingDecisionId) {

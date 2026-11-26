@@ -31,14 +31,41 @@ export interface MissingReference {
   reference: string;
 }
 
+/**
+ * A `<script src>` pointing at a file extension no browser can execute
+ * directly — real incident, Scenario A (Pomodoro) acceptance run:
+ * frontend-developer wrote `public/index.html` referencing
+ * `/src/index.tsx` for a "modern" app. This execution environment never
+ * runs a bundler/transpiler (QA's workspace server — see
+ * qa-browser-verification.ts's docblock — serves only static files, and
+ * each GitHub Actions cycle terminates after one bounded task), so a
+ * `.tsx`/`.jsx` reference is unconditionally broken here regardless of
+ * whether the file exists or is internally consistent — the earlier
+ * `missingReferences` check alone could never catch this class, since it
+ * only looks for existence, not executability. Flagged before even a
+ * first corrective attempt, with the reason explaining WHY (not just
+ * WHAT), so the developer role is told to use a build-less structure
+ * instead of guessing again at fixing paths within an approach that can
+ * never work in this environment.
+ */
+export interface UnsupportedScriptReference {
+  sourceFile: string;
+  reference: string;
+  extension: string;
+}
+
 export interface WorkspaceIntegrityResult {
   status: "PASS" | "FAIL";
   missingReferences: MissingReference[];
   /** Elements meant to be hidden whose own display rule wins the CSS cascade (see css-visibility.ts) — always present, empty when none. */
   hiddenStateConflicts?: HiddenStateConflict[];
+  /** Always present, empty when none — see UnsupportedScriptReference's docblock. */
+  unsupportedScriptReferences?: UnsupportedScriptReference[];
 }
 
 const SCRIPT_SRC_PATTERN = /<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>/gi;
+/** No browser executes these directly without a build step — see UnsupportedScriptReference's docblock. Deliberately NOT .mjs/.js (both run directly) or .json/.wasm (never valid as a <script src> target either way, but that's a missing-reference/HTML-authoring concern, not this check's). */
+const UNSUPPORTED_SCRIPT_EXTENSIONS = new Set(["tsx", "ts", "jsx"]);
 const IMG_SRC_PATTERN = /<img\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>/gi;
 const LINK_TAG_PATTERN = /<link\b[^>]*>/gi;
 
@@ -46,10 +73,9 @@ function isStylesheetLinkTag(tag: string): boolean {
   return /\brel\s*=\s*["']stylesheet["']/i.test(tag);
 }
 
-/** Every local-resource reference found in an HTML document's markup, exactly as written (not yet cleaned/resolved). Regex-based on purpose — this is intentionally not a full HTML/DOM parse, matching the brief's "start with high-confidence web-resource integrity," not a general-purpose HTML engine. */
-function extractRawReferences(html: string): string[] {
+/** Every local `<img src>`/stylesheet `<link>` reference found in an HTML document's markup, exactly as written (not yet cleaned/resolved) — `<script src>` is handled separately by the caller so its extension can be checked before its existence. Regex-based on purpose — this is intentionally not a full HTML/DOM parse, matching the brief's "start with high-confidence web-resource integrity," not a general-purpose HTML engine. */
+function extractImgAndStylesheetReferences(html: string): string[] {
   const refs: string[] = [];
-  for (const match of html.matchAll(SCRIPT_SRC_PATTERN)) refs.push(match[1]);
   for (const match of html.matchAll(IMG_SRC_PATTERN)) refs.push(match[1]);
   for (const match of html.matchAll(LINK_TAG_PATTERN)) {
     const tag = match[0];
@@ -100,9 +126,26 @@ export async function validateWorkspaceIntegrity(projectId: string): Promise<Wor
   const htmlFiles = files.filter((f) => /\.html?$/i.test(f));
 
   const missingReferences: MissingReference[] = [];
+  const unsupportedScriptReferences: UnsupportedScriptReference[] = [];
   for (const sourceFile of htmlFiles) {
     const content = await readFile(projectId, sourceFile);
-    for (const rawReference of extractRawReferences(content)) {
+    for (const match of content.matchAll(SCRIPT_SRC_PATTERN)) {
+      const rawReference = match[1]!;
+      if (!isLocalReference(rawReference)) continue;
+      const cleaned = stripQueryAndHash(rawReference);
+      if (cleaned === "") continue;
+      const extension = cleaned.split(".").pop()?.toLowerCase() ?? "";
+      if (UNSUPPORTED_SCRIPT_EXTENSIONS.has(extension)) {
+        unsupportedScriptReferences.push({ sourceFile, reference: rawReference, extension });
+        continue; // already flagged as a distinct, more specific defect — redundant as a "missing" check too
+      }
+      const resolved = resolveRelativeReference(sourceFile, cleaned);
+      if (resolved === null) continue;
+      if (!fileSet.has(resolved)) {
+        missingReferences.push({ sourceFile, reference: rawReference });
+      }
+    }
+    for (const rawReference of extractImgAndStylesheetReferences(content)) {
       if (!isLocalReference(rawReference)) continue;
       const cleaned = stripQueryAndHash(rawReference);
       if (cleaned === "") continue;
@@ -120,13 +163,22 @@ export async function validateWorkspaceIntegrity(projectId: string): Promise<Wor
     css: await Promise.all(cssFiles.map(async (file) => ({ file, content: await readFile(projectId, file) }))),
   });
 
-  return missingReferences.length > 0 || hiddenStateConflicts.length > 0
-    ? { status: "FAIL", missingReferences, hiddenStateConflicts }
-    : { status: "PASS", missingReferences: [], hiddenStateConflicts: [] };
+  return missingReferences.length > 0 || hiddenStateConflicts.length > 0 || unsupportedScriptReferences.length > 0
+    ? { status: "FAIL", missingReferences, hiddenStateConflicts, unsupportedScriptReferences }
+    : { status: "PASS", missingReferences: [], hiddenStateConflicts: [], unsupportedScriptReferences: [] };
 }
 
-/** A single, human-readable sentence for the first missing reference — used as both the semantic failure reason and the corrective-attempt context, so the message a developer role sees is exactly the message recorded as the failure. */
+/** A single, human-readable sentence for the first detected defect — used as both the semantic failure reason and the corrective-attempt context, so the message a developer role sees is exactly the message recorded as the failure. Unsupported-script-type defects are reported first: they're the most actionable (the whole approach needs to change, not just one path) and the most certain (no existence check needed — the extension alone makes it unconditionally broken here). */
 export function describeIntegrityFailure(result: WorkspaceIntegrityResult): string {
+  const unsupportedScript = result.unsupportedScriptReferences?.[0];
+  if (unsupportedScript) {
+    const extra = (result.unsupportedScriptReferences?.length ?? 1) - 1;
+    return (
+      `Workspace integrity validation failed: ${unsupportedScript.sourceFile} loads ${unsupportedScript.reference} directly as a script, but this environment serves files as plain static assets with no build step — ` +
+      `a browser cannot execute a .${unsupportedScript.extension} file directly. Rewrite this as plain, build-less HTML/CSS/JavaScript that runs directly in a browser (no TypeScript, no JSX, no bundler-style imports) instead of fixing this reference's path.` +
+      (extra > 0 ? ` (and ${extra} more unsupported script reference${extra === 1 ? "" : "s"})` : "")
+    );
+  }
   const first = result.missingReferences[0];
   if (!first && result.hiddenStateConflicts?.[0]) {
     const extra = result.hiddenStateConflicts.length - 1;

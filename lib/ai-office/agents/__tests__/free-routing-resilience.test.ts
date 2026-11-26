@@ -362,6 +362,20 @@ describe("7. hidden modal/overlay regression", () => {
       assert.match(failure, /!important/);
       assert.equal(rows(h.t, "SELECT ar.id FROM agent_runs ar JOIN task_attempts ta ON ta.id=ar.taskAttemptId JOIN tasks t ON t.id=ta.taskId WHERE t.roleId='qa-agent'").length, 0, "QA has not run yet");
       assert.equal(rows(h.t, "SELECT id FROM failures WHERE reason LIKE '%intercepts pointer events%'").length, 0, "the defect never reached the browser");
+
+      // Real incident, Scenario A (Pomodoro) acceptance run: this exact
+      // class of rejection — a real, successfully-generated response the
+      // office's OWN workspace-integrity check rejected — used to count
+      // against the producing model's health exactly like a genuine
+      // provider failure, driving recentFailureCount toward the
+      // three-failure gate for a defect that has nothing to do with the
+      // model's reliability as a provider. The model that produced this
+      // rejected attempt must show ZERO damage to its health record.
+      const rejectedModel = h.ctx.seen.find((r) => r.role === "frontend-developer" && !r.corrective)!.model;
+      const regAfterRejection = getModelRegistryEntry(h.t.db, "groq", rejectedModel)!;
+      assert.equal(regAfterRejection.recentFailureCount, 0, "a workspace-integrity rejection must never count against the model's own health");
+      assert.equal(regAfterRejection.health, "HEALTHY");
+
       await h.drive();
       assert.deepEqual(Object.values(statusOf(h.tasks())), Array(8).fill("DONE"), JSON.stringify(statusOf(h.tasks())));
       assert.ok(h.ctx.seen.find((r) => r.role === "frontend-developer" && r.corrective)!.prompt.includes("!important"), "the corrective attempt is told exactly what to fix");

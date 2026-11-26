@@ -126,6 +126,41 @@ describe("validateWorkspaceIntegrity", () => {
     const result = await validateWorkspaceIntegrity(PROJECT);
     assert.equal(result.status, "PASS");
   });
+
+  // Real incident, Scenario A (Pomodoro) acceptance run: frontend-developer
+  // wrote public/index.html referencing /src/index.tsx for a "modern" app.
+  // This execution environment never runs a bundler/transpiler, so a
+  // .tsx/.jsx reference is unconditionally broken here regardless of
+  // whether the file exists — existence alone was never the real defect.
+  test("a .tsx script reference is flagged even when the file genuinely exists — no browser can execute it here", async () => {
+    await createWorkspace(PROJECT);
+    await writeFile(PROJECT, "public/index.html", '<html><body><script src="/src/index.tsx"></script></body></html>');
+    await writeFile(PROJECT, "src/index.tsx", "export default function App() { return null; }");
+
+    const result = await validateWorkspaceIntegrity(PROJECT);
+    assert.equal(result.status, "FAIL");
+    assert.deepEqual(result.unsupportedScriptReferences, [{ sourceFile: "public/index.html", reference: "/src/index.tsx", extension: "tsx" }]);
+    assert.deepEqual(result.missingReferences, [], "an unsupported-script-type defect is reported once, not duplicated as a missing-reference too");
+  });
+
+  test("a .jsx script reference is flagged the same way", async () => {
+    await createWorkspace(PROJECT);
+    await writeFile(PROJECT, "index.html", '<html><body><script src="app.jsx"></script></body></html>');
+
+    const result = await validateWorkspaceIntegrity(PROJECT);
+    assert.equal(result.status, "FAIL");
+    assert.equal(result.unsupportedScriptReferences?.[0]?.extension, "jsx");
+  });
+
+  test("a plain .js script reference is never flagged by this check", async () => {
+    await createWorkspace(PROJECT);
+    await writeFile(PROJECT, "index.html", '<html><body><script src="script.js"></script></body></html>');
+    await writeFile(PROJECT, "script.js", "console.log('hi');");
+
+    const result = await validateWorkspaceIntegrity(PROJECT);
+    assert.equal(result.status, "PASS");
+    assert.deepEqual(result.unsupportedScriptReferences, []);
+  });
 });
 
 describe("describeIntegrityFailure", () => {
@@ -146,5 +181,25 @@ describe("describeIntegrityFailure", () => {
       ],
     });
     assert.match(description, /and 1 more missing reference/);
+  });
+
+  test("an unsupported script reference explains WHY (no build step here) and tells the developer to change approach, not just the path", () => {
+    const description = describeIntegrityFailure({
+      status: "FAIL",
+      missingReferences: [],
+      unsupportedScriptReferences: [{ sourceFile: "public/index.html", reference: "/src/index.tsx", extension: "tsx" }],
+    });
+    assert.match(description, /no build step/);
+    assert.match(description, /\.tsx file directly/);
+    assert.match(description, /build-less HTML\/CSS\/JavaScript/);
+  });
+
+  test("an unsupported script reference takes priority over a missing-reference in the same result", () => {
+    const description = describeIntegrityFailure({
+      status: "FAIL",
+      missingReferences: [{ sourceFile: "index.html", reference: "style.css" }],
+      unsupportedScriptReferences: [{ sourceFile: "index.html", reference: "app.tsx", extension: "tsx" }],
+    });
+    assert.match(description, /app\.tsx/);
   });
 });
