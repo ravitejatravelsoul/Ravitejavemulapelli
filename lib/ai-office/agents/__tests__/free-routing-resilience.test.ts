@@ -428,6 +428,26 @@ describe("8. no workflow path can silently enable Claude, use paid fallback, byp
   });
 });
 
+describe("9. the same reported defect persisting across a correction forces a different model next time (failure fingerprinting)", () => {
+  test("two identical QA failures in a row force the third developer attempt onto a different model than the first two", async () => {
+    await workflow({ devFiles: () => ({ "index.html": HTML, "style.css": CSS, "script.js": JS_BUGGY }) }, async (h) => {
+      const devSeen = () => h.ctx.seen.filter((r) => r.role === "frontend-developer");
+      for (let i = 0; i < 60 && devSeen().length < 3; i++) await h.cycle();
+      const dev = devSeen();
+      assert.ok(dev.length >= 3, `expected at least 3 developer attempts, saw ${dev.length}`);
+      assert.equal(dev[0]!.model, M120, "the first attempt uses the normally top-ranked model");
+      assert.equal(dev[1]!.model, M120, "the router has no reason to deviate yet — the second attempt repeats the same (still top-ranked) model");
+      assert.notEqual(dev[2]!.model, M120, "after the identical defect reproduced twice in a row, the third attempt is forced onto a different model instead of mechanically repeating one that just proved it cannot fix this defect");
+      assert.equal(dev[2]!.model, M20);
+
+      const devTask = h.tasks().find((x) => x.roleId === "frontend-developer")!;
+      const failures = rows(h.t, "SELECT reason FROM failures WHERE taskId = ? ORDER BY createdAt", devTask.id) as { reason: string }[];
+      assert.ok(failures.length >= 2 && failures[failures.length - 1]!.reason === failures[failures.length - 2]!.reason, "the two most recent failures this test relies on really are identical");
+      assertGlobalGuards(h);
+    });
+  });
+});
+
 test("FREE_MULTI_MODEL development intent never reaches localhost", async () => {
   await workflow({}, async h => {
     await h.drive();

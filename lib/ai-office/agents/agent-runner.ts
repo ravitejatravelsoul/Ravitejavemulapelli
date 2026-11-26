@@ -31,6 +31,7 @@ import {
   recordTestResult,
   recordFailure,
   listUnresolvedFailures,
+  listFailuresForTask,
   resolveFailure,
   listArtifactsForProject,
   createApproval,
@@ -123,6 +124,53 @@ function buildModelFailureContext(db: DatabaseSync, task: TaskRow, attemptNumber
     isSemanticFailure: lastFailureReason ? !isOperationalFailureReason(lastFailureReason) : true,
     previousModel: getPreviousAttemptModel(db, task.id, attemptNumber),
   };
+}
+
+/**
+ * Real incident, Scenario A (Pomodoro) acceptance run: across 8 real
+ * attempts the identical top-ranked free model kept getting reselected
+ * every retry, because `selectFreeModel()` has no memory of what a
+ * PRIOR attempt at this exact task already tried — a correction that
+ * repeats the identical mistake (same model, same framing) reliably
+ * reproduces the identical failure, burning the retry ceiling on
+ * repetition rather than ever trying a genuinely different strategy.
+ *
+ * Detects a true repeat — not merely "another failure happened," but
+ * the exact same reported defect happening again right after a
+ * correction attempt meant to fix it — by walking this task's failure
+ * history (oldest first) from the end and collecting every
+ * consecutive trailing run sharing the identical `reason` string.
+ * Returns the `provider:modelId` of every agent run in that identical
+ * streak, so the next model-selection call can be forced to pick a
+ * different model instead of mechanically repeating one that has
+ * already proven, more than once, that it cannot resolve this specific
+ * defect. A single failure (no repeat yet) returns an empty set —
+ * ordinary first-time retries are never restricted.
+ */
+function modelsToAvoidOnRepeatedFailure(db: DatabaseSync, taskId: string): Set<string> {
+  const history = listFailuresForTask(db, taskId);
+  if (history.length < 2) return new Set();
+  const repeatedReason = history[history.length - 1]!.reason;
+  let streakLength = 0;
+  for (let i = history.length - 1; i >= 0 && history[i]!.reason === repeatedReason; i--) streakLength++;
+  // A streak of exactly one failure is not a repeat — only forced once a
+  // correction genuinely reproduced the same defect at least twice.
+  if (streakLength < 2) return new Set();
+
+  // Deliberately NOT the failure rows' own `agentRunId`: for a review-role
+  // failure (QA/Security/Code Review rejecting the developer's work),
+  // `recordFailure` stores the REVIEWER's agent run on the failure it
+  // files against the development task it walks back to — looking that
+  // up would tell us which model reviewed the code, not which model
+  // WROTE it. This task's own attempt history is the only reliable
+  // record of which model(s) this exact task's own executions actually
+  // used.
+  const avoid = new Set<string>();
+  for (const attempt of listTaskAttempts(db, taskId).slice(-streakLength)) {
+    const run = attempt.agentRunId ? getAgentRun(db, attempt.agentRunId) : null;
+    if (run?.model) avoid.add(`${run.provider}:${run.model}`);
+  }
+  return avoid;
 }
 
 /**
@@ -1388,11 +1436,26 @@ export async function executeTask(
     modelForRun = claudeCall.adapter.model;
   } else if (isFreeRouting(project)) {
     const capability = freeCapabilities[0]!;
+    const repeatedFailureAvoid = modelsToAvoidOnRepeatedFailure(db, task.id);
     freeModelSelection = freeContext?.ok ? selectFreeModel(db, {
       capability, requiredCapabilities: freeCapabilities,
       estimatedInputTokens: freeContext.telemetry.estimatedInputTokens,
       estimatedOutputTokens: freeContext.allowedOutputTokens,
+      avoid: repeatedFailureAvoid.size > 0 ? repeatedFailureAvoid : undefined,
     }) : null;
+    // The forced-rotation candidate pool was fully excluded (every
+    // remaining eligible model already failed on this identical defect
+    // too) — falling back to the unrestricted ranking is strictly
+    // better than a false "no eligible model" failure: a model that
+    // already failed twice is still a real attempt, never worse than
+    // refusing to try at all.
+    if (!freeModelSelection && repeatedFailureAvoid.size > 0) {
+      freeModelSelection = freeContext?.ok ? selectFreeModel(db, {
+        capability, requiredCapabilities: freeCapabilities,
+        estimatedInputTokens: freeContext.telemetry.estimatedInputTokens,
+        estimatedOutputTokens: freeContext.allowedOutputTokens,
+      }) : null;
+    }
     if (!freeModelSelection) {
       modelSelectionFailureReason = `No eligible free model is currently enabled/healthy for capability ${capability} (checked every configured free provider's registry — Groq/Gemini/OpenRouter/Ollama).`;
     } else {
