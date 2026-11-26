@@ -31,6 +31,42 @@ export const catalogSchema = z.object({
 });
 export type RemoteModelCatalog = z.infer<typeof catalogSchema>;
 export const CATALOG_PATH = "state/model-catalog.json";
+/**
+ * Owner-confirmed-free-tier providers (groq/gemini — openrouter's
+ * eligibility is `:free`-suffix-driven, never env-driven, so it can't
+ * have this failure mode) whose catalog `eligibility` entry depends on
+ * THIS process's own `AI_OFFICE_<PROVIDER>_FREE_TIER_CONFIRMED`/
+ * `AI_OFFICE_<PROVIDER>_FREE_MODELS` env vars at export time — see
+ * findMissingFreeTierEligibility's docblock for the real incident this
+ * check exists to catch before a catalog is ever written.
+ */
+const OWNER_CONFIRMED_PROVIDERS = ["groq", "gemini"] as const;
+
+/**
+ * Real incident: `scripts/ai-office-remote-sync-models.ts` was once run
+ * without `AI_OFFICE_GROQ_FREE_TIER_CONFIRMED`/`AI_OFFICE_GROQ_FREE_MODELS`
+ * set in its own invoking shell. `exportModelCatalog`'s `eligibility`
+ * field is computed from `getFreeEligibility()` in the CURRENT process's
+ * environment, not from the source database's own `qualified`/`enabled`
+ * columns — so a model the source database correctly marks qualified can
+ * still end up with no matching eligibility entry in the exported
+ * catalog, and `hydrateModelCatalog`'s own invariant then silently forces
+ * `enabled:0` for it in every consumer that later hydrates this exact
+ * catalog, regardless of what the real deployment's own env vars say.
+ * Returns the qualified+enabled owner-confirmed-tier models this
+ * catalog would silently disable everywhere — empty when the export was
+ * run with the right env vars (or there are no groq/gemini models to
+ * qualify in the first place).
+ */
+export function findMissingFreeTierEligibility(catalog: RemoteModelCatalog): RemoteModelCatalog["models"] {
+  return catalog.models.filter(
+    (m) =>
+      (OWNER_CONFIRMED_PROVIDERS as readonly string[]).includes(m.provider) &&
+      m.qualified === 1 &&
+      m.enabled === 1 &&
+      getFreeEligibility(m.provider, m.modelId) === null,
+  );
+}
 export function exportModelCatalog(db:DatabaseSync, revision=0):RemoteModelCatalog {
   const models=db.prepare("SELECT * FROM model_registry WHERE provider IN ('groq','gemini','openrouter')").all().map(r=>model.parse(r));
   return catalogSchema.parse({version:1,revision,updatedAt:Date.now(),lease:null,models,

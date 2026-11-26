@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { hydrateEphemeralDb, DEFAULT_OFFICE_REMOTE_STATE } from "./remote-state-store.ts";
-import { exportModelCatalog, hydrateModelCatalog, acquireModelCatalog, commitModelCatalog, catalogSchema } from "./model-catalog.ts";
+import { exportModelCatalog, hydrateModelCatalog, acquireModelCatalog, commitModelCatalog, catalogSchema, findMissingFreeTierEligibility } from "./model-catalog.ts";
 import { upsertModelRegistryEntry, recordModelOutcome } from "../domain/model-registry.ts";
 import { selectFreeModel } from "../agents/free-model-router.ts";
 
@@ -42,4 +42,30 @@ test("office lease serializes workers and CAS refuses concurrent catalog edits",
     sha+="concurrent";await assert.rejects(commitModelCatalog(config,held,db),/conflict/i);
     assert.ok(JSON.parse(content).lease);
   }finally{globalThis.fetch=original;db.close();}
+});
+
+// Real incident: scripts/ai-office-remote-sync-models.ts was once run
+// without AI_OFFICE_GROQ_FREE_TIER_CONFIRMED/AI_OFFICE_GROQ_FREE_MODELS
+// set in its own invoking shell, silently producing a catalog where every
+// qualified Groq model came back disabled for every consumer — see
+// findMissingFreeTierEligibility's docblock for the full mechanism.
+test("findMissingFreeTierEligibility catches a qualified model the exporting shell's own env vars don't cover",()=>{
+  const saved={...process.env};
+  const db=hydrateEphemeralDb(DEFAULT_OFFICE_REMOTE_STATE,null);
+  try{
+    delete process.env.AI_OFFICE_GROQ_FREE_TIER_CONFIRMED;delete process.env.AI_OFFICE_GROQ_FREE_MODELS;
+    upsertModelRegistryEntry(db,{provider:"groq",modelId:"test-model",displayName:"Test",capabilities:["CODING"],structuredOutput:true,contextWindow:10000});
+    db.prepare("UPDATE model_registry SET qualified=1,enabled=1,health='HEALTHY'").run();
+    const unconfirmed=exportModelCatalog(db);
+    assert.deepEqual(unconfirmed.eligibility,[],"no eligibility entry can exist for a provider this shell never confirmed as free-tier");
+    const missing=findMissingFreeTierEligibility(unconfirmed);
+    assert.equal(missing.length,1);assert.equal(missing[0]!.modelId,"test-model");
+
+    Object.assign(process.env,{AI_OFFICE_GROQ_FREE_TIER_CONFIRMED:"true",AI_OFFICE_GROQ_FREE_MODELS:"test-model"});
+    const confirmed=exportModelCatalog(db);
+    assert.equal(findMissingFreeTierEligibility(confirmed).length,0,"the same model is no longer flagged once the exporting shell's own env vars cover it");
+
+    db.prepare("UPDATE model_registry SET qualified=0").run();
+    assert.equal(findMissingFreeTierEligibility(exportModelCatalog(db)).length,0,"an unqualified model is never flagged — there is nothing to silently disable");
+  }finally{db.close();process.env=saved;}
 });
