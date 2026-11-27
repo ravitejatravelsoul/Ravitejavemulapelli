@@ -85,6 +85,46 @@ describe("backend-developer contract (Priority 0 #8 real backend verification)",
   });
 });
 
+// Real incident, Scenario G acceptance run (2026-11-27): a single-owner
+// inventory tool got an unrequested login screen "protected" by a
+// password check that only ever ran in the browser against a SHA-256
+// hash sitting in localStorage -- trivially bypassed, yet presented as
+// real security.
+describe("unnecessary/fake authentication prevention (Scenario G quality fix)", () => {
+  function roleInput(role: string): AgentTaskInput {
+    const base = input();
+    return { ...base, role, task: { ...base.task, roleId: role } };
+  }
+
+  test("product-owner and solution-architect prompts discourage adding a login screen without a genuine multi-user/restricted-data reason", () => {
+    for (const role of ["product-owner", "solution-architect"]) {
+      const prompt = buildPrompt(roleInput(role));
+      assert.match(prompt, /login screen/i, `${role} prompt should mention login screens`);
+      assert.match(prompt, /multiple distinct users|restricted.*private data/i, `${role} prompt should condition auth on a genuine multi-user/restricted-data need`);
+    }
+  });
+
+  test("a research-agent prompt never receives the auth-avoidance guidance (role-scoped, not global)", () => {
+    const prompt = buildPrompt(roleInput("research-agent"));
+    assert.ok(!prompt.includes("login screen"));
+  });
+
+  test("frontend/backend-developer prompts require real server-side authentication, never a client-side-only password check", () => {
+    for (const role of ["frontend-developer", "backend-developer"]) {
+      const prompt = buildPrompt(roleInput(role));
+      assert.match(prompt, /localStorage/, `${role} prompt should name localStorage as an insufficient auth mechanism`);
+      assert.match(prompt, /not authentication|is not real authentication/i, `${role} prompt should say a client-side-only check is not real authentication`);
+    }
+  });
+
+  test("security-reviewer prompt requires a real failure result (not just artifact prose) when it finds a client-side-only auth check", () => {
+    const prompt = buildPrompt(roleInput("security-reviewer"));
+    assert.match(prompt, /localStorage/);
+    assert.match(prompt, /"failure":\s*\{"reason": string\}/, "must instruct returning the real top-level failure field, not just describing it in the artifact");
+    assert.match(prompt, /blocks release/i);
+  });
+});
+
 describe("buildPromptSegments (Claude-only system/user split for prompt caching)", () => {
   // Cost-audit fix — a real Claude LIVE pilot recorded zero cache-creation/
   // cache-read tokens across 14 calls, including several retries of the
