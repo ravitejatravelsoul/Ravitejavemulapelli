@@ -109,6 +109,43 @@ async function diagnoseHiddenOverlay(page: import("playwright").Page): Promise<s
 }
 
 /**
+ * Real incident, Scenario G acceptance run (2026-11-27): a generated
+ * inventory app's architect-defined "Adjust Stock"/"Reports"/"Settings"
+ * nav sections were never actually implemented — each one just rendered
+ * literal placeholder text ("... (Coming Soon)") — and nothing in QA or
+ * release verification ever visited them, so the project reached
+ * READY_FOR_REVIEW with unfinished committed functionality still
+ * exposed in the delivered navigation. Deterministic and generic (no
+ * AI judgment, no app-specific knowledge): every reachable top-level
+ * navigation destination is actually clicked and its resulting content
+ * is checked for a real, placeholder-shaped phrase — never a guess
+ * about what the destination's final content *should* say.
+ */
+const PLACEHOLDER_TEXT_PATTERN = /\b(coming soon|not yet implemented|to be implemented|under construction|work in progress|work-in-progress|placeholder content|placeholder text|lorem ipsum|todo:|tbd\b|not implemented|feature coming)\b/i;
+/** Bounded — a real nav never has an unbounded number of top-level destinations, and this must never turn into an unbounded crawl of a large app. */
+const MAX_NAV_ITEMS_CHECKED = 15;
+
+async function findUnfinishedNavDestination(page: import("playwright").Page): Promise<{ label: string; matchedPhrase: string } | null> {
+  const navItems = page.locator('nav a, nav button, [role="navigation"] a, [role="navigation"] button');
+  const count = Math.min(await navItems.count(), MAX_NAV_ITEMS_CHECKED);
+  for (let i = 0; i < count; i++) {
+    const item = navItems.nth(i);
+    if (!(await item.isVisible().catch(() => false))) continue;
+    const label = ((await item.textContent().catch(() => "")) ?? "").trim() || `nav item ${i + 1}`;
+    try {
+      await item.click({ timeout: 3000 });
+      await page.waitForTimeout(150);
+    } catch {
+      continue; // a click that fails to even register is a different, separately-caught failure mode
+    }
+    const text = ((await page.locator("body").textContent().catch(() => "")) ?? "");
+    const match = PLACEHOLDER_TEXT_PATTERN.exec(text);
+    if (match) return { label, matchedPhrase: match[0] };
+  }
+  return null;
+}
+
+/**
  * Verifies the real generated deliverable in a real headless browser:
  * page loads, a heading and a description-like paragraph exist, a button
  * exists and clicking it changes some visible text on the page, no
@@ -245,7 +282,16 @@ export async function runQABrowserVerification(
       });
     }
 
-    return finish("PASS", "Page loaded, heading and description are present, and clicking the button changed the page's visible text with no console/page errors.", {
+    const unfinishedNav = await findUnfinishedNavDestination(page);
+    if (unfinishedNav) {
+      return finish(
+        "FAIL",
+        `The "${unfinishedNav.label}" navigation destination is an unfinished placeholder ("${unfinishedNav.matchedPhrase}"), not real functionality. Either implement it for real or remove it from the navigation entirely — a committed feature must not ship as a stub.`,
+        { consoleErrors, pageErrors },
+      );
+    }
+
+    return finish("PASS", "Page loaded, heading and description are present, clicking the button changed the page's visible text with no console/page errors, and every navigation destination leads to real (non-placeholder) content.", {
       consoleErrors,
       pageErrors,
       // Real, actually-rendered page text — not the fixture/model's own

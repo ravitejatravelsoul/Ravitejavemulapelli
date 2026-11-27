@@ -99,6 +99,87 @@ describe("runQABrowserVerification", () => {
     assert.match(result.targetUrl, /^http:\/\/127\.0\.0\.1:\d+\/index\.html$/);
   });
 
+  // Real incident, Scenario G acceptance run (2026-11-27): a generated
+  // inventory app's architect-defined "Adjust Stock"/"Reports"/"Settings"
+  // nav sections rendered literal "(Coming Soon)" placeholder text, and
+  // nothing in QA ever visited them, so the project reached
+  // READY_FOR_REVIEW with unfinished committed functionality still
+  // exposed in the delivered navigation.
+  test("FAILs when a real navigation destination renders unfinished placeholder text, not the button's own content", async () => {
+    const id = "unfinished-nav-project";
+    await writeFile(
+      id,
+      "index.html",
+      [
+        "<!DOCTYPE html>",
+        '<html lang="en"><head><meta charset="UTF-8" /><title>App</title></head>',
+        "<body>",
+        "<h1>Inventory</h1>",
+        '<p class="description">A small test page.</p>',
+        "<nav><a href=\"#catalog\" id=\"nav-catalog\">Catalog</a><a href=\"#reports\" id=\"nav-reports\">Reports</a></nav>",
+        '<div id="main">Catalog view</div>',
+        '<button id="greet-button" type="button">Say hello</button>',
+        '<p id="message"></p>',
+        '<script src="script.js"></script>',
+        "</body></html>",
+      ].join("\n"),
+    );
+    await writeFile(
+      id,
+      "script.js",
+      [
+        GOOD_JS,
+        'document.getElementById("nav-reports").addEventListener("click", function (e) {',
+        '  e.preventDefault();',
+        '  document.getElementById("main").textContent = "Reports (Coming Soon)";',
+        "});",
+      ].join("\n"),
+    );
+
+    const result = await runQABrowserVerification(id);
+
+    assert.equal(result.status, "FAIL");
+    assert.match(result.summary, /unfinished placeholder/i);
+    assert.match(result.summary, /Reports/);
+    assert.match(result.summary, /Coming Soon/i);
+  });
+
+  test("PASSes when every real navigation destination leads to real (non-placeholder) content", async () => {
+    const id = "finished-nav-project";
+    await writeFile(
+      id,
+      "index.html",
+      [
+        "<!DOCTYPE html>",
+        '<html lang="en"><head><meta charset="UTF-8" /><title>App</title></head>',
+        "<body>",
+        "<h1>Inventory</h1>",
+        '<p class="description">A small test page.</p>',
+        "<nav><a href=\"#catalog\" id=\"nav-catalog\">Catalog</a><a href=\"#reports\" id=\"nav-reports\">Reports</a></nav>",
+        '<div id="main">Catalog view</div>',
+        '<button id="greet-button" type="button">Say hello</button>',
+        '<p id="message"></p>',
+        '<script src="script.js"></script>',
+        "</body></html>",
+      ].join("\n"),
+    );
+    await writeFile(
+      id,
+      "script.js",
+      [
+        GOOD_JS,
+        'document.getElementById("nav-reports").addEventListener("click", function (e) {',
+        '  e.preventDefault();',
+        '  document.getElementById("main").textContent = "Total items: 42, total value: $1,204.50";',
+        "});",
+      ].join("\n"),
+    );
+
+    const result = await runQABrowserVerification(id);
+
+    assert.equal(result.status, "PASS", result.summary);
+  });
+
   test("FAILs against a real page whose button references the wrong element id (a real bug)", async () => {
     await writeFile("buggy-project", "index.html", GOOD_HTML);
     await writeFile("buggy-project", "script.js", BUGGY_JS);
