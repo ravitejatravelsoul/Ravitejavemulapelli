@@ -47,6 +47,7 @@ function SheetOverlay({
 
 function SheetContent({
   className,
+  overlayClassName,
   children,
   side = "right",
   showCloseButton = true,
@@ -54,10 +55,12 @@ function SheetContent({
 }: React.ComponentProps<typeof SheetPrimitive.Content> & {
   side?: "top" | "right" | "bottom" | "left"
   showCloseButton?: boolean
+  /** Optional override merged onto the overlay's own className — e.g. a caller rendered above a page with its own very high z-index (a fixed full-viewport canvas) needs its overlay/content to sit above that too. Omitted, this is a no-op: existing callers are unaffected. */
+  overlayClassName?: string
 }) {
   return (
     <SheetPortal>
-      <SheetOverlay />
+      <SheetOverlay className={overlayClassName} />
       <SheetPrimitive.Content
         data-slot="sheet-content"
         data-side={side}

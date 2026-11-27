@@ -122,15 +122,25 @@ export function OfficeSidebarNav({
 
   return (
     <>
-      {/* Mobile top bar — visible only below the `md` breakpoint. */}
-      <div className="glass sticky top-0 z-40 flex items-center justify-between gap-3 border-b border-border/60 px-4 py-3 md:hidden">
+      {/* Mobile top bar — visible only below the `md` breakpoint.
+          z-[110], not z-40: the Headquarters 3D view (world.module.css's
+          `.world`) is a `position: fixed; inset: 0` canvas at z-index 100
+          covering the full viewport — real incident, found in browser
+          verification: without a higher z-index here, that canvas sits on
+          top of this bar and swallows every click, including Sign out,
+          making it impossible to navigate away from the 3D view by touch. */}
+      <div className="glass sticky top-0 z-[110] flex items-center justify-between gap-3 border-b border-border/60 px-4 py-3 md:hidden">
         <Brand remoteMode={remoteMode} />
         <Button variant="outline" size="icon" aria-label="Open navigation" onClick={() => setMobileOpen(true)}>
           <Menu className="size-4" />
         </Button>
       </div>
       <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
-        <SheetContent side="left" className="flex w-72 flex-col gap-4 p-4">
+        {/* z-[110] on both the overlay and the content — same reason as
+            the mobile bar/desktop aside above: the Headquarters 3D view's
+            full-viewport canvas (z-index 100) would otherwise intercept
+            every click inside this sheet too, including Sign out. */}
+        <SheetContent side="left" overlayClassName="z-[110]" className="z-[110] flex w-72 flex-col gap-4 p-4">
           <SheetTitle className="sr-only">AI Office navigation</SheetTitle>
           <Brand remoteMode={remoteMode} />
           <NavLinks onNavigate={() => setMobileOpen(false)} />
@@ -140,8 +150,13 @@ export function OfficeSidebarNav({
         </SheetContent>
       </Sheet>
 
-      {/* Desktop/tablet persistent sidebar. */}
-      <aside className="glass sticky top-0 hidden h-screen w-60 shrink-0 flex-col gap-4 overflow-y-auto border-r border-border/60 p-4 md:flex">
+      {/* Desktop/tablet persistent sidebar.
+          z-[110] for the same reason as the mobile bar above — without
+          it, the Headquarters 3D view's full-viewport canvas (z-index
+          100) intercepts every click meant for this sidebar, including
+          Sign out, real-browser-confirmed via a pointer-events-intercepted
+          timeout on the Sign out button. */}
+      <aside className="glass sticky top-0 z-[110] hidden h-screen w-60 shrink-0 flex-col gap-4 overflow-y-auto border-r border-border/60 p-4 md:flex">
         <Brand remoteMode={remoteMode} />
         <NavLinks />
         <div className="mt-auto">
