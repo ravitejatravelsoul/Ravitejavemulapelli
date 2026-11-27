@@ -59,6 +59,16 @@ function TaskCard({ task, step }: { task: TaskDetailView; step: number }) {
         Attempts: {task.attemptCount}
         {task.testResults.length > 0 && ` · Latest test: ${task.testResults[task.testResults.length - 1].status}`}
       </p>
+      {(() => {
+        const latest = task.testResults[task.testResults.length - 1];
+        // Real verification (browser QA, backend startup) already produces a
+        // real, specific reason for a real FAIL (see qa-browser-verification.ts
+        // and backend-verification.ts) — until now this card only ever showed
+        // the bare word "FAIL", discarding that reason entirely, so the owner
+        // had no way to see WHY without going around the UI. The data was
+        // always here; only the rendering was missing.
+        return latest?.status === "FAIL" ? <p className="mt-1 line-clamp-3 text-[0.65rem] text-destructive">{latest.summary}</p> : null;
+      })()}
       {task.reopenedNote && <p className="mt-1.5 text-[0.65rem] font-medium text-amber-600 dark:text-amber-400">{task.reopenedNote}</p>}
       {task.status === "BLOCKED" && (
         <ActionButton
