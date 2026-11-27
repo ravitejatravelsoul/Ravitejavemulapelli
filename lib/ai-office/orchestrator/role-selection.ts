@@ -36,6 +36,16 @@ const UI_SIGNALS = [
   "webpage",
   "web page",
   "app",
+  // Real defect, Scenario B acceptance run (2026-11-27): "Build a modern
+  // personal expense tracking application" matched no UI signal at all
+  // — "app" only matches as a whole word (\bapp\b), never as a prefix of
+  // "application" — and once the BACKEND_SIGNALS fix for "tracking"
+  // (same incident) made needsBackend true, the existing "neither
+  // matched -> default to a UI" fallback no longer applied either,
+  // producing a backend-only plan for an idea that obviously also needs
+  // a real UI. "application" is a completely generic, common word for
+  // exactly this kind of product — not specific to this one scenario.
+  "application",
   "website",
   "ui",
   "screen",
@@ -70,6 +80,20 @@ const CLI_SIGNALS = ["cli", "command-line", "command line", "terminal", "shell s
  * (database, API) or a specific server-side phrase, not a word that
  * could plausibly describe purely client-side behavior.
  */
+/**
+ * Real defect, Scenario B acceptance run (2026-11-27): "Build a modern
+ * personal expense tracking application" — a genuine, natural idea
+ * phrasing describing ongoing, durable record-keeping — matched none of
+ * these, so backend-developer was excluded and the plan would have
+ * produced exactly the kind of localStorage-only, single-browser
+ * deliverable this scenario's own acceptance criteria explicitly
+ * reject. "Tracking"/"track" (and the equivalent "keep records of"
+ * phrasing) is a genuinely generic signal across many different real
+ * ideas — an expense tracker, a habit tracker, an inventory tracker, a
+ * time tracker — that a user expects their data to be reliably kept
+ * over time, not trapped in one browser's local storage; it is not a
+ * word specific to this one scenario's app.
+ */
 const BACKEND_SIGNALS = [
   "database",
   "rest api",
@@ -92,6 +116,12 @@ const BACKEND_SIGNALS = [
   "external service",
   "third-party service",
   "external backend",
+  "tracking",
+  "track",
+  "tracker",
+  "keep records",
+  "keep track",
+  "record keeping",
 ];
 const SECURITY_SIGNALS = ["auth", "login", "password", "payment", "credit card", "pii", "personal data", "external api", "third-party", "integration", "network"];
 const RESEARCH_SIGNALS = ["explore", "research", "investigate", "unfamiliar", "not sure", "prior art", "feasibility"];

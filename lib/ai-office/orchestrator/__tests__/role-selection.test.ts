@@ -107,6 +107,22 @@ describe("selectRoles — capability-driven backend selection (Phase 8 follow-up
     assert.ok(roles.includes("backend-developer"), "server persistence and a REST API are explicit backend signals");
   });
 
+  // Real defect, Scenario B acceptance run (2026-11-27): this exact,
+  // natural idea phrasing matched no BACKEND_SIGNAL at all, so the plan
+  // would have produced a localStorage-only deliverable for an idea the
+  // scenario's own acceptance criteria explicitly require real
+  // backend+database persistence for.
+  test('"Build a modern personal expense tracking application." — a genuine "tracking" idea now correctly gets backend-developer, not just a local-storage frontend', () => {
+    const { roles } = selectRoles("Build a modern personal expense tracking application.");
+    assert.ok(roles.includes("frontend-developer"), "expected frontend-developer");
+    assert.ok(roles.includes("backend-developer"), '"tracking" implies durable record-keeping the user expects to survive beyond one browser\'s local storage');
+  });
+
+  test('"Build a habit tracker." — "tracker" generically implies the same durable record-keeping need, independent of domain', () => {
+    const { roles } = selectRoles("Build a habit tracker.");
+    assert.ok(roles.includes("backend-developer"));
+  });
+
   test('"Build an authenticated dashboard backed by a database." — backend yes', () => {
     const { roles } = selectRoles("Build an authenticated dashboard backed by a database.");
     assert.ok(roles.includes("backend-developer"), "a database is an explicit backend signal");
