@@ -25,7 +25,15 @@ import { GitHubClient } from "../lib/ai-office/remote/github-client.ts";
  * no duplicated project-creation logic.
  *
  * Usage:
- *   node --conditions=react-server scripts/ai-office-remote-seed-test-project.ts "Project Title" "idea text"
+ *   node --conditions=react-server scripts/ai-office-remote-seed-test-project.ts "Project Title" "idea text" [routingMode]
+ *
+ * `routingMode` is optional — "FREE_MULTI_MODEL" (real Groq/Gemini/
+ * OpenRouter routing, the actual production acceptance path) or left
+ * off entirely for this script's original SIMULATED-fixture default.
+ * `provider` stays "simulated" either way — that field alone does not
+ * select real execution; `routingMode: "FREE_MULTI_MODEL"` is what
+ * `isFreeRouting()` actually checks (see domain/projects.ts) — matches
+ * the real Pomodoro acceptance project's own exact configuration.
  *
  * Does NOT dispatch a workflow run itself — print the project id and let
  * the caller decide when to kick off the chain (keeps this script a pure
@@ -40,8 +48,14 @@ function log(message: string): void {
 async function main(): Promise<void> {
   const title = process.argv[2];
   const ideaText = process.argv[3];
+  const routingMode = process.argv[4] as "FREE_MULTI_MODEL" | undefined;
   if (!title || !ideaText) {
-    console.error('Usage: node --conditions=react-server scripts/ai-office-remote-seed-test-project.ts "Title" "idea text"');
+    console.error('Usage: node --conditions=react-server scripts/ai-office-remote-seed-test-project.ts "Title" "idea text" [FREE_MULTI_MODEL]');
+    process.exitCode = 1;
+    return;
+  }
+  if (routingMode !== undefined && routingMode !== "FREE_MULTI_MODEL") {
+    console.error(`Unsupported routingMode "${routingMode}" — only "FREE_MULTI_MODEL" or omitted is accepted.`);
     process.exitCode = 1;
     return;
   }
@@ -58,6 +72,7 @@ async function main(): Promise<void> {
     provider: "simulated",
     aiPolicyMode: "LOCAL_ONLY",
     monthlyBudgetCapUsd: null,
+    routingMode,
   });
 
   planProject(db, project.id);
