@@ -85,8 +85,33 @@ export function hydrateModelCatalog(db:DatabaseSync, raw:unknown, restorePacing=
         if(table==="model_registry") {
           const m=row as RemoteModelCatalog["models"][number];
           if(m.id!==`${m.provider}:${m.modelId}`)throw new Error("Invalid catalog model identity");
-          // Catalog evidence cannot override the deployment's explicit owner confirmation.
-          if(!c.eligibility.some(e=>e.provider===m.provider&&e.modelId===m.modelId&&e.kind===getFreeEligibility(m.provider,m.modelId)))m.enabled=0;
+          // Real incident, production (2026-11-27): this used to force
+          // `m.enabled=0` whenever the catalog's own `eligibility` array
+          // didn't match what getFreeEligibility() computes in THIS
+          // process's env — a one-way gate with no corresponding path
+          // back to 1. Once any single hydration ran without the right
+          // AI_OFFICE_<PROVIDER>_FREE_TIER_CONFIRMED/_FREE_MODELS env
+          // vars (an exporting shell's own mistake, not a real
+          // deployment problem), that forced 0 got PERSISTED into the
+          // row and then re-exported by every later, correctly-
+          // configured process too — a permanent scar nothing ever
+          // healed, confirmed live: two models stayed `enabled:0` in
+          // the shared catalog for over a day despite every real
+          // exporting process (including the production worker itself)
+          // having completely correct env vars the whole time.
+          //
+          // No protection is actually lost by removing this: the exact
+          // same "catalog evidence cannot override the deployment's
+          // explicit owner confirmation" guarantee this existed for is
+          // ALREADY enforced, unconditionally and independently, by
+          // scoreModel()'s own isFreeModelAllowed() check on every real
+          // selection — using THIS process's live env, not a persisted
+          // flag — so a model with `enabled:1` but no real eligibility
+          // in the current environment is excluded from selection
+          // regardless (see free-model-router.ts). `enabled` now stays
+          // exactly what setModelEnabled()/the owner's own Model Control
+          // Center toggle last set it to — the only place that should
+          // ever change it.
         }
         const keys=Object.keys(row);
         db.prepare(`INSERT OR REPLACE INTO ${table} (${keys.join(",")}) VALUES (${keys.map(()=>"?").join(",")})`).run(...Object.values(row));

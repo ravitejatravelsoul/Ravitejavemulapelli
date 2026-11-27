@@ -69,3 +69,39 @@ test("findMissingFreeTierEligibility catches a qualified model the exporting she
     assert.equal(findMissingFreeTierEligibility(exportModelCatalog(db)).length,0,"an unqualified model is never flagged — there is nothing to silently disable");
   }finally{db.close();process.env=saved;}
 });
+
+// Real incident, production (2026-11-27), found recovering the real
+// blocked Pomodoro project: hydrateModelCatalog used to force
+// `enabled=0` into the PERSISTED row whenever the catalog's own
+// eligibility didn't match this process's env — a one-way gate with no
+// path back. Once any single hydration ran without the right env vars,
+// that forced 0 stuck FOREVER, re-exported by every later, correctly-
+// configured process too (confirmed live: two Groq models stayed
+// enabled:0 for over a day despite every real exporting process,
+// including the production worker, having correct env the whole time).
+test("a model hydrated without the right env vars once is NOT permanently stuck disabled — later, correctly-configured hydrate/export cycles restore it",()=>{
+  const saved={...process.env};
+  const db=hydrateEphemeralDb(DEFAULT_OFFICE_REMOTE_STATE,null);
+  const remote=hydrateEphemeralDb(DEFAULT_OFFICE_REMOTE_STATE,null);
+  try{
+    Object.assign(process.env,{GROQ_API_KEY:"test-key",AI_OFFICE_GROQ_FREE_TIER_CONFIRMED:"true",AI_OFFICE_GROQ_FREE_MODELS:"test-model"});
+    upsertModelRegistryEntry(db,{provider:"groq",modelId:"test-model",displayName:"Test",capabilities:["CODING"],structuredOutput:true,contextWindow:10000});
+    db.prepare("UPDATE model_registry SET qualified=1,health='HEALTHY',benchmarkScore=95").run();
+    const goodExport=exportModelCatalog(db);
+    assert.equal(goodExport.models[0]!.enabled,1);
+
+    // A bad exporting shell (this test's own mistake, not a real
+    // deployment problem) hydrates with no env vars set at all.
+    delete process.env.AI_OFFICE_GROQ_FREE_TIER_CONFIRMED;delete process.env.AI_OFFICE_GROQ_FREE_MODELS;
+    hydrateModelCatalog(remote,goodExport);
+    assert.equal(selectFreeModel(remote,{capability:"CODING"}),null,"correctly excluded while this process's own env doesn't confirm eligibility");
+
+    // The SAME real deployment, with its OWN correct env vars restored,
+    // exports a later revision from that same remote row.
+    Object.assign(process.env,{AI_OFFICE_GROQ_FREE_TIER_CONFIRMED:"true",AI_OFFICE_GROQ_FREE_MODELS:"test-model"});
+    const recovered=exportModelCatalog(remote);
+    assert.equal(recovered.models[0]!.enabled,1,"enabled must never get permanently stuck at 0 just because one earlier hydration ran with the wrong env — it reflects the owner's own toggle, not a scar from a bad export");
+    hydrateModelCatalog(db,recovered);
+    assert.ok(selectFreeModel(db,{capability:"CODING"}),"a real, eligible candidate again once the correct env is restored — no owner action needed to undo someone else's env mistake");
+  }finally{db.close();remote.close();process.env=saved;}
+});
