@@ -36,6 +36,23 @@ import { runCommand, startManagedProcess, type ManagedProcess } from "./command-
  * alive, not that it's wired to its own data store; this convention
  * additionally gets a real {"dbConnected": true|false} signal when the
  * product reports one.
+ *
+ * Disclosed, understood limitation — not something this claims to
+ * solve: the spawned backend process (and `npm install` itself) has NO
+ * outbound network restriction of its own. qa-browser-verification.ts's
+ * network isolation only covers requests a BROWSER makes against the
+ * static-served frontend; a real Node.js child process here could still
+ * reach the public internet directly. The environment-level mitigations
+ * that already apply are real (no host secret ever reaches this
+ * process — see sanitizedEnv() in command-execution-service.ts — and in
+ * production this always runs inside one ephemeral, single-tenant
+ * GitHub Actions VM destroyed at the end of the job), but they are not
+ * a network firewall. A genuine per-process network restriction would
+ * need OS-level enforcement (e.g. a Linux network namespace or firewall
+ * rule scoped to this child's own process tree) that this Node-based
+ * command runner cannot provide on its own, and implementing one
+ * requires care this change does not attempt — reported here rather
+ * than silently left unstated or worked around unsafely.
  */
 
 export interface BackendVerificationResult {
@@ -157,6 +174,20 @@ export async function runBackendVerification(
     );
   }
 
+  // Deliberately NOT --ignore-scripts: a legitimate generated backend
+  // following this module's own DB_PATH/SQLite contract commonly depends
+  // on a package like better-sqlite3, whose native binding is built by
+  // its own install-time script — ignoring scripts would break exactly
+  // the pattern this office's own backend-developer prompt asks for.
+  // The accepted residual risk (a malicious/compromised dependency's
+  // install script running real code) is bounded the same way the rest
+  // of this module already is: no host secret ever reaches this process
+  // (sanitizedEnv()), the workspace stays confined to this one project's
+  // own directory, and in production this always runs inside a single
+  // ephemeral GitHub Actions VM destroyed at the end of the job — never
+  // a long-lived or shared host. Outbound network access from this
+  // install step (and from the started backend itself) is NOT currently
+  // restricted; see this module's own docblock.
   const npm = resolveNpmInvocation();
   const install = await runCommand({
     projectId,
