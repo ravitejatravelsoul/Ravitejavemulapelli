@@ -146,6 +146,48 @@ async function findUnfinishedNavDestination(page: import("playwright").Page): Pr
 }
 
 /**
+ * Real incident, Scenario B acceptance run (2026-11-27): once the
+ * check above stopped picking an already-active nav tab as "the"
+ * button, the next real deliverable's only non-nav button (a form
+ * "Save" submit) turned out to live inside a tab section that is NOT
+ * the default-active one — genuinely invisible at initial load. A
+ * primary action living behind tab navigation is an extremely common,
+ * legitimate pattern (this module's own nav-destination check above
+ * already proves each tab leads to real content) — the right test is
+ * to actually navigate there first, the same way a real user would
+ * click the relevant tab, rather than declaring the deliverable broken
+ * for not exposing every control on its very first screen. Returns the
+ * nav item's own label when a navigation was needed, so the caller can
+ * recompute its "before" text baseline from the POST-navigation state —
+ * otherwise every click would trivially "change the page" just from
+ * having navigated, regardless of whether the button itself works.
+ */
+async function findReachablePrimaryButton(page: import("playwright").Page): Promise<{ button: import("playwright").Locator; navigatedViaLabel: string | null } | null> {
+  const nonNavButtonSelector = 'button:not(nav button, [role="navigation"] button)';
+  const isUsable = async (locator: import("playwright").Locator) => (await locator.count()) > 0 && (await locator.isVisible().catch(() => false));
+
+  const direct = page.locator(nonNavButtonSelector).first();
+  if (await isUsable(direct)) return { button: direct, navigatedViaLabel: null };
+
+  const navItems = page.locator('nav a, nav button, [role="navigation"] a, [role="navigation"] button');
+  const count = Math.min(await navItems.count(), MAX_NAV_ITEMS_CHECKED);
+  for (let i = 0; i < count; i++) {
+    const item = navItems.nth(i);
+    if (!(await item.isVisible().catch(() => false))) continue;
+    const label = ((await item.textContent().catch(() => "")) ?? "").trim() || `nav item ${i + 1}`;
+    try {
+      await item.click({ timeout: 3000 });
+      await page.waitForTimeout(150);
+    } catch {
+      continue;
+    }
+    const candidate = page.locator(nonNavButtonSelector).first();
+    if (await isUsable(candidate)) return { button: candidate, navigatedViaLabel: label };
+  }
+  return null;
+}
+
+/**
  * Verifies the real generated deliverable in a real headless browser:
  * page loads, a heading and a description-like paragraph exist, a button
  * exists and clicking it changes some visible text on the page, no
@@ -248,26 +290,69 @@ export async function runQABrowserVerification(
     // not change any visible text" for six real, correct developer
     // attempts in a row, each one burning a real retry. Nav/tab
     // destinations are already verified separately, for real, by
-    // findUnfinishedNavDestination below — prefer a button OUTSIDE that
-    // nav/tab context for this check, falling back to any button at all
-    // only if the page genuinely has no other interactive control.
-    const nonNavButton = page.locator('button:not(nav button, [role="navigation"] button)').first();
-    const button = (await nonNavButton.count()) > 0 ? nonNavButton : page.locator("button").first();
+    // findUnfinishedNavDestination below — prefer a reachable button
+    // OUTSIDE that nav/tab context (navigating tabs first if needed —
+    // see findReachablePrimaryButton), falling back to any button at
+    // all only if the page genuinely has no other interactive control.
+    const reachable = await findReachablePrimaryButton(page);
+    const button = reachable?.button ?? page.locator("button").first();
     if ((await button.count()) === 0) {
       return finish("FAIL", "No button found on the page.", { consoleErrors, pageErrors });
     }
+    // A navigation happened to even reach this button — recompute the
+    // "before" baseline from THIS (post-navigation) state. Otherwise
+    // every click would trivially "change the page" from having
+    // navigated at all, regardless of whether the button itself does
+    // anything real.
+    if (reachable?.navigatedViaLabel) {
+      bodyTextBefore = ((await page.locator("body").textContent()) ?? "").trim();
+    }
 
-    // Exercise input-driven controls from a non-empty state. In particular,
-    // Reset on an already-empty counter is legitimately a no-op. Capture the
-    // baseline after typing so typing alone cannot make a broken button pass.
-    const textInputs = page.locator('input:not([type]), input[type="text"], input[type="search"], textarea');
-    for (const input of await textInputs.all()) {
-      if (await input.isVisible() && await input.isEditable()) {
-        await input.fill("Browser verification");
-        await page.waitForTimeout(200);
-        bodyTextBefore = ((await page.locator("body").textContent()) ?? "").trim();
-        break;
+    // Exercise input-driven controls from a non-empty, genuinely
+    // submittable state. In particular, Reset on an already-empty
+    // counter is legitimately a no-op. Capture the baseline after
+    // filling so typing alone can never make a broken button pass.
+    //
+    // Real incident, Scenario B acceptance run (2026-11-27): a real
+    // multi-field required form (type/amount/date/category/payment
+    // method) only ever got its FIRST text-type field filled — amount
+    // (type="number") and date (type="date") were left empty, so the
+    // browser's own required-field validation silently blocked the
+    // click from ever submitting at all, genuinely indistinguishable
+    // from a broken button. Fills every visible, editable field with a
+    // type-appropriate value, not just the first plain-text one.
+    const fillableFields = page.locator("input, textarea, select");
+    const fieldCount = await fillableFields.count();
+    let filledAny = false;
+    for (let i = 0; i < fieldCount; i++) {
+      const field = fillableFields.nth(i);
+      if (!(await field.isVisible().catch(() => false)) || !(await field.isEditable().catch(() => false))) continue;
+      const tagName = await field.evaluate((el) => el.tagName.toLowerCase()).catch(() => "");
+      if (tagName === "select") {
+        await field.evaluate((el) => {
+          const select = el as HTMLSelectElement;
+          if (!select.value && select.options.length > 0) select.selectedIndex = 0;
+        }).catch(() => {});
+        filledAny = true;
+        continue;
       }
+      const inputType = (await field.getAttribute("type").catch(() => null))?.toLowerCase() ?? "text";
+      if (["checkbox", "radio", "hidden", "submit", "button", "reset", "file", "color", "range"].includes(inputType)) continue;
+      const value =
+        inputType === "number" ? "1" :
+        inputType === "date" ? new Date().toISOString().slice(0, 10) :
+        inputType === "month" ? new Date().toISOString().slice(0, 7) :
+        inputType === "time" ? "12:00" :
+        inputType === "email" ? "test@example.com" :
+        inputType === "tel" ? "555-0100" :
+        inputType === "url" ? "https://example.com" :
+        "Browser verification";
+      await field.fill(value).catch(() => {});
+      filledAny = true;
+    }
+    if (filledAny) {
+      await page.waitForTimeout(200);
+      bodyTextBefore = ((await page.locator("body").textContent()) ?? "").trim();
     }
 
     await button.click({ timeout: 5000 });
