@@ -180,6 +180,54 @@ describe("runQABrowserVerification", () => {
     assert.equal(result.status, "PASS", result.summary);
   });
 
+  // Real incident, Scenario B acceptance run (2026-11-27): a real
+  // full-stack expense tracker's FIRST button in DOM order was a nav tab
+  // ("Dashboard") already in its default-active state -- clicking an
+  // already-active tab is legitimately a no-op by design (a classic
+  // tabs/pills pattern), but the OLD "click the first button" heuristic
+  // picked it anyway and genuinely reported "did not change any visible
+  // text" for six real, correct developer attempts in a row, each
+  // burning a real retry, before QA itself hit its own escalation
+  // ceiling.
+  test("PASSes when the first button in DOM order is an already-active nav tab (a real no-op by design), by picking a real non-nav button instead", async () => {
+    const id = "nav-tab-first-project";
+    await writeFile(
+      id,
+      "index.html",
+      [
+        "<!DOCTYPE html>",
+        '<html lang="en"><head><meta charset="UTF-8" /><title>App</title></head>',
+        "<body>",
+        "<h1>Expense Tracker</h1>",
+        '<p class="description">A small test page.</p>',
+        '<nav><button id="tab-dashboard" class="tab active">Dashboard</button><button id="tab-add" class="tab">Add</button></nav>',
+        '<section id="dashboard" class="tab-content active">Dashboard view</section>',
+        '<button id="greet-button" type="button">Say hello</button>',
+        '<p id="message"></p>',
+        '<script src="script.js"></script>',
+        "</body></html>",
+      ].join("\n"),
+    );
+    // The nav tab's own click handler is a real, working no-op from its
+    // own already-active state — switching TO the already-active tab
+    // changes nothing, exactly like a real tabs implementation.
+    await writeFile(
+      id,
+      "script.js",
+      [
+        'document.getElementById("tab-dashboard").addEventListener("click", function () {',
+        '  document.querySelectorAll(".tab").forEach(function (b) { b.classList.remove("active"); });',
+        '  this.classList.add("active");',
+        "});",
+        GOOD_JS,
+      ].join("\n"),
+    );
+
+    const result = await runQABrowserVerification(id);
+
+    assert.equal(result.status, "PASS", result.summary);
+  });
+
   test("FAILs against a real page whose button references the wrong element id (a real bug)", async () => {
     await writeFile("buggy-project", "index.html", GOOD_HTML);
     await writeFile("buggy-project", "script.js", BUGGY_JS);

@@ -239,7 +239,20 @@ export async function runQABrowserVerification(
       return finish("FAIL", "No description-like text found alongside the heading.", { consoleErrors, pageErrors, bodyTextBefore });
     }
 
-    const button = page.locator("button").first();
+    // Real incident, Scenario B acceptance run (2026-11-27): a real
+    // full-stack expense tracker's FIRST button in DOM order was a nav
+    // tab ("Dashboard") already in its default-active state — clicking
+    // an already-active tab is legitimately a no-op by design (classic
+    // tabs/pills/segmented-control pattern), but this picked it as THE
+    // primary button to click-and-verify, and genuinely reported "did
+    // not change any visible text" for six real, correct developer
+    // attempts in a row, each one burning a real retry. Nav/tab
+    // destinations are already verified separately, for real, by
+    // findUnfinishedNavDestination below — prefer a button OUTSIDE that
+    // nav/tab context for this check, falling back to any button at all
+    // only if the page genuinely has no other interactive control.
+    const nonNavButton = page.locator('button:not(nav button, [role="navigation"] button)').first();
+    const button = (await nonNavButton.count()) > 0 ? nonNavButton : page.locator("button").first();
     if ((await button.count()) === 0) {
       return finish("FAIL", "No button found on the page.", { consoleErrors, pageErrors });
     }
@@ -257,7 +270,7 @@ export async function runQABrowserVerification(
       }
     }
 
-    await button.click();
+    await button.click({ timeout: 5000 });
     await page.waitForTimeout(200);
     const bodyTextAfter = ((await page.locator("body").textContent()) ?? "").trim();
 
