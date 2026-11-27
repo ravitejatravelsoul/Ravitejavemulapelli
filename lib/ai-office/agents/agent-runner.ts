@@ -831,6 +831,7 @@ async function checkRetryDriftBeforeMaterialization(
   fetchImpl?: typeof fetch,
   verify?: (input: { authoritativeUserRequest: string; candidate: string; checkpointLabel: string }) => Promise<IntentConsistencyResult>,
   failureReason?: string,
+  currentDeliverableAlreadyBroken?: boolean,
 ): Promise<{ consistent: true } | { consistent: false; reason: string }> {
   // Nothing "previous" to drift away from yet — a first real attempt at
   // this task, not a correction of one, so there's no drift risk to
@@ -852,10 +853,27 @@ async function checkRetryDriftBeforeMaterialization(
   // the verifier judge what this instruction already asked for all
   // along ("except where fixing the reported failure genuinely requires
   // a change") against a real, concrete reason instead of guessing.
+  //
+  // Second real incident, same recovery (2026-11-27): even WITH the
+  // failure reason included, the verifier kept rejecting a full
+  // React→plain-HTML/CSS/JS rewrite as "breaking the existing React
+  // app" — calling the current files "the previously-working
+  // deliverable" actively told the verifier to protect them, when the
+  // real, deterministic workspace-integrity check (this environment's
+  // own authority on what can run at all, not an AI guess) already
+  // knows they can never run here in the first place. Asking a verifier
+  // to preserve code that is already known non-functional is exactly
+  // backwards. `currentDeliverableAlreadyBroken` is computed from that
+  // same real, non-AI check — never the AI's own opinion — so this can
+  // never be used to wave through an unrelated scope/requirement change
+  // just because *something* about the current files happens to be
+  // broken.
   const standard = [
     authoritativeUserRequest,
     "",
-    "This must also still be served by the previously-working deliverable below — a corrective attempt must preserve it except where fixing the reported failure genuinely requires a change:",
+    currentDeliverableAlreadyBroken
+      ? "The deliverable below is already known, by a real deterministic check (not a guess), to be structurally non-functional in this environment — do not reject a correction merely for substantially rewriting or replacing it; a full rewrite is expected and appropriate here. Still reject a candidate that changes the product's actual purpose, features, or requirements rather than how they're implemented:"
+      : "This must also still be served by the previously-working deliverable below — a corrective attempt must preserve it except where fixing the reported failure genuinely requires a change:",
     ...currentFiles.map((f) => `--- ${f.path} ---\n${f.content}`),
     ...(failureReason
       ? [
@@ -1747,8 +1765,15 @@ export async function executeTask(
   // correctness — real QA, checkpoint 2, remains the authoritative
   // gate); only a real "inconsistent" verdict rejects.
   const retryDriftChecker = options.retryDriftCheckOverride ?? checkRetryDriftBeforeMaterialization;
-  const retryDrift =
-    result.status === "SUCCEEDED" && isDevelopmentRole(role) && usedRealProvider && (attempt.attemptNumber ?? 1) > 1
+  const runRetryDriftCheck = result.status === "SUCCEEDED" && isDevelopmentRole(role) && usedRealProvider && (attempt.attemptNumber ?? 1) > 1;
+  // Real, deterministic authority on whether the CURRENT (pre-this-attempt)
+  // workspace can even run at all — never an AI guess — so the drift
+  // checker's prompt can stop asking a verifier to "preserve" code this
+  // environment already knows is structurally non-functional. Safe to
+  // call here: nothing has been materialized for this attempt yet, so
+  // the real workspace on disk is exactly what `currentFiles` reflects.
+  const currentDeliverableAlreadyBroken = runRetryDriftCheck ? (await validateWorkspaceIntegrity(project.id)).status === "FAIL" : false;
+  const retryDrift = runRetryDriftCheck
       ? await retryDriftChecker(
           context.authoritativeUserRequest,
           context.remediationContext?.currentFiles ?? [],
@@ -1756,6 +1781,7 @@ export async function executeTask(
           options.intentCheckFetch,
           input => checkDeliverableIntentConsistency(db, project, agentRun, input, { fetchImpl: options.intentCheckFetch, freeProviderFetchImpl: options.freeProviderFetchImpl }),
           context.remediationContext?.failureReason ?? undefined,
+          currentDeliverableAlreadyBroken,
         )
       : { consistent: true as const };
 

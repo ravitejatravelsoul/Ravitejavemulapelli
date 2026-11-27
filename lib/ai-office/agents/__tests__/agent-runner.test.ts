@@ -2161,6 +2161,50 @@ describe("retry drift prevention (Phase 8 second follow-up)", () => {
       });
     });
 
+    // Second real incident, same Pomodoro recovery (2026-11-27): even with
+    // the failure reason included, the verifier kept rejecting a full
+    // React -> plain-HTML/CSS/JS rewrite as "breaking the existing React
+    // app", because the prompt called the current (already-broken) files
+    // "the previously-working deliverable" — actively telling the
+    // verifier to protect code the real, deterministic workspace-
+    // integrity check already knows can never run here.
+    test("when the current deliverable is already known (by the real, deterministic workspace-integrity check) to be structurally broken, the drift verifier is told a substantial rewrite is expected, not told to preserve it", async () => {
+      await withWorkspace(async () => {
+        const t = createTestDb();
+        const project = setupOllamaProject(t, "Create a Hello World webpage with a button.");
+        const devTask = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+
+        // First attempt: a real, currently-existing structural defect this
+        // environment can never run — a <script src> referencing a .tsx file.
+        await executeTask(t.db, devTask.id, {
+          provider: writingAdapter({ "index.html": '<h1>Hello, World!</h1><button>Say hello</button><script src="app.tsx"></script>', "app.tsx": "export default function App() { return null; }" }),
+          intentCheckFetch: fetchReturning(true, "ok"),
+        });
+        const { recordFailure } = await import("../../domain/project-outputs.ts");
+        recordFailure(t.db, { projectId: project.id, taskId: devTask.id, reason: "Workspace integrity validation failed: index.html loads app.tsx directly as a script, but this environment serves files as plain static assets with no build step." });
+        updateTaskStatus(t.db, devTask.id, "PENDING");
+
+        let capturedPrompt = "";
+        const capturingFetch = (async (_url: string, init: RequestInit) => {
+          capturedPrompt = (JSON.parse(init.body as string) as { prompt: string }).prompt;
+          return { ok: true, status: 200, json: async () => ({ response: JSON.stringify({ consistent: true, reason: "ok" }) }) } as unknown as Response;
+        }) as unknown as typeof fetch;
+
+        // Corrective attempt: a full rewrite into plain, build-less HTML/JS.
+        const result = await executeTask(t.db, devTask.id, {
+          provider: writingAdapter({ "index.html": '<h1>Hello, World!</h1><button onclick="greet()">Say hello</button><script src="script.js"></script>', "script.js": 'function greet(){document.querySelector("h1").textContent="Hi!";}' }),
+          intentCheckFetch: capturingFetch,
+        });
+
+        assert.ok(capturedPrompt.includes("already known"), "the verifier must be told the current deliverable is already known broken, not asked to preserve it");
+        assert.ok(!capturedPrompt.includes("previously-working deliverable"), "must not call known-broken code 'the previously-working deliverable'");
+        assert.equal(result.outcome, "succeeded", "a full rewrite fixing a real, known-broken deliverable must not be rejected as drift");
+        assert.equal(await readFile(project.id, "app.tsx").catch(() => null), "export default function App() { return null; }", "old files are not deleted outright by this check — only the drift GATE's wording changes; file replacement semantics are unchanged");
+
+        t.close();
+      });
+    });
+
     test("Gate 3 does not apply to a first attempt — nothing 'previous' to drift away from yet", async () => {
       await withWorkspace(async () => {
         const t = createTestDb();
