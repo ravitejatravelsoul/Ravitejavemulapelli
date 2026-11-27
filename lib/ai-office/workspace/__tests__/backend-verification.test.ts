@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeFile, createWorkspace } from "../workspace-service.ts";
-import { runBackendVerification } from "../backend-verification.ts";
+import { runBackendVerification, runFullStackVerification } from "../backend-verification.ts";
 
 /**
  * Real end-to-end coverage for Priority 0 #8's first increment: a real
@@ -185,5 +185,93 @@ describe("runBackendVerification", () => {
     const result = await runBackendVerification(id, { startTimeoutMs: 5000 });
 
     assert.equal(result.status, "PASS", JSON.stringify(result));
+  });
+});
+
+// Real incident, Scenario B acceptance run (2026-11-27): a real
+// full-stack expense tracker's "Save" button correctly called a real
+// backend API, but qa-browser-verification.ts always served the
+// frontend from an isolated static server with no backend attached, so
+// the browser's own fetch() call could only ever fail. See
+// runFullStackVerification's own docblock for the full root cause.
+describe("runFullStackVerification", () => {
+  const FULLSTACK_SERVER_JS = `
+const http = require('http');
+const INDEX_HTML = \`<!DOCTYPE html><html><head><title>Greeter</title></head><body>
+<h1>Greeter</h1><p class="description">Click the button to fetch a real greeting from the backend.</p>
+<button id="greet-button" type="button">Greet me</button><p id="message"></p>
+<script src="script.js"></script></body></html>\`;
+const SCRIPT_JS = \`
+document.getElementById('greet-button').addEventListener('click', async function () {
+  const res = await fetch('/api/greet', { method: 'POST' });
+  const body = await res.json();
+  document.getElementById('message').textContent = body.greeting;
+});
+\`;
+http.createServer((req, res) => {
+  if (req.url === '/__office_health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+  if (req.method === 'POST' && req.url === '/api/greet') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ greeting: 'Hello from the real backend!' }));
+    return;
+  }
+  if (req.url === '/' || req.url === '/index.html') {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(INDEX_HTML);
+    return;
+  }
+  if (req.url === '/script.js') {
+    res.writeHead(200, { 'Content-Type': 'application/javascript' });
+    res.end(SCRIPT_JS);
+    return;
+  }
+  res.writeHead(404); res.end();
+}).listen(Number(process.env.PORT), '127.0.0.1');
+`;
+
+  test("the real frontend, opened in a real browser against the real running backend, round-trips a real API call end to end", async () => {
+    const id = "fullstack-greeter-project";
+    await writeFile(id, "package.json", JSON.stringify({ name: id, version: "1.0.0", scripts: { start: "node server.js" } }));
+    await writeFile(id, "server.js", FULLSTACK_SERVER_JS);
+
+    const result = await runFullStackVerification(id);
+
+    assert.equal(result.status, "PASS", JSON.stringify(result));
+    assert.match(result.summary, /full-stack integration check passed/i);
+    assert.match(String(result.details.bodyTextAfter), /Hello from the real backend!/);
+  });
+
+  test("FAILs, with a clear real root cause, when the frontend's button depends on an API route the backend never implements", async () => {
+    const id = "fullstack-missing-route-project";
+    await writeFile(id, "package.json", JSON.stringify({ name: id, version: "1.0.0", scripts: { start: "node server.js" } }));
+    // Same frontend, but the backend's /api/greet route is missing entirely (404) — a real integration defect, not a QA false positive.
+    await writeFile(
+      id,
+      "server.js",
+      FULLSTACK_SERVER_JS.replace(
+        /if \(req\.method === 'POST' && req\.url === '\/api\/greet'\) \{[\s\S]*?\n  \}\n/,
+        "",
+      ),
+    );
+
+    const result = await runFullStackVerification(id);
+
+    assert.equal(result.status, "FAIL");
+    assert.match(result.summary, /full-stack integration check failed/i);
+  });
+
+  test("still reports a real backend-startup failure (never silently skips to the browser check) when the backend itself never comes up", async () => {
+    const id = "fullstack-crash-project";
+    await writeFile(id, "package.json", JSON.stringify({ name: id, version: "1.0.0", scripts: { start: "node crash.js" } }));
+    await writeFile(id, "crash.js", "process.exit(1);");
+
+    const result = await runFullStackVerification(id, { startTimeoutMs: 5000 });
+
+    assert.equal(result.status, "FAIL");
+    assert.match(result.summary, /exited on its own/i);
   });
 });

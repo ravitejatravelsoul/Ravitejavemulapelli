@@ -18,6 +18,19 @@ import { readFile, workspaceExists, getContentType, WorkspacePathError } from ".
  * nothing here that can be left running between calls, so nothing to
  * orphan. Never bound to a non-loopback address; never reused across
  * calls.
+ *
+ * Real incident, Scenario B acceptance run (2026-11-27): a real
+ * full-stack expense tracker's "Save" button correctly called a real
+ * backend API — but this module always served the frontend from its own
+ * isolated static server, with no backend attached at all, so that
+ * `fetch()` could only ever fail (no listener on that path), and the
+ * page's visible-text-changes-on-click check failed identically to a
+ * genuinely broken button. `options.baseUrl`, when passed by
+ * `runFullStackVerification` in backend-verification.ts, points this
+ * check at a real, already-running backend process instead of starting
+ * the isolated static server — so a full-stack deliverable's frontend
+ * and backend are verified together, as one integrated application,
+ * exactly the way a real user would experience it.
  */
 
 export interface QABrowserVerificationResult {
@@ -199,35 +212,43 @@ async function findReachablePrimaryButton(page: import("playwright").Page): Prom
  */
 export async function runQABrowserVerification(
   projectId: string,
-  options: { entryFile?: string } = {},
+  options: { entryFile?: string; baseUrl?: string } = {},
 ): Promise<QABrowserVerificationResult> {
   const entryFile = options.entryFile ?? "index.html";
   const startedAt = Date.now();
 
-  if (!workspaceExists(projectId)) {
-    return {
-      status: "FAIL",
-      summary: "No workspace exists for this project — nothing to verify.",
-      details: {},
-      durationMs: Date.now() - startedAt,
-      targetUrl: "",
-    };
-  }
+  // When `baseUrl` is given (a real, already-live backend process — see
+  // runFullStackVerification in backend-verification.ts), the workspace's
+  // own files are no longer what's being served, so the local-file
+  // existence pre-checks below are meaningless; the real server is the
+  // one source of truth and its own response is checked after `page.goto`
+  // below, same as any other navigation failure.
+  if (!options.baseUrl) {
+    if (!workspaceExists(projectId)) {
+      return {
+        status: "FAIL",
+        summary: "No workspace exists for this project — nothing to verify.",
+        details: {},
+        durationMs: Date.now() - startedAt,
+        targetUrl: "",
+      };
+    }
 
-  let entryContentExists = true;
-  try {
-    await readFile(projectId, entryFile);
-  } catch {
-    entryContentExists = false;
-  }
-  if (!entryContentExists) {
-    return {
-      status: "FAIL",
-      summary: `"${entryFile}" does not exist in the project workspace — nothing to load.`,
-      details: {},
-      durationMs: Date.now() - startedAt,
-      targetUrl: "",
-    };
+    let entryContentExists = true;
+    try {
+      await readFile(projectId, entryFile);
+    } catch {
+      entryContentExists = false;
+    }
+    if (!entryContentExists) {
+      return {
+        status: "FAIL",
+        summary: `"${entryFile}" does not exist in the project workspace — nothing to load.`,
+        details: {},
+        durationMs: Date.now() - startedAt,
+        targetUrl: "",
+      };
+    }
   }
 
   let server: http.Server | undefined;
@@ -244,14 +265,19 @@ export async function runQABrowserVerification(
   ): QABrowserVerificationResult => ({ status, summary, details, durationMs: Date.now() - startedAt, targetUrl });
 
   try {
-    const started = await startEphemeralStaticServer(projectId);
-    server = started.server;
-    targetUrl = `${started.baseUrl}/${entryFile}`;
+    let serverOrigin: string;
+    if (options.baseUrl) {
+      serverOrigin = options.baseUrl;
+    } else {
+      const started = await startEphemeralStaticServer(projectId);
+      server = started.server;
+      serverOrigin = started.baseUrl;
+    }
+    targetUrl = `${serverOrigin}/${entryFile}`;
 
     browser = await chromium.launch({ headless: true });
     const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
     activePage = page;
-    const serverOrigin = started.baseUrl;
     await page.route("**/*", (route) => {
       const url = new URL(route.request().url());
       if (url.origin === serverOrigin) return route.continue();

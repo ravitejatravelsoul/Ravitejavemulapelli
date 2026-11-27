@@ -1971,30 +1971,62 @@ export async function executeTask(
     // ever resolved when a qa-agent task with a real browser deliverable
     // is actually executed — which never happens when operational mode
     // is disabled.
-    const verification = projectPlannedBrowserDeliverable
-      ? await (await import("../workspace/qa-browser-verification.ts")).runQABrowserVerification(project.id)
-      : { status: "PASS" as const, summary: "No browser deliverable planned for this project — skipping browser verification.", details: {} as Record<string, unknown>, durationMs: 0, targetUrl: "" };
-    let finalStatus = verification.status;
-    let finalSummary = verification.summary;
-    let finalDetails: Record<string, unknown> = verification.details;
-    let finalDurationMs = verification.durationMs;
+    // Real incident, Scenario B acceptance run (2026-11-27): when BOTH a
+    // frontend and a backend were planned, this used to run them as two
+    // completely disconnected checks — a browser against an isolated
+    // static-only server with no backend attached, then a bare
+    // /__office_health ping with no browser at all — so the actual
+    // frontend-to-backend-to-database round trip a real user depends on
+    // was never once exercised together. A correct deliverable whose
+    // visible feedback genuinely depends on a real API call (the normal
+    // shape of a real full-stack app) then failed the browser check
+    // identically to a genuinely broken button, because its fetch() had
+    // no live backend to reach. runFullStackVerification runs the real
+    // backend and points the SAME browser check at its own live origin
+    // instead, proving the actual integrated application. A plan with
+    // only one of the two deliverables keeps using the simpler,
+    // independent check it already had — there is nothing to integrate.
+    let finalStatus: "PASS" | "FAIL";
+    let finalSummary: string;
+    let finalDetails: Record<string, unknown>;
+    let finalDurationMs: number;
+    let verification: { status: "PASS" | "FAIL"; summary: string; details: Record<string, unknown>; durationMs: number; targetUrl: string };
 
-    // Backend verification runs whenever the plan includes it, but only
-    // AFTER a browser check that was also planned has already passed —
-    // no point starting a real npm install/server for a frontend that's
-    // already known broken, and the failure the developer needs to see
-    // first is whichever one actually happened first in the pipeline.
-    if (projectPlannedBackendDeliverable && finalStatus === "PASS") {
+    if (projectPlannedBrowserDeliverable && projectPlannedBackendDeliverable) {
+      const { runFullStackVerification } = await import("../workspace/backend-verification.ts");
+      const fullStack = await runFullStackVerification(project.id);
+      verification = fullStack;
+      finalStatus = fullStack.status;
+      finalSummary = fullStack.summary;
+      finalDetails = fullStack.details;
+      finalDurationMs = fullStack.durationMs;
+    } else if (projectPlannedBrowserDeliverable) {
+      // Dynamic import, not a top-level one — see qa-browser-verification.ts's
+      // real `import { chromium } from "playwright"`. agent-runner.ts is
+      // statically reachable from app/office/(protected)/page.tsx (via
+      // office-engineer.ts → semantic-repair-execution.ts), so a top-level
+      // import here would pull Playwright into that route's serverless
+      // function bundle regardless of whether QA ever actually runs —
+      // confirmed as the real cause of a live Vercel
+      // FUNCTION_INVOCATION_FAILED ("Cannot find module
+      // '.../playwright-core/browsers.json'") on the authenticated,
+      // limited-production /office request. This way, Playwright is only
+      // ever resolved when a qa-agent task with a real browser deliverable
+      // is actually executed — which never happens when operational mode
+      // is disabled.
+      verification = await (await import("../workspace/qa-browser-verification.ts")).runQABrowserVerification(project.id);
+      finalStatus = verification.status;
+      finalSummary = verification.summary;
+      finalDetails = verification.details;
+      finalDurationMs = verification.durationMs;
+    } else {
       const { runBackendVerification } = await import("../workspace/backend-verification.ts");
       const backendVerification = await runBackendVerification(project.id);
-      finalDetails = { ...finalDetails, backend: backendVerification.details };
-      finalDurationMs += backendVerification.durationMs;
-      if (backendVerification.status === "FAIL") {
-        finalStatus = "FAIL";
-        finalSummary = `Backend verification failed: ${backendVerification.summary}`;
-      } else if (!projectPlannedBrowserDeliverable) {
-        finalSummary = backendVerification.summary;
-      }
+      verification = { ...backendVerification, targetUrl: "" };
+      finalStatus = backendVerification.status;
+      finalSummary = backendVerification.status === "FAIL" ? `Backend verification failed: ${backendVerification.summary}` : backendVerification.summary;
+      finalDetails = backendVerification.details;
+      finalDurationMs = backendVerification.durationMs;
     }
 
     // Intent-consistency gate, checkpoint 2 of 3 — the FINAL gate before

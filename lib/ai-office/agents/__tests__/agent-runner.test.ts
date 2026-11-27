@@ -847,6 +847,67 @@ describe("real file materialization (Phase 8)", () => {
     });
   });
 
+  // Real incident, Scenario B acceptance run (2026-11-27): when a plan
+  // includes BOTH a frontend-developer and a backend-developer task,
+  // the browser check and the backend check used to run as two
+  // completely disconnected probes — a browser against an isolated
+  // static server with no backend attached, then a bare
+  // /__office_health ping with no browser at all — so a correct
+  // deliverable whose visible feedback genuinely depends on a real API
+  // call failed identically to a genuinely broken button. This proves
+  // the real, combined runFullStackVerification path actually exercises
+  // the frontend-to-backend-to-database round trip together.
+  test("qa-agent for a full-stack (frontend + backend) plan really integrates them: the real browser click round-trips against the real running backend", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const { project } = setupProject(t);
+      const frontendTask = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+      const backendTask = createTask(t.db, { projectId: project.id, roleId: "backend-developer", title: "Implement backend" });
+      await writeFile(
+        project.id,
+        "index.html",
+        '<!DOCTYPE html><html><head><title>Greeter</title></head><body><h1>Greeter</h1><p class="description">Click the button to fetch a real greeting from the backend.</p><button id="greet-button" type="button">Greet me</button><p id="message"></p><script src="script.js"></script></body></html>',
+      );
+      await writeFile(
+        project.id,
+        "script.js",
+        "document.getElementById('greet-button').addEventListener('click', async function () { const res = await fetch('/api/greet', { method: 'POST' }); const body = await res.json(); document.getElementById('message').textContent = body.greeting; });",
+      );
+      await writeFile(project.id, "package.json", JSON.stringify({ name: "fullstack-project", version: "1.0.0", scripts: { start: "node server.js" } }));
+      await writeFile(
+        project.id,
+        "server.js",
+        `const http = require('http');
+         const fs = require('fs');
+         const path = require('path');
+         http.createServer((req, res) => {
+           if (req.url === '/__office_health') { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true })); return; }
+           if (req.method === 'POST' && req.url === '/api/greet') { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ greeting: 'Hello from the real backend!' })); return; }
+           if (req.url === '/' || req.url === '/index.html') { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end(fs.readFileSync(path.join(__dirname, 'index.html'))); return; }
+           if (req.url === '/script.js') { res.writeHead(200, { 'Content-Type': 'application/javascript' }); res.end(fs.readFileSync(path.join(__dirname, 'script.js'))); return; }
+           res.writeHead(404); res.end();
+         }).listen(Number(process.env.PORT), '127.0.0.1');`,
+      );
+
+      const { task: qaTask } = createTaskWithDependencies(t.db, {
+        projectId: project.id,
+        roleId: "qa-agent",
+        title: "Test",
+        dependsOnTaskIds: [frontendTask.id, backendTask.id],
+      });
+      const result = await executeTask(t.db, qaTask.id, { scenario: "success" });
+
+      assert.equal(result.outcome, "succeeded", JSON.stringify(listTestResultsForTask(t.db, qaTask.id)));
+      const testResults = listTestResultsForTask(t.db, qaTask.id);
+      assert.equal(testResults.length, 1);
+      assert.equal(testResults[0]!.status, "PASS");
+      assert.match(testResults[0]!.summary, /full-stack integration check passed/i);
+      assert.equal(getWorkspace(t.db, project.id)?.deliveryState, "VERIFIED");
+
+      t.close();
+    });
+  });
+
   test("qa-agent's real browser check PASSes against real correct files and marks the workspace VERIFIED", async () => {
     await withWorkspace(async () => {
       const t = createTestDb();

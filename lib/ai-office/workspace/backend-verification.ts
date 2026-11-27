@@ -134,16 +134,40 @@ export interface RunBackendVerificationOptions {
   startTimeoutMs?: number;
 }
 
-export async function runBackendVerification(
+interface BackendStartFailure {
+  ok: false;
+  result: BackendVerificationResult;
+}
+interface BackendStartSuccess {
+  ok: true;
+  proc: ManagedProcess;
+  port: number;
+  dbDir: string;
+  dbPath: string;
+  dbConnected: boolean | undefined;
+  healthStatus: number | undefined;
+  healthBody: string | undefined;
+}
+
+/**
+ * The shared "get a real backend process from this workspace into a
+ * verified-healthy state" sequence — every real step `runBackendVerification`
+ * always did (package.json/"start" script validation, a real `npm
+ * install`, a real `npm start` bound to a fresh port and DB file, polling
+ * `/__office_health`), extracted so `runFullStackVerification` below can
+ * reuse the exact same real startup instead of a second, divergent copy
+ * of it. The caller owns the returned `proc`/`dbDir` and is responsible
+ * for stopping/cleaning them up — this never tears down on success,
+ * only on its own internal failure paths.
+ */
+async function startVerifiedBackend(
   projectId: string,
-  options: RunBackendVerificationOptions = {},
-): Promise<BackendVerificationResult> {
-  const startedAt = Date.now();
-  const finish = (status: "PASS" | "FAIL", summary: string, details: Record<string, unknown> = {}): BackendVerificationResult => ({
-    status,
-    summary,
-    details,
-    durationMs: Date.now() - startedAt,
+  startedAt: number,
+  options: RunBackendVerificationOptions,
+): Promise<BackendStartSuccess | BackendStartFailure> {
+  const finish = (status: "FAIL", summary: string, details: Record<string, unknown> = {}): BackendStartFailure => ({
+    ok: false,
+    result: { status, summary, details, durationMs: Date.now() - startedAt },
   });
 
   if (!workspaceExists(projectId)) {
@@ -208,71 +232,150 @@ export async function runBackendVerification(
   const dbDir = mkdtempSync(join(tmpdir(), "ai-office-backend-db-"));
   const dbPath = join(dbDir, "verification.sqlite");
 
-  let proc: ManagedProcess | undefined;
-  try {
-    proc = startManagedProcess({
-      projectId,
-      executable: npm.executable,
-      args: [...npm.prefixArgs, "start"],
-      allowedExecutables: [npm.executable],
-      purpose: "start backend for verification",
-      // A real, deterministic contract a generated backend can rely on:
-      // bind to $PORT (never a hardcoded port, which would collide
-      // across concurrent verifications), and use $DB_PATH for any
-      // file-based database rather than a path it invents itself — see
-      // this function's own docblock for why this DB is always
-      // isolated and ephemeral.
-      env: { PORT: String(port), DB_PATH: dbPath, NODE_ENV: "test" },
+  const proc = startManagedProcess({
+    projectId,
+    executable: npm.executable,
+    args: [...npm.prefixArgs, "start"],
+    allowedExecutables: [npm.executable],
+    purpose: "start backend for verification",
+    // A real, deterministic contract a generated backend can rely on:
+    // bind to $PORT (never a hardcoded port, which would collide
+    // across concurrent verifications), and use $DB_PATH for any
+    // file-based database rather than a path it invents itself — see
+    // this function's own docblock for why this DB is always
+    // isolated and ephemeral.
+    env: { PORT: String(port), DB_PATH: dbPath, NODE_ENV: "test" },
+  });
+
+  const healthPath = options.healthPath ?? "/__office_health";
+  const health = await waitForHealth(port, healthPath, options.startTimeoutMs ?? 20_000, proc);
+
+  if (health.exitedEarly) {
+    const exit = proc.exitInfo();
+    const out = proc.getOutput();
+    await proc.stop();
+    rmSync(dbDir, { recursive: true, force: true });
+    return finish("FAIL", `The backend process exited on its own before becoming ready (exit code ${exit?.exitCode ?? "unknown"}, signal ${exit?.signal ?? "none"}).`, {
+      stdout: out.stdout.slice(-4000),
+      stderr: out.stderr.slice(-4000),
     });
+  }
+  if (!health.reachable) {
+    const out = proc.getOutput();
+    await proc.stop();
+    rmSync(dbDir, { recursive: true, force: true });
+    const sawSomething = health.status !== undefined ? ` (last saw HTTP ${health.status} from ${healthPath}, never 2xx)` : "";
+    return finish("FAIL", `The backend never responded successfully on ${healthPath} (port ${port}) within the startup timeout${sawSomething}.`, {
+      stdout: out.stdout.slice(-4000),
+      stderr: out.stderr.slice(-4000),
+    });
+  }
 
-    const healthPath = options.healthPath ?? "/__office_health";
-    const health = await waitForHealth(port, healthPath, options.startTimeoutMs ?? 20_000, proc);
-
-    if (health.exitedEarly) {
-      const exit = proc.exitInfo();
-      const out = proc.getOutput();
-      return finish("FAIL", `The backend process exited on its own before becoming ready (exit code ${exit?.exitCode ?? "unknown"}, signal ${exit?.signal ?? "none"}).`, {
-        stdout: out.stdout.slice(-4000),
-        stderr: out.stderr.slice(-4000),
-      });
-    }
-    if (!health.reachable) {
-      const out = proc.getOutput();
-      const sawSomething = health.status !== undefined ? ` (last saw HTTP ${health.status} from ${healthPath}, never 2xx)` : "";
-      return finish("FAIL", `The backend never responded successfully on ${healthPath} (port ${port}) within the startup timeout${sawSomething}.`, {
-        stdout: out.stdout.slice(-4000),
-        stderr: out.stderr.slice(-4000),
-      });
-    }
-
-    // Real, explicit evidence the deliverable's own health check reports
-    // its data store as disconnected — never inferred from absence, only
-    // from an actual `"dbConnected": false` the deliverable chose to
-    // report (see structured-output-contract.ts's backend-developer
-    // instructions: the field is only ever included when the product
-    // genuinely has a database to check).
-    let dbConnected: boolean | undefined;
-    try {
-      const parsed = JSON.parse(health.body ?? "{}") as { dbConnected?: unknown };
-      if (typeof parsed.dbConnected === "boolean") dbConnected = parsed.dbConnected;
-    } catch {
-      // Not JSON, or not an object — no dbConnected signal either way.
-    }
-    if (dbConnected === false) {
-      return finish("FAIL", `The backend responded on ${healthPath}, but its own health check reports it is not connected to its database ("dbConnected": false).`, {
-        port,
-        healthStatus: health.status,
-        healthBody: health.body,
-      });
-    }
-
-    return finish("PASS", `The backend started as a real process (npm start), bound to a real port, and responded to a real HTTP request on ${healthPath} (status ${health.status}${dbConnected ? ", database connected" : ""}).`, {
+  // Real, explicit evidence the deliverable's own health check reports
+  // its data store as disconnected — never inferred from absence, only
+  // from an actual `"dbConnected": false` the deliverable chose to
+  // report (see structured-output-contract.ts's backend-developer
+  // instructions: the field is only ever included when the product
+  // genuinely has a database to check).
+  let dbConnected: boolean | undefined;
+  try {
+    const parsed = JSON.parse(health.body ?? "{}") as { dbConnected?: unknown };
+    if (typeof parsed.dbConnected === "boolean") dbConnected = parsed.dbConnected;
+  } catch {
+    // Not JSON, or not an object — no dbConnected signal either way.
+  }
+  if (dbConnected === false) {
+    await proc.stop();
+    rmSync(dbDir, { recursive: true, force: true });
+    return finish("FAIL", `The backend responded on ${healthPath}, but its own health check reports it is not connected to its database ("dbConnected": false).`, {
       port,
       healthStatus: health.status,
       healthBody: health.body,
     });
+  }
+
+  return { ok: true, proc, port, dbDir, dbPath, dbConnected, healthStatus: health.status, healthBody: health.body };
+}
+
+export async function runBackendVerification(
+  projectId: string,
+  options: RunBackendVerificationOptions = {},
+): Promise<BackendVerificationResult> {
+  const startedAt = Date.now();
+  const started = await startVerifiedBackend(projectId, startedAt, options);
+  if (!started.ok) return started.result;
+
+  try {
+    return {
+      status: "PASS",
+      summary: `The backend started as a real process (npm start), bound to a real port, and responded to a real HTTP request on ${options.healthPath ?? "/__office_health"} (status ${started.healthStatus}${started.dbConnected ? ", database connected" : ""}).`,
+      details: { port: started.port, healthStatus: started.healthStatus, healthBody: started.healthBody },
+      durationMs: Date.now() - startedAt,
+    };
   } finally {
-    if (proc) await proc.stop();
-    rmSync(dbDir, { recursive: true, force: true });
+    await started.proc.stop();
+    rmSync(started.dbDir, { recursive: true, force: true });
+  }
+}
+
+export interface FullStackVerificationResult {
+  status: "PASS" | "FAIL";
+  summary: string;
+  details: Record<string, unknown>;
+  durationMs: number;
+  targetUrl: string;
+}
+
+/**
+ * Real incident, Scenario B acceptance run (2026-11-27): a real
+ * full-stack expense tracker's frontend correctly called its own real
+ * backend API on click — but `runBackendVerification` and
+ * `runQABrowserVerification` ran as two completely disconnected checks
+ * (a browser against an isolated static-only server with no backend
+ * attached, and a bare `/__office_health` ping with no browser at all),
+ * so neither ever actually exercised the frontend-to-backend-to-database
+ * round trip a real user depends on. The browser check's own click-and-
+ * verify-visible-change probe then failed identically to a genuinely
+ * broken button, because its `fetch()` call had no live backend to
+ * reach. This runs the real backend (via `startVerifiedBackend`, the
+ * exact same real `npm install`/`npm start`/health-poll sequence
+ * `runBackendVerification` uses) and then points the SAME real browser
+ * check at that live backend's own origin (`baseUrl`) instead of the
+ * isolated static server — proving the actual integrated application a
+ * real user would experience, not two separately-plausible halves.
+ *
+ * Only used when a project's plan includes BOTH a frontend-developer and
+ * a backend-developer task (agent-runner.ts) — a backend-only or
+ * frontend-only plan keeps using the simpler, independent check it
+ * already had, since there is nothing to "integrate" for either.
+ */
+export async function runFullStackVerification(
+  projectId: string,
+  options: RunBackendVerificationOptions & { entryFile?: string } = {},
+): Promise<FullStackVerificationResult> {
+  const startedAt = Date.now();
+  const started = await startVerifiedBackend(projectId, startedAt, options);
+  if (!started.ok) {
+    return { ...started.result, targetUrl: "" };
+  }
+
+  try {
+    const { runQABrowserVerification } = await import("./qa-browser-verification.ts");
+    const browserResult = await runQABrowserVerification(projectId, {
+      entryFile: options.entryFile,
+      baseUrl: `http://127.0.0.1:${started.port}`,
+    });
+    return {
+      status: browserResult.status,
+      summary: browserResult.status === "FAIL"
+        ? `Full-stack integration check failed: ${browserResult.summary}`
+        : `Full-stack integration check passed: the real backend started, and the real frontend's browser interaction round-tripped successfully against it (${browserResult.summary})`,
+      details: { ...browserResult.details, backend: { port: started.port, healthStatus: started.healthStatus, healthBody: started.healthBody } },
+      durationMs: Date.now() - startedAt,
+      targetUrl: browserResult.targetUrl,
+    };
+  } finally {
+    await started.proc.stop();
+    rmSync(started.dbDir, { recursive: true, force: true });
   }
 }
