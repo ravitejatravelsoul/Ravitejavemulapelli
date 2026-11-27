@@ -1,7 +1,7 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { createTestDb } from "../../db/test-helpers.ts";
-import { upsertModelRegistryEntry as rawUpsert, getModelRegistryEntry, recordModelHealthCheck, setModelEnabled, recordModelOutcome, setModelBenchmarkScore, setProviderEnabled } from "../../domain/model-registry.ts";
+import { upsertModelRegistryEntry as rawUpsert, getModelRegistryEntry, recordModelHealthCheck, setModelEnabled, recordModelOutcome, setModelBenchmarkScore, setProviderEnabled, backfillStuckCircuitBreakers } from "../../domain/model-registry.ts";
 import { selectFreeModel } from "../free-model-router.ts";
 
 describe("selectFreeModel", () => {
@@ -139,6 +139,31 @@ function upsertModelRegistryEntry(...args: Parameters<typeof rawUpsert>) {
    assert.equal(reg.health, "HEALTHY");
    assert.equal(reg.recentFailureCount, 0);
    assert.ok(selectFreeModel(t.db, { capability: "CODING" })?.candidates.some((c) => c.modelId === "tripped"), "fully recovered and eligible with no cooldown pending");
+  } finally {
+   t.close();
+  }
+ });
+
+ // Real incident, production (2026-11-27), found recovering the real
+ // blocked Pomodoro project: a model already stuck at recentFailureCount
+ // 3 with no cooldown from BEFORE the circuit breaker existed is excluded
+ // forever, since recordModelOutcome (the only place that ever sets a
+ // cooldown) never runs again for a model scoreModel() never selects.
+ // backfillStuckCircuitBreakers must make such a model a real, eligible
+ // router candidate again once its retroactively-applied cooldown passes.
+ test("a model already stuck at the 3-failure gate with no cooldown (a pre-circuit-breaker lockout) becomes a real router candidate again once backfillStuckCircuitBreakers' cooldown passes", () => {
+  const t = createTestDb();
+  try {
+   upsertModelRegistryEntry(t.db, { provider: "groq", modelId: "stuck", displayName: "stuck", capabilities: ["CODING"] });
+   t.db.prepare("UPDATE model_registry SET health = 'UNAVAILABLE', recentFailureCount = 3, rateLimitedUntil = NULL WHERE modelId = 'stuck'").run();
+   assert.equal(selectFreeModel(t.db, { capability: "CODING" }), null, "a real pre-existing stuck lockout: never selected, exactly like the live incident");
+
+   const applied = backfillStuckCircuitBreakers(t.db);
+   assert.equal(applied.length, 1);
+   assert.equal(selectFreeModel(t.db, { capability: "CODING" }), null, "still excluded — the backfilled cooldown is in the future, same as a fresh trip would be");
+
+   t.db.prepare("UPDATE model_registry SET rateLimitedUntil = ? WHERE modelId = 'stuck'").run(Date.now() - 1);
+   assert.ok(selectFreeModel(t.db, { capability: "CODING" })?.candidates.some((c) => c.modelId === "stuck"), "a real, eligible recovery-probe candidate once the backfilled cooldown has passed");
   } finally {
    t.close();
   }

@@ -191,6 +191,60 @@ function circuitBreakerCooldownMs(recentFailureCount: number): number | null {
   return Math.min(CIRCUIT_BREAKER_BASE_COOLDOWN_MS * 2 ** (recentFailureCount - 3), CIRCUIT_BREAKER_MAX_COOLDOWN_MS);
 }
 
+/**
+ * Real incident, production (2026-11-27): the circuit breaker above only
+ * ever sets a cooldown INSIDE `recordModelOutcome`, i.e. the next time a
+ * failure is actually recorded for a model — but `scoreModel()` already
+ * excludes any row at `recentFailureCount >= 3` with no `rateLimitedUntil`
+ * from ever being selected again, so a model already stuck in exactly
+ * that state from BEFORE this circuit breaker existed can never be
+ * selected, so `recordModelOutcome` is never called for it again, so a
+ * cooldown never gets retroactively applied — a permanent lockout the
+ * new code could prevent going forward but never heal. Found live: the
+ * Pomodoro recovery project's two qualified Groq models were both stuck
+ * exactly there (recentFailureCount 3, rateLimitedUntil null), despite
+ * both having demonstrably worked earlier in the SAME project (their own
+ * real completions were what the retry-drift verifier rejected, which
+ * never touches model health) — real evidence the underlying failure
+ * was a genuine operational hiccup, not a persistent auth/config problem
+ * (which would have failed every call identically, including the
+ * earlier ones that succeeded).
+ *
+ * This backfills EXACTLY the same bounded formula `recordModelOutcome`
+ * already applies to every new failure — never resetting
+ * `recentFailureCount`, never marking health HEALTHY, never touching
+ * `enabled` — strictly narrowed to rows already inside the owner-
+ * authorized recovery window (`recentFailureCount` in [3,
+ * MAX_AUTO_RECOVERY_RECENT_FAILURES]) that have no cooldown set yet. A
+ * row already outside that window (either not yet at 3, or already past
+ * the auto-recovery ceiling) is left completely untouched, exactly as
+ * `recordModelOutcome` itself would leave it. If the underlying problem
+ * was genuinely persistent, the resulting single recovery probe simply
+ * fails again and re-enters this same bounded, exponentially-backing-off
+ * path — it is never a bypass of the ceiling, only a retroactive
+ * application of it.
+ */
+export function backfillStuckCircuitBreakers(db: DatabaseSync): Array<{ provider: string; modelId: string; recentFailureCount: number; rateLimitedUntil: number }> {
+  const now = Date.now();
+  const stuck = db
+    .prepare(
+      `SELECT provider, modelId, recentFailureCount FROM model_registry
+       WHERE health = 'UNAVAILABLE' AND rateLimitedUntil IS NULL
+         AND recentFailureCount >= 3 AND recentFailureCount <= ?`,
+    )
+    .all(MAX_AUTO_RECOVERY_RECENT_FAILURES) as Array<{ provider: string; modelId: string; recentFailureCount: number }>;
+
+  const applied: Array<{ provider: string; modelId: string; recentFailureCount: number; rateLimitedUntil: number }> = [];
+  for (const row of stuck) {
+    const cooldown = circuitBreakerCooldownMs(row.recentFailureCount);
+    if (cooldown === null) continue; // defensive — the SQL range filter already guarantees this
+    const rateLimitedUntil = now + cooldown;
+    db.prepare("UPDATE model_registry SET rateLimitedUntil = ?, updatedAt = ? WHERE provider = ? AND modelId = ?").run(rateLimitedUntil, now, row.provider, row.modelId);
+    applied.push({ provider: row.provider, modelId: row.modelId, recentFailureCount: row.recentFailureCount, rateLimitedUntil });
+  }
+  return applied;
+}
+
 /** Called once per real (non-benchmark) free-model task execution — this is what the router's scorer's `recentFailureCount`/success-rate/`avgLatencyMs`/health fields actually track over time. A no-op if the model row doesn't exist (should not happen — the router only ever selects rows already in the registry). */
 export function recordModelOutcome(db: DatabaseSync, provider: string, modelId: string, input: RecordModelOutcomeInput): void {
   const row = getModelRegistryEntry(db, provider, modelId);

@@ -13,6 +13,7 @@ import {
   setProviderEnabled,
   recordRoutingDecision,
   listRoutingDecisions,
+  backfillStuckCircuitBreakers,
 } from "../model-registry.ts";
 
 describe("model_registry persistence", () => {
@@ -151,6 +152,88 @@ describe("model_registry persistence", () => {
       assert.equal(row.health, "UNAVAILABLE");
       const seconds = (row.rateLimitedUntil! - Date.now()) / 1000;
       assert.ok(seconds > 3 && seconds <= 6, `expected the provider's own ~5s Retry-After, got ${seconds.toFixed(1)}s`);
+      t.close();
+    });
+  });
+
+  // Real incident, production (2026-11-27), found recovering the real
+  // blocked Pomodoro project: the circuit breaker above only ever sets a
+  // cooldown INSIDE recordModelOutcome -- a model already stuck at
+  // recentFailureCount>=3 with no cooldown from BEFORE that code existed
+  // can never be selected again, so recordModelOutcome never runs for it
+  // again, so it never retroactively heals. backfillStuckCircuitBreakers
+  // closes that gap by applying the exact same bounded formula once,
+  // directly, to pre-existing stuck rows.
+  describe("backfillStuckCircuitBreakers (retroactive healing for pre-existing stuck lockouts)", () => {
+    function forceStuck(t: ReturnType<typeof createTestDb>, modelId: string, recentFailureCount: number) {
+      upsertModelRegistryEntry(t.db, { provider: "groq", modelId, displayName: modelId, capabilities: ["CODING"] });
+      t.db.prepare("UPDATE model_registry SET health = 'UNAVAILABLE', recentFailureCount = ?, rateLimitedUntil = NULL WHERE modelId = ?").run(recentFailureCount, modelId);
+    }
+
+    test("a model stuck at recentFailureCount 3 with no cooldown gets exactly the same ~15-minute first cooldown a fresh trip would get", () => {
+      const t = createTestDb();
+      forceStuck(t, "m1", 3);
+      const applied = backfillStuckCircuitBreakers(t.db);
+      assert.equal(applied.length, 1);
+      assert.equal(applied[0]!.provider, "groq");
+      assert.equal(applied[0]!.modelId, "m1");
+      const row = getModelRegistryEntry(t.db, "groq", "m1")!;
+      const minutesUntil = (row.rateLimitedUntil! - Date.now()) / 60_000;
+      assert.ok(minutesUntil > 10 && minutesUntil <= 16, `expected roughly a 15-minute cooldown, got ${minutesUntil.toFixed(1)}m`);
+      // Never touched -- only rateLimitedUntil changes.
+      assert.equal(row.recentFailureCount, 3);
+      assert.equal(row.health, "UNAVAILABLE");
+      assert.equal(row.enabled, 1);
+      t.close();
+    });
+
+    test("a model past the bounded auto-recovery ceiling is left untouched -- never healed past the owner-authorized limit", () => {
+      const t = createTestDb();
+      forceStuck(t, "m1", 8); // one past MAX_AUTO_RECOVERY_RECENT_FAILURES (7)
+      const applied = backfillStuckCircuitBreakers(t.db);
+      assert.equal(applied.length, 0);
+      const row = getModelRegistryEntry(t.db, "groq", "m1")!;
+      assert.equal(row.rateLimitedUntil, null, "stays permanently blocked, same as recordModelOutcome itself would leave it");
+      t.close();
+    });
+
+    test("a model not yet at the 3-failure gate is left untouched", () => {
+      const t = createTestDb();
+      forceStuck(t, "m1", 1);
+      const applied = backfillStuckCircuitBreakers(t.db);
+      assert.equal(applied.length, 0);
+      t.close();
+    });
+
+    test("a model that already has a real cooldown set is left untouched -- never extends or shortens an already-pending cooldown", () => {
+      const t = createTestDb();
+      upsertModelRegistryEntry(t.db, { provider: "groq", modelId: "m1", displayName: "m1", capabilities: ["CODING"] });
+      recordModelOutcome(t.db, "groq", "m1", { succeeded: false });
+      recordModelOutcome(t.db, "groq", "m1", { succeeded: false });
+      recordModelOutcome(t.db, "groq", "m1", { succeeded: false });
+      const before = getModelRegistryEntry(t.db, "groq", "m1")!.rateLimitedUntil;
+      const applied = backfillStuckCircuitBreakers(t.db);
+      assert.equal(applied.length, 0);
+      assert.equal(getModelRegistryEntry(t.db, "groq", "m1")!.rateLimitedUntil, before);
+      t.close();
+    });
+
+    test("a HEALTHY model is never touched, even if recentFailureCount happens to be stale/nonzero", () => {
+      const t = createTestDb();
+      upsertModelRegistryEntry(t.db, { provider: "groq", modelId: "m1", displayName: "m1", capabilities: ["CODING"] });
+      t.db.prepare("UPDATE model_registry SET health = 'HEALTHY', recentFailureCount = 3, rateLimitedUntil = NULL WHERE modelId = 'm1'").run();
+      const applied = backfillStuckCircuitBreakers(t.db);
+      assert.equal(applied.length, 0);
+      t.close();
+    });
+
+    test("multiple independently-stuck models are each backfilled in one call", () => {
+      const t = createTestDb();
+      forceStuck(t, "m1", 3);
+      forceStuck(t, "m2", 5);
+      const applied = backfillStuckCircuitBreakers(t.db);
+      assert.equal(applied.length, 2);
+      assert.deepEqual(applied.map((a) => a.modelId).sort(), ["m1", "m2"]);
       t.close();
     });
   });
