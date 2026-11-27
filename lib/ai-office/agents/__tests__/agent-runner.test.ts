@@ -908,6 +908,74 @@ describe("real file materialization (Phase 8)", () => {
     });
   });
 
+  // Real incident, Scenario B acceptance run (2026-11-27): once the
+  // integration check above was fixed, a real full-stack project's
+  // backend-developer task was STILL repeatedly reopened and drift-
+  // rejected for a frontend-only browser bug it had no file type that
+  // could ever fix ("the script still lacks functional tab switching"),
+  // eventually escalating to BLOCKED for a task that was never broken.
+  // Root cause: findRemediationTargets walks back to every development
+  // task a review task depends on, with no way to know which one a
+  // given failure is actually about. Once the backend starts and
+  // answers its health check successfully, a failure in the live
+  // browser/DOM check is real evidence against the frontend specifically
+  // — this proves only the frontend-developer task is reopened, and the
+  // backend-developer task (whose real server already works) is left
+  // completely untouched.
+  test("qa-agent for a full-stack plan reopens ONLY frontend-developer — never backend-developer too — when the backend already started fine and the failure is in the live browser check", async () => {
+    await withWorkspace(async () => {
+      const t = createTestDb();
+      const { project } = setupProject(t);
+      const frontendTask = createTask(t.db, { projectId: project.id, roleId: "frontend-developer", title: "Implement frontend" });
+      const backendTask = createTask(t.db, { projectId: project.id, roleId: "backend-developer", title: "Implement backend" });
+      updateTaskStatus(t.db, frontendTask.id, "DONE");
+      updateTaskStatus(t.db, backendTask.id, "DONE");
+      await writeFile(
+        project.id,
+        "index.html",
+        '<!DOCTYPE html><html><head><title>Greeter</title></head><body><h1>Greeter</h1><p class="description">Click the button to fetch a real greeting from the backend.</p><button id="greet-button" type="button">Greet me</button><p id="message"></p><script src="script.js"></script></body></html>',
+      );
+      // Deliberately buggy — a real frontend bug (wrong element id), nothing to do with the backend at all.
+      await writeFile(
+        project.id,
+        "script.js",
+        "document.getElementById('greet-button').addEventListener('click', async function () { const res = await fetch('/api/greet', { method: 'POST' }); const body = await res.json(); document.getElementById('nonexistent-element').textContent = body.greeting; });",
+      );
+      await writeFile(project.id, "package.json", JSON.stringify({ name: "fullstack-project", version: "1.0.0", scripts: { start: "node server.js" } }));
+      await writeFile(
+        project.id,
+        "server.js",
+        `const http = require('http');
+         const fs = require('fs');
+         const path = require('path');
+         http.createServer((req, res) => {
+           if (req.url === '/__office_health') { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ ok: true })); return; }
+           if (req.method === 'POST' && req.url === '/api/greet') { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ greeting: 'Hello from the real backend!' })); return; }
+           if (req.url === '/' || req.url === '/index.html') { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end(fs.readFileSync(path.join(__dirname, 'index.html'))); return; }
+           if (req.url === '/script.js') { res.writeHead(200, { 'Content-Type': 'application/javascript' }); res.end(fs.readFileSync(path.join(__dirname, 'script.js'))); return; }
+           res.writeHead(404); res.end();
+         }).listen(Number(process.env.PORT), '127.0.0.1');`,
+      );
+
+      const { task: qaTask } = createTaskWithDependencies(t.db, {
+        projectId: project.id,
+        roleId: "qa-agent",
+        title: "Test",
+        dependsOnTaskIds: [frontendTask.id, backendTask.id],
+      });
+      const result = await executeTask(t.db, qaTask.id, { scenario: "success" });
+
+      assert.equal(result.outcome, "retried");
+      const testResults = listTestResultsForTask(t.db, qaTask.id);
+      assert.equal(testResults[0]!.status, "FAIL");
+      assert.equal(getTask(t.db, frontendTask.id)?.status, "PENDING", "the real, actually-implicated role must be reopened");
+      assert.equal(getTask(t.db, backendTask.id)?.status, "DONE", "a role whose own real server already works must NOT be reopened for a browser-only bug it cannot fix");
+      assert.equal(listUnresolvedFailures(t.db, project.id).filter((f) => f.taskId === backendTask.id).length, 0, "no failure should ever be recorded against the uninvolved role either");
+
+      t.close();
+    });
+  });
+
   test("qa-agent's real browser check PASSes against real correct files and marks the workspace VERIFIED", async () => {
     await withWorkspace(async () => {
       const t = createTestDb();

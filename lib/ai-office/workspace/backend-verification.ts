@@ -356,7 +356,12 @@ export async function runFullStackVerification(
   const startedAt = Date.now();
   const started = await startVerifiedBackend(projectId, startedAt, options);
   if (!started.ok) {
-    return { ...started.result, targetUrl: "" };
+    // The backend itself never reached a verified-healthy state — a
+    // real backend-side problem (missing start script, a crash, a
+    // startup timeout, a reported dbConnected:false), never the
+    // frontend's fault. See the browser-FAIL branch below for the
+    // symmetric case.
+    return { ...started.result, details: { ...started.result.details, failureLayer: "backend" as const }, targetUrl: "" };
   }
 
   try {
@@ -370,7 +375,22 @@ export async function runFullStackVerification(
       summary: browserResult.status === "FAIL"
         ? `Full-stack integration check failed: ${browserResult.summary}`
         : `Full-stack integration check passed: the real backend started, and the real frontend's browser interaction round-tripped successfully against it (${browserResult.summary})`,
-      details: { ...browserResult.details, backend: { port: started.port, healthStatus: started.healthStatus, healthBody: started.healthBody } },
+      // Real incident, Scenario B acceptance run (2026-11-27): a review-
+      // role failure walks back to EVERY development task it depends on
+      // (remediation.ts's findRemediationTargets) — for a full-stack
+      // plan that's both frontend-developer and backend-developer,
+      // reopened identically regardless of which one the failure is
+      // actually about. The backend already started and answered health
+      // checks successfully by this point (`started.ok` — see below for
+      // the opposite case), so a failure here is in the real browser/DOM
+      // check itself, not the backend's own startup — tagging it lets
+      // agent-runner.ts's finishFailure narrow remediation to only the
+      // frontend-developer task instead of also looping the backend-
+      // developer task on a complaint ("tab switching," "button," a
+      // visible-text check) it has no file type that could ever fix.
+      details: browserResult.status === "FAIL"
+        ? { ...browserResult.details, failureLayer: "frontend" as const, backend: { port: started.port, healthStatus: started.healthStatus, healthBody: started.healthBody } }
+        : { ...browserResult.details, backend: { port: started.port, healthStatus: started.healthStatus, healthBody: started.healthBody } },
       durationMs: Date.now() - startedAt,
       targetUrl: browserResult.targetUrl,
     };

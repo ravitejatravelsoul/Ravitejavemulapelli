@@ -2321,7 +2321,29 @@ function finishFailure(
     // failure always just retries its own task.
     const isOperational = isOperationalFailureReason(failureReason);
     const isReview = !isOperational && isReviewRole(role);
-    const remediationTargets = isReview ? findRemediationTargets(db, task.id) : [task];
+    const allRemediationTargets = isReview ? findRemediationTargets(db, task.id) : [task];
+
+    // Real incident, Scenario B acceptance run (2026-11-27): a full-stack
+    // plan's qa-agent walks back to BOTH its frontend-developer and
+    // backend-developer ancestors (findRemediationTargets has no way to
+    // know which one a given failure is actually about), so one real
+    // browser-level bug reopened and reblamed BOTH roles identically.
+    // The role whose own files could never address the complaint (e.g.
+    // backend-developer asked to fix "tab switching") kept resubmitting
+    // unchanged/irrelevant code, got rejected by the retry-drift gate as
+    // not actually fixing anything, and genuinely escalated to BLOCKED —
+    // a false failure of its own, for a task that was never broken.
+    // runFullStackVerification (backend-verification.ts) tags which
+    // layer a failure actually came from when it can tell (the backend
+    // never reaching a healthy state vs. a live browser/DOM check once
+    // the backend already passed); only used to narrow when it would
+    // still leave at least one target, so an unrecognized role-id
+    // scheme or a missing tag always falls back to the original,
+    // broader behavior rather than silently dropping every target.
+    const failureLayer = output.testResults[0]?.details?.failureLayer;
+    const layerRoleId = failureLayer === "frontend" ? "frontend-developer" : failureLayer === "backend" ? "backend-developer" : null;
+    const narrowedTargets = layerRoleId ? allRemediationTargets.filter((t) => t.roleId === layerRoleId) : [];
+    const remediationTargets = narrowedTargets.length > 0 ? narrowedTargets : allRemediationTargets;
 
     for (const target of remediationTargets) {
       recordFailure(db, { projectId: project.id, taskId: target.id, agentRunId: agentRun.id, reason: failureReason });
